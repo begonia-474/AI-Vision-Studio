@@ -78,9 +78,15 @@ export const zhCN = {
     phaseDownloading: "正在下载生成结果...",
     phaseDone: "完成",
     phaseFailed: "生成失败",
+    removeRef: "移除参考图",
+    lessBatch: "减少批量数量",
+    moreBatch: "增加批量数量",
+    textareaLabel: "生成提示词（Ctrl/⌘ + Enter 生成）",
   },
   model: {
     allProviders: "全部厂商",
+    allTab: "全部厂商",
+    providerTab: "筛选厂商：{{name}}",
     search: "搜索模型...",
     available: "可用模型",
     none: "未找到模型",
@@ -93,8 +99,8 @@ export const zhCN = {
     descImage: "描述一个场景、角色、情绪或风格——让它跃然眼前。",
     descVideo: "描述一个动态场景——并赋予它运动。",
     imgToVideo: "🎬 图生视频",
-  },
-  providers: {
+    cardGroup: "生成结果",
+  },  providers: {
     volcark: {
       name: "即梦 / 豆包",
       authHelp: "火山方舟控制台创建 API Key（Bearer Token）。",

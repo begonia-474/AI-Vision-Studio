@@ -1,7 +1,7 @@
 // 底部胶囊输入区
 // 顶部：参考图缩略行 + 自动增高 textarea
 // 底部：控件行（模型 / 比例 / 画质 / 时长 / 批量 / Draw）+ Generate
-// 各控件 popover 独立 open 状态，点击外部自动关闭（Popover 内置）。
+// 弹层基于 shadcn/Radix Popover，互斥打开由 openOne 统一管理。
 
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,6 +17,7 @@ import {
 } from "../lib/icons";
 import { PROVIDERS } from "../models/registry";
 import type { StudioApi } from "../studios/useStudio";
+import { Progress } from "./ui/progress";
 
 interface PromptComposerProps {
   api: StudioApi;
@@ -31,6 +32,23 @@ export function PromptComposer({ api }: PromptComposerProps) {
   const [openQuality, setOpenQuality] = useState(false);
   const [openDuration, setOpenDuration] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // 弹层互斥：打开一个前先关掉其余（保证任意时刻只有一个 Radix 弹层在场，
+  // 避免旧弹层 deferPointerDownOutside 的焦点回迁把新弹层误关）。
+  const closeOthers = () => {
+    setOpenModel(false);
+    setOpenAr(false);
+    setOpenQuality(false);
+    setOpenDuration(false);
+  };
+  const openOne = (set: (v: boolean) => void) => (o: boolean) => {
+    if (o) {
+      closeOthers();
+      requestAnimationFrame(() => set(true));
+    } else {
+      set(false);
+    }
+  };
 
   const supportRef =
     isVideo ? api.model.capabilities.includes("i2v") : api.model.capabilities.includes("i2i");
@@ -86,7 +104,11 @@ export function PromptComposer({ api }: PromptComposerProps) {
             {api.refs.map((r, i) => (
               <div className="thumb-circle" key={i}>
                 <img src={r} alt="" />
-                <button className="rmv" onClick={() => api.removeRef(i)}>
+                <button
+                  className="rmv"
+                  aria-label={t("prompt.removeRef")}
+                  onClick={() => api.removeRef(i)}
+                >
                   ×
                 </button>
               </div>
@@ -95,6 +117,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
               <button
                 className="upload-btn"
                 title={isVideo ? t("prompt.uploadI2v") : t("prompt.uploadI2i")}
+                aria-label={isVideo ? t("prompt.uploadI2v") : t("prompt.uploadI2i")}
                 onClick={onPickRef}
               >
                 <IconUpload size={16} />
@@ -107,6 +130,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
           ref={taRef}
           className="pc-textarea"
           placeholder={isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage")}
+          aria-label={t("prompt.textareaLabel")}
           rows={1}
           value={api.prompt}
           onInput={onTextareaInput}
@@ -123,107 +147,83 @@ export function PromptComposer({ api }: PromptComposerProps) {
       <div className="pc-footer">
         <div className="pc-controls">
           {/* 模型 */}
-          <div className="popover-wrap">
-            <button
-              className={"ctrl-btn" + (openModel ? " active" : "")}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpenModel((v) => !v);
-                setOpenAr(false);
-                setOpenQuality(false);
-                setOpenDuration(false);
-              }}
-            >
-              <span className="provider-logo" style={{ background: provider.color }}>
-                {provider.abbr}
-              </span>
-              <span className="ctrl-label">{api.model.name}</span>
-              <IconChevron className="ctrl-chev" size={10} />
-            </button>
-            <ModelDropdown
-              open={openModel}
-              onClose={() => setOpenModel(false)}
-              studio={api.studio}
-              current={api.model}
-              onSelect={api.selectModel}
-            />
-          </div>
+          <ModelDropdown
+            open={openModel}
+            onOpenChange={openOne(setOpenModel)}
+            studio={api.studio}
+            current={api.model}
+            onSelect={api.selectModel}
+            trigger={
+              <button
+                type="button"
+                className={"ctrl-btn" + (openModel ? " active" : "")}
+              >
+                <span className="provider-logo" style={{ background: provider.color }}>
+                  {provider.abbr}
+                </span>
+                <span className="ctrl-label">{api.model.name}</span>
+                <IconChevron className="ctrl-chev" size={10} />
+              </button>
+            }
+          />
 
           {/* 比例 */}
-          <div className="popover-wrap">
-            <button
-              className={"ctrl-btn" + (openAr ? " active" : "")}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpenAr((v) => !v);
-                setOpenModel(false);
-                setOpenQuality(false);
-                setOpenDuration(false);
-              }}
-            >
-              <IconAspect className="ctrl-ico" size={16} />
-              <span className="ctrl-label">{api.ar}</span>
-            </button>
-            <ParamPopover
-              open={openAr}
-              onClose={() => setOpenAr(false)}
-              title={t("prompt.aspectRatio")}
-              options={api.model.aspectRatios}
-              current={api.ar}
-              onSelect={api.setAr}
-            />
-          </div>
+          <ParamPopover
+            open={openAr}
+            onOpenChange={openOne(setOpenAr)}
+            title={t("prompt.aspectRatio")}
+            options={api.model.aspectRatios}
+            current={api.ar}
+            onSelect={api.setAr}
+            trigger={
+              <button
+                type="button"
+                className={"ctrl-btn" + (openAr ? " active" : "")}
+              >
+                <IconAspect className="ctrl-ico" size={16} />
+                <span className="ctrl-label">{api.ar}</span>
+              </button>
+            }
+          />
 
           {/* 画质 */}
-          <div className="popover-wrap">
-            <button
-              className={"ctrl-btn" + (openQuality ? " active" : "")}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpenQuality((v) => !v);
-                setOpenModel(false);
-                setOpenAr(false);
-                setOpenDuration(false);
-              }}
-            >
-              <IconQuality className="ctrl-ico" size={16} />
-              <span className="ctrl-label">{api.quality}</span>
-            </button>
-            <ParamPopover
-              open={openQuality}
-              onClose={() => setOpenQuality(false)}
-              title={t("prompt.resolution")}
-              options={api.model.qualities}
-              current={api.quality}
-              onSelect={api.setQuality}
-            />
-          </div>
+          <ParamPopover
+            open={openQuality}
+            onOpenChange={openOne(setOpenQuality)}
+            title={t("prompt.resolution")}
+            options={api.model.qualities}
+            current={api.quality}
+            onSelect={api.setQuality}
+            trigger={
+              <button
+                type="button"
+                className={"ctrl-btn" + (openQuality ? " active" : "")}
+              >
+                <IconQuality className="ctrl-ico" size={16} />
+                <span className="ctrl-label">{api.quality}</span>
+              </button>
+            }
+          />
 
           {/* 时长（仅视频） */}
           {isVideo && (
-            <div className="popover-wrap">
-              <button
-                className={"ctrl-btn" + (openDuration ? " active" : "")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenDuration((v) => !v);
-                  setOpenModel(false);
-                  setOpenAr(false);
-                  setOpenQuality(false);
-                }}
-              >
-                <IconDuration className="ctrl-ico" size={16} />
-                <span className="ctrl-label">{api.duration}s</span>
-              </button>
-              <ParamPopover
-                open={openDuration}
-                onClose={() => setOpenDuration(false)}
-                title={t("prompt.duration")}
-                options={(api.model.durations ?? []).map((d) => ({ value: d, label: `${d}s` }))}
-                current={api.duration}
-                onSelect={api.setDuration}
-              />
-            </div>
+            <ParamPopover
+              open={openDuration}
+              onOpenChange={openOne(setOpenDuration)}
+              title={t("prompt.duration")}
+              options={(api.model.durations ?? []).map((d) => ({ value: d, label: `${d}s` }))}
+              current={api.duration}
+              onSelect={api.setDuration}
+              trigger={
+                <button
+                  type="button"
+                  className={"ctrl-btn" + (openDuration ? " active" : "")}
+                >
+                  <IconDuration className="ctrl-ico" size={16} />
+                  <span className="ctrl-label">{api.duration}s</span>
+                </button>
+              }
+            />
           )}
 
           {/* 批量（仅图像） */}
@@ -231,6 +231,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
             <div className="ctrl-stepper">
               <button
                 type="button"
+                aria-label={t("prompt.lessBatch")}
                 onClick={(e) => {
                   e.stopPropagation();
                   api.setBatch(Math.max(1, api.batch - 1));
@@ -243,6 +244,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
               </span>
               <button
                 type="button"
+                aria-label={t("prompt.moreBatch")}
                 onClick={(e) => {
                   e.stopPropagation();
                   api.setBatch(Math.min(api.model.maxRef ?? 4, api.batch + 1));
@@ -255,15 +257,14 @@ export function PromptComposer({ api }: PromptComposerProps) {
 
           {/* Draw（仅图像，占位） */}
           {!isVideo && (
-            <div className="popover-wrap">
-              <button
-                className="ctrl-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  alert(t("prompt.drawAlert"));
-                }}
-                title={t("prompt.drawTitle")}
-              >
+            <button
+              className="ctrl-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                alert(t("prompt.drawAlert"));
+              }}
+              title={t("prompt.drawTitle")}
+            >
                 <svg
                   className="ctrl-ico"
                   viewBox="0 0 24 24"
@@ -278,7 +279,6 @@ export function PromptComposer({ api }: PromptComposerProps) {
                 </svg>
                 <span className="ctrl-label">{t("prompt.draw")}</span>
               </button>
-            </div>
           )}
         </div>
 
@@ -301,11 +301,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
       {showProgress && (
         <div className={"gen-progress" + (failed ? " failed" : "")}>
           <span>{phaseLabel(api.progress!.phase)}</span>
-          {!failed && (
-            <span className="pb">
-              <i style={{ width: `${api.progress!.progress}%` }} />
-            </span>
-          )}
+          {!failed && <Progress className="pb" value={api.progress!.progress} />}
           {failed && <span style={{ color: "var(--danger)" }}>{api.progress!.message}</span>}
         </div>
       )}

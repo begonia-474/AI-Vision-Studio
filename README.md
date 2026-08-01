@@ -60,6 +60,9 @@
 
 - **桌面框架**：[Tauri 2](https://tauri.app)（Rust 后端 + 系统 WebView）
 - **前端**：React 19 + TypeScript + Vite 7
+- **UI 组件**：[shadcn/ui](https://ui.shadcn.com)（Radix 原语 + Tailwind v4，组件源码在 `src/components/ui/`）
+- **i18n**：react-i18next（中 / 英双语，默认中文）
+- **样式**：CSS 变量设计系统（`src/styles/global.css`），暗色 / 浅色 / 跟随系统三档主题
 - **后端**：reqwest / tokio / rusqlite / keyring / chrono
 
 ## 开发环境要求

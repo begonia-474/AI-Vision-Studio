@@ -7,6 +7,10 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { deleteApiKey, getApiKey, saveApiKey, testApiKey } from "../api";
 import { PROVIDER_LIST } from "../models/registry";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 
 interface ByokModalProps {
   open: boolean;
@@ -46,8 +50,6 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
     };
   }, [open]);
 
-  if (!open) return null;
-
   const patch = (id: string, delta: Partial<CardState>) =>
     setCards((prev) => ({ ...prev, [id]: { ...prev[id], ...delta } }));
 
@@ -84,23 +86,23 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
   const badge = (s: Status) => {
     switch (s) {
       case "set":
-        return <span className="badge ok">{t("byok.badgeSet")}</span>;
+        return <Badge className="badge ok">{t("byok.badgeSet")}</Badge>;
       case "testing":
-        return <span className="badge">{t("byok.badgeTesting")}</span>;
+        return <Badge className="badge">{t("byok.badgeTesting")}</Badge>;
       case "ok":
-        return <span className="badge ok">{t("byok.badgeOk")}</span>;
+        return <Badge className="badge ok">{t("byok.badgeOk")}</Badge>;
       case "fail":
-        return <span className="badge warn">{t("byok.badgeFail")}</span>;
+        return <Badge className="badge warn">{t("byok.badgeFail")}</Badge>;
       default:
-        return <span className="badge warn">{t("byok.badgeUnset")}</span>;
+        return <Badge className="badge warn">{t("byok.badgeUnset")}</Badge>;
     }
   };
 
   return (
-    <div className="modal-mask show" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
-        <h2>{t("byok.title")}</h2>
-        <p className="mdesc">{t("byok.desc")}</p>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" showCloseButton={false}>
+        <DialogTitle>{t("byok.title")}</DialogTitle>
+        <DialogDescription className="mdesc">{t("byok.desc")}</DialogDescription>
 
         {PROVIDER_LIST.map((p) => {
           const c = cards[p.id] ?? { value: "", status: "unset" as Status };
@@ -124,27 +126,27 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
                 </span>
                 <h3>{t(p.name)}</h3>
                 {badge(c.status)}
-                <span className="tag">{caps.join(" · ")}</span>
-                {!p.wired && <span className="badge warn">{t("common.notWired")}</span>}
+                <Badge variant="outline" className="tag">{caps.join(" · ")}</Badge>
+                {!p.wired && <Badge variant="outline" className="badge warn">{t("common.notWired")}</Badge>}
               </div>
               <div className="phelp">{t(p.authHelp)}</div>
               <div className="keyrow">
-                <input
+                <Input
                   type="password"
                   placeholder={`${p.id.toUpperCase()}_API_KEY`}
                   value={c.value}
                   onChange={(e) => patch(p.id, { value: e.target.value })}
                 />
-                <button className="btn" onClick={() => handleSave(p.id)}>
+                <Button className="btn" onClick={() => handleSave(p.id)}>
                   {t("common.save")}
-                </button>
-                <button className="btn" onClick={() => handleTest(p.id)}>
+                </Button>
+                <Button className="btn" onClick={() => handleTest(p.id)}>
                   {t("common.test")}
-                </button>
+                </Button>
                 {c.status === "set" || c.status === "ok" ? (
-                  <button className="btn" onClick={() => handleClear(p.id)}>
+                  <Button className="btn" onClick={() => handleClear(p.id)}>
                     {t("common.clear")}
-                  </button>
+                  </Button>
                 ) : null}
               </div>
               {c.message && (
@@ -157,11 +159,13 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
         })}
 
         <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
-          <button className="btn" style={{ flex: 1 }} onClick={onClose}>
-            {t("common.close")}
-          </button>
+          <DialogClose asChild>
+            <Button className="btn" style={{ flex: 1 }}>
+              {t("common.close")}
+            </Button>
+          </DialogClose>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

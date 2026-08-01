@@ -6,6 +6,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTheme, type ThemeMode } from "../theme";
 import { switchLanguage, type Lang } from "../i18n";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
+import { Button } from "./ui/button";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
 
 interface SettingsModalProps {
   open: boolean;
@@ -22,13 +25,12 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [conc, setConc] = useState(4);
-  if (!open) return null;
 
   return (
-    <div className="modal-mask show" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
-        <h2>{t("settings.title")}</h2>
-        <p className="mdesc">{t("settings.desc")}</p>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="modal" showCloseButton={false}>
+        <DialogTitle>{t("settings.title")}</DialogTitle>
+        <DialogDescription className="mdesc">{t("settings.desc")}</DialogDescription>
 
         <div className="set-row">
           <div>
@@ -50,15 +52,18 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
             <div className="sd">{t("settings.concurrencyDesc")}</div>
           </div>
           <div className="seg">
-            {CONCURRENCY.map((n) => (
-              <button
-                key={n}
-                className={conc === n ? "active" : ""}
-                onClick={() => setConc(n)}
-              >
-                {n}
-              </button>
-            ))}
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={String(conc)}
+              onValueChange={(v) => v && setConc(Number(v))}
+            >
+              {CONCURRENCY.map((n) => (
+                <ToggleGroupItem key={n} value={String(n)}>
+                  {n}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
           </div>
         </div>
         <div className="set-row">
@@ -67,15 +72,18 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
             <div className="sd">{t("settings.themeDesc")}</div>
           </div>
           <div className="seg">
-            {THEMES.map((m) => (
-              <button
-                key={m}
-                className={theme === m ? "active" : ""}
-                onClick={() => setTheme(m)}
-              >
-                {t(`common.${m}`)}
-              </button>
-            ))}
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={theme}
+              onValueChange={(v) => v && setTheme(v as ThemeMode)}
+            >
+              {THEMES.map((m) => (
+                <ToggleGroupItem key={m} value={m}>
+                  {t(`common.${m}`)}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
           </div>
         </div>
         <div className="set-row">
@@ -84,15 +92,18 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
             <div className="sd">{t("settings.languageDesc")}</div>
           </div>
           <div className="seg">
-            {LANGS.map((l) => (
-              <button
-                key={l}
-                className={i18n.language === l ? "active" : ""}
-                onClick={() => switchLanguage(l)}
-              >
-                {l === "zh-CN" ? t("lang.zh") : t("lang.en")}
-              </button>
-            ))}
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={i18n.language}
+              onValueChange={(l) => l && switchLanguage(l as Lang)}
+            >
+              {LANGS.map((l) => (
+                <ToggleGroupItem key={l} value={l}>
+                  {l === "zh-CN" ? t("lang.zh") : t("lang.en")}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
           </div>
         </div>
         <div className="set-row">
@@ -118,11 +129,13 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
         </div>
 
         <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
-          <button className="btn" style={{ flex: 1 }} onClick={onClose}>
-            {t("common.close")}
-          </button>
+          <DialogClose asChild>
+            <Button className="btn" style={{ flex: 1 }}>
+              {t("common.close")}
+            </Button>
+          </DialogClose>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

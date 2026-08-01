@@ -52,7 +52,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
       {results.map((it) => {
         if (it.status === "loading") {
           return (
-            <div className="result-card loading" key={it.id}>
+            <div className="result-card loading" key={it.id} aria-busy="true" role="group" aria-label={t("result.cardGroup")}>
               <div className="rimg">
                 <div className="spinner" />
               </div>
@@ -73,7 +73,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
         if (it.status === "error") {
           return (
             <div className="result-card err-card" key={it.id}>
-              <div className="rimg">{it.error ?? t("common.generationFailed")}</div>
+              <div className="rimg" role="alert">{it.error ?? t("common.generationFailed")}</div>
               <div className="rmeta">
                 <p className="rprompt">{it.prompt}</p>
                 <div className="rfoot">
@@ -84,7 +84,12 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
                     <span className="ar-tag">{it.ar}</span>
                   </div>
                   <div className="ract">
-                    <button title={t("common.delete")} className="del" onClick={() => onDelete(it.id)}>
+                    <button
+                      title={t("common.delete")}
+                      aria-label={t("common.delete")}
+                      className="del"
+                      onClick={() => onDelete(it.id)}
+                    >
                       <IconTrash size={14} />
                     </button>
                   </div>
@@ -95,7 +100,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
         }
         // done
         return (
-          <div className="result-card" key={it.id}>
+          <div className="result-card" key={it.id} role="group" aria-label={t("result.cardGroup")}>
             {studio === "image" ? (
               <img className="rimg" src={it.url} alt="" />
             ) : (
@@ -116,6 +121,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
               <button
                 className="dl"
                 title={t("common.open")}
+                aria-label={t("common.open")}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (it.url) window.open(it.url, "_blank");
@@ -123,7 +129,12 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
               >
                 <IconDownload size={14} />
               </button>
-              <button className="del" title={t("common.delete")} onClick={(e) => { e.stopPropagation(); onDelete(it.id); }}>
+              <button
+                className="del"
+                title={t("common.delete")}
+                aria-label={t("common.delete")}
+                onClick={(e) => { e.stopPropagation(); onDelete(it.id); }}
+              >
                 <IconTrash size={14} />
               </button>
             </div>

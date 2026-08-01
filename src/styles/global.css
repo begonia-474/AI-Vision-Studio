@@ -1,8 +1,48 @@
 /* ============================================================
+   Tailwind v4 + shadcn/ui
+   ============================================================ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* 暗色变体与 theme.ts 的 data-theme 对齐 */
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+/* shadcn token → Tailwind 工具类桥接（值引用下方 :root / [data-theme] 变量） */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--card-bg);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--overlay);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #000;
+  --color-secondary: var(--surface-3);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--surface-4);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--accent-hover);
+  --color-accent-foreground: var(--accent);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #fff;
+  --color-border: var(--border-3);
+  --color-input: var(--border-3);
+  --color-ring: var(--accent);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* ============================================================
    设计 Token —— 调色板（暗色基准）
    ============================================================ */
 :root {
   color-scheme: dark;
+  --radius: 0.5rem;
   --bg:           #030303;
   --surface:      #0a0a0b;
   --surface-2:    #0c0c0f;
@@ -52,6 +92,7 @@
   --shadow-lg:    rgba(0,0,0,.80);
   --shadow-xs:    rgba(0,0,0,.30);
   --empty-card:   linear-gradient(135deg,#16161a,#0a0a0b);
+  --accent-hover: rgba(34,211,238,.12);
 }
 
 [data-theme="light"] {
@@ -99,6 +140,7 @@
   --shadow-lg:    rgba(0,0,0,.20);
   --shadow-xs:    rgba(0,0,0,.10);
   --empty-card:   linear-gradient(135deg,#ffffff,#e9edf3);
+  --accent-hover: rgba(8,145,178,.10);
 }
 
 * { box-sizing: border-box; }
@@ -280,7 +322,6 @@ body {
 .gen-action:disabled { opacity: .50; cursor: not-allowed; transform: none; }
 
 /* ============ Popover ============ */
-.popover-wrap { position: relative; }
 .popover { position: absolute; bottom: calc(100% + 12px); left: 0; z-index: 50; background: var(--overlay); backdrop-filter: blur(24px); border: 1px solid var(--border-3); border-radius: var(--r-lg); padding: 14px; box-shadow: 0 10px 40px var(--shadow-lg); min-width: 180px; max-height: 40vh; overflow-y: auto; animation: fadeInUp .2s; }
 .popover.wide { min-width: 480px; max-width: calc(100vw - 32px); }
 .pop-header { font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; padding: 0 4px 8px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
@@ -318,8 +359,6 @@ body {
 .empty-models { font-size: 12px; color: var(--muted); text-align: center; padding: 24px 0; }
 
 /* ============ Modal ============ */
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.60); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; z-index: 100; animation: fadeInUp .3s; }
-.modal-mask.show { display: flex; }
 .modal { background: var(--card-bg); border: 1px solid var(--border-4); border-radius: var(--r-lg); padding: 32px; width: 100%; max-width: 480px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 60px var(--shadow-lg); }
 .modal h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
 .modal .mdesc { color: var(--muted); font-size: 13px; margin: 0 0 24px; line-height: 1.6; }
@@ -344,7 +383,7 @@ body {
 .set-row .sv { font-size: 12px; color: var(--text-2); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .seg { display: inline-flex; background: var(--chip); border: 1px solid var(--border-2); border-radius: var(--r-md); overflow: hidden; }
 .seg button { background: transparent; border: none; color: var(--text-3); padding: 6px 12px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s; }
-.seg button.active { background: rgba(34,211,238,.12); color: var(--accent); }
+.seg button[data-state="on"] { background: rgba(34,211,238,.12); color: var(--accent); }
 .seg button:disabled { opacity: .4; cursor: not-allowed; }
 
 /* ============ 补充：upload-row / 缩略图 / 上传按钮 ============ */
@@ -367,8 +406,8 @@ body {
 .result-card .ract button.i2v { width: auto; padding: 0 12px; font-size: 11px; font-weight: 700; gap: 4px; background: var(--accent); color: #000; border-color: var(--accent); display: flex; align-items: center; }
 .result-card .ract button.i2v:hover { background: var(--accent-h); }
 
-/* 进度条（生成中） */
+/* 进度条（生成中，Radix Progress） */
 .gen-progress { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); z-index: 25; display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--overlay); backdrop-filter: blur(12px); border: 1px solid var(--border-3); font-size: 12px; color: var(--text-2); box-shadow: 0 8px 24px var(--shadow-lg); animation: fadeInUp .2s; }
 .gen-progress .pb { width: 120px; height: 4px; border-radius: 999px; background: var(--scroll-thumb); overflow: hidden; }
-.gen-progress .pb > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width .3s; }
+.gen-progress .pb [data-slot="progress-indicator"] { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
 .gen-progress.failed { color: var(--danger); border-color: rgba(239,68,68,.30); }

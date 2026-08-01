@@ -80,9 +80,15 @@ export const enUS: ZhDict = {
     phaseDownloading: "Downloading results...",
     phaseDone: "Done",
     phaseFailed: "Generation failed",
+    removeRef: "Remove reference",
+    lessBatch: "Decrease batch",
+    moreBatch: "Increase batch",
+    textareaLabel: "Prompt (Ctrl/⌘ + Enter to generate)",
   },
   model: {
     allProviders: "All Providers",
+    allTab: "All providers",
+    providerTab: "Filter by: {{name}}",
     search: "Search models...",
     available: "Available models",
     none: "No models found",
@@ -95,6 +101,7 @@ export const enUS: ZhDict = {
     descImage: "Describe a scene, character, mood, or style — and watch it come to life",
     descVideo: "Describe a dynamic scene — and bring it to motion",
     imgToVideo: "🎬 To video",
+    cardGroup: "Generation result",
   },
   providers: {
     volcark: {

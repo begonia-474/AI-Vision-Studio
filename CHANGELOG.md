@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- 中英文双语界面（react-i18next），默认中文，可在设置中切换
+- 主题切换：暗色 / 浅色 / 跟随系统（设置弹窗中切换，持久化到本地）
+- 迁移 [shadcn/ui](https://ui.shadcn.com)（Radix + Tailwind v4）：Dialog / Popover / Command / Button / Badge / Input / Progress / Toggle Group
+- 模型选择弹层支持键盘导航（方向键 + Enter）
+
+### 变更
+
+- 弹窗与弹层统一为 Radix 实现：焦点陷阱、Esc 关闭、外点关闭、aria 标签
+- 设置中的分段控件改为 Radix Toggle Group（roving focus + 方向键）
+- 生成进度条改为 Radix Progress（语义化进度值）
+- 无障碍增强：结果卡片 `role="group"` / 错误 `role="alert"` / 加载 `aria-busy`，按钮补充 aria-label，厂商筛选 tab 支持 `aria-pressed`
+
 ## [0.1.0] - 2026-08-01
 
 ### 新增
