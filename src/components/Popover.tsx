@@ -71,7 +71,7 @@ export function ParamPopover({ open, onClose, title, options, current, onSelect 
                 <span>{label}</span>
               </span>
               {sel && (
-                <svg className="pi-check" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" strokeWidth={4.5}>
+                <svg className="pi-check" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth={4.5}>
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
               )}

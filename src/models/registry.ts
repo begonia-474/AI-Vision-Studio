@@ -29,26 +29,27 @@ export interface ModelDef {
 }
 
 // ============ 厂商元信息 ============
+// name / authHelp 为 i18n key（src/i18n/locales），渲染处需经 t() 转换。
 export const PROVIDERS: Record<string, ProviderMeta> = {
   volcark: {
-    id: "volcark", name: "即梦 / 豆包", abbr: "BD", color: "#a855f7", wired: true,
+    id: "volcark", name: "providers.volcark.name", abbr: "BD", color: "#a855f7", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
-    authHelp: "火山方舟控制台创建 API Key（Bearer Token）。",
+    authHelp: "providers.volcark.authHelp",
   },
   kling: {
-    id: "kling", name: "可灵 Kling", abbr: "KL", color: "#f43f5e", wired: true,
+    id: "kling", name: "providers.kling.name", abbr: "KL", color: "#f43f5e", wired: true,
     capabilities: ["t2v", "i2v"],
-    authHelp: "推荐 API Key（Bearer）；旧模型兼容 JWT。",
+    authHelp: "providers.kling.authHelp",
   },
   wanxiang: {
-    id: "wanxiang", name: "通义万相", abbr: "AL", color: "#0ea5e9", wired: true,
+    id: "wanxiang", name: "providers.wanxiang.name", abbr: "AL", color: "#0ea5e9", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
-    authHelp: "DashScope Bearer Key + 可选 WorkspaceId。",
+    authHelp: "providers.wanxiang.authHelp",
   },
   minimax: {
-    id: "minimax", name: "MiniMax 海螺", abbr: "MX", color: "#ec4899", wired: true,
+    id: "minimax", name: "providers.minimax.name", abbr: "MX", color: "#ec4899", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
-    authHelp: "Bearer API Key。Hailuo 视频 / image-01 图像。",
+    authHelp: "providers.minimax.authHelp",
   },
 };
 

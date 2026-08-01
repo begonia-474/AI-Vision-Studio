@@ -4,6 +4,7 @@
 // 各控件 popover 独立 open 状态，点击外部自动关闭（Popover 内置）。
 
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ModelDropdown } from "./ModelDropdown";
 import { ParamPopover } from "./Popover";
 import {
@@ -22,6 +23,7 @@ interface PromptComposerProps {
 }
 
 export function PromptComposer({ api }: PromptComposerProps) {
+  const { t } = useTranslation();
   const isVideo = api.studio === "video";
   const provider = PROVIDERS[api.model.providerId];
   const [openModel, setOpenModel] = useState(false);
@@ -60,13 +62,13 @@ export function PromptComposer({ api }: PromptComposerProps) {
   const phaseLabel = (phase: string) => {
     switch (phase) {
       case "submitting":
-        return "正在提交生成请求...";
+        return t("prompt.phaseSubmitting");
       case "downloading":
-        return "正在下载生成结果...";
+        return t("prompt.phaseDownloading");
       case "done":
-        return "完成";
+        return t("prompt.phaseDone");
       case "failed":
-        return "生成失败";
+        return t("prompt.phaseFailed");
       default:
         return phase;
     }
@@ -92,7 +94,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
             {canAddRef && (
               <button
                 className="upload-btn"
-                title={isVideo ? "Upload first frame (i2v)" : "Upload reference image (i2i)"}
+                title={isVideo ? t("prompt.uploadI2v") : t("prompt.uploadI2i")}
                 onClick={onPickRef}
               >
                 <IconUpload size={16} />
@@ -104,7 +106,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
         <textarea
           ref={taRef}
           className="pc-textarea"
-          placeholder={isVideo ? "Describe the video you want to create" : "Describe the image you want to create"}
+          placeholder={isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage")}
           rows={1}
           value={api.prompt}
           onInput={onTextareaInput}
@@ -165,7 +167,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
             <ParamPopover
               open={openAr}
               onClose={() => setOpenAr(false)}
-              title="Aspect Ratio"
+              title={t("prompt.aspectRatio")}
               options={api.model.aspectRatios}
               current={api.ar}
               onSelect={api.setAr}
@@ -190,7 +192,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
             <ParamPopover
               open={openQuality}
               onClose={() => setOpenQuality(false)}
-              title="Resolution"
+              title={t("prompt.resolution")}
               options={api.model.qualities}
               current={api.quality}
               onSelect={api.setQuality}
@@ -216,7 +218,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
               <ParamPopover
                 open={openDuration}
                 onClose={() => setOpenDuration(false)}
-                title="Duration"
+                title={t("prompt.duration")}
                 options={(api.model.durations ?? []).map((d) => ({ value: d, label: `${d}s` }))}
                 current={api.duration}
                 onSelect={api.setDuration}
@@ -258,9 +260,9 @@ export function PromptComposer({ api }: PromptComposerProps) {
                 className="ctrl-btn"
                 onClick={(e) => {
                   e.stopPropagation();
-                  alert("Draw canvas (DrawModal) — 待接入画板");
+                  alert(t("prompt.drawAlert"));
                 }}
-                title="画板（待接入）"
+                title={t("prompt.drawTitle")}
               >
                 <svg
                   className="ctrl-ico"
@@ -274,7 +276,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
                   <path d="M12 20h9" />
                   <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
                 </svg>
-                <span className="ctrl-label">Draw</span>
+                <span className="ctrl-label">{t("prompt.draw")}</span>
               </button>
             </div>
           )}
@@ -288,9 +290,9 @@ export function PromptComposer({ api }: PromptComposerProps) {
             e.stopPropagation();
             api.handleGenerate();
           }}
-          title={provider.wired ? "Ctrl/⌘ + Enter 生成" : "该厂商后端尚未接入"}
+          title={provider.wired ? t("prompt.shortcut") : t("prompt.notWired")}
         >
-          <span>{api.generating ? "Generating..." : "Generate"}</span>
+          <span>{api.generating ? t("prompt.generating") : t("prompt.generate")}</span>
           <IconSparkles size={14} />
         </button>
       </div>

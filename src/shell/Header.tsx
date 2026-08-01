@@ -1,6 +1,7 @@
 // Header —— 顶栏
 // 左：折叠键 + logo + 品牌名；中：面包屑（当前 studio）；不放设置按钮（避免双入口）。
 
+import { useTranslation } from "react-i18next";
 import { IconSidebar } from "../lib/icons";
 
 interface HeaderProps {
@@ -9,13 +10,15 @@ interface HeaderProps {
 }
 
 export function Header({ activeStudio, onToggleSidebar }: HeaderProps) {
+  const { t } = useTranslation();
+
   return (
     <header className="header">
       <div className="h-left">
         <button
           className="sidebar-toggle"
-          title="折叠/展开侧栏"
-          aria-label="Toggle sidebar"
+          title={t("header.toggleSidebar")}
+          aria-label={t("header.toggleSidebar")}
           onClick={onToggleSidebar}
         >
           <IconSidebar size={18} />
@@ -32,7 +35,7 @@ export function Header({ activeStudio, onToggleSidebar }: HeaderProps) {
 
       <div className="crumb">
         <span className="dot" />
-        <b>{activeStudio === "video" ? "Video Studio" : "Image Studio"}</b>
+        <b>{activeStudio === "video" ? t("header.videoStudio") : t("header.imageStudio")}</b>
       </div>
     </header>
   );

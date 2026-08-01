@@ -4,6 +4,7 @@
 // 数据源 registry.ts PROVIDER_LIST；后端命令 list_providers 给出能力清单。
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { deleteApiKey, getApiKey, saveApiKey, testApiKey } from "../api";
 import { PROVIDER_LIST } from "../models/registry";
 
@@ -21,6 +22,7 @@ interface CardState {
 }
 
 export function ByokModal({ open, onClose }: ByokModalProps) {
+  const { t } = useTranslation();
   const [cards, setCards] = useState<Record<string, CardState>>({});
 
   // 打开时拉取各厂商已存 Key（仅判断是否已设置，不回显明文以减少暴露面）
@@ -54,7 +56,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
     if (!v) return;
     try {
       await saveApiKey(id, v);
-      patch(id, { value: "", status: "set", message: "已保存" });
+      patch(id, { value: "", status: "set", message: t("common.saved") });
     } catch (e) {
       patch(id, { status: "fail", message: String(e) });
     }
@@ -82,30 +84,34 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
   const badge = (s: Status) => {
     switch (s) {
       case "set":
-        return <span className="badge ok">● 已设置</span>;
+        return <span className="badge ok">{t("byok.badgeSet")}</span>;
       case "testing":
-        return <span className="badge">○ 校验中...</span>;
+        return <span className="badge">{t("byok.badgeTesting")}</span>;
       case "ok":
-        return <span className="badge ok">● 已连接</span>;
+        return <span className="badge ok">{t("byok.badgeOk")}</span>;
       case "fail":
-        return <span className="badge warn">● 校验失败</span>;
+        return <span className="badge warn">{t("byok.badgeFail")}</span>;
       default:
-        return <span className="badge warn">○ 未设置</span>;
+        return <span className="badge warn">{t("byok.badgeUnset")}</span>;
     }
   };
 
   return (
     <div className="modal-mask show" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal">
-        <h2>BYOK · 厂商 Key 管理</h2>
-        <p className="mdesc">
-          各厂商 API Key 经 Windows Credential Manager（DPAPI）加密存储于本机，永不上传。下方状态由「测试连通性」实时校验。
-        </p>
+        <h2>{t("byok.title")}</h2>
+        <p className="mdesc">{t("byok.desc")}</p>
 
         {PROVIDER_LIST.map((p) => {
           const c = cards[p.id] ?? { value: "", status: "unset" as Status };
           const caps = p.capabilities
-            .map((cap) => (cap.startsWith("t2") || cap.startsWith("i2") ? (cap.endsWith("i") ? "图像" : "视频") : cap))
+            .map((cap) =>
+              cap.startsWith("t2") || cap.startsWith("i2")
+                ? cap.endsWith("i")
+                  ? t("byok.capImage")
+                  : t("byok.capVideo")
+                : cap,
+            )
             .filter((v, i, a) => a.indexOf(v) === i);
           return (
             <div className="prov-card" key={p.id}>
@@ -116,12 +122,12 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
                 >
                   {p.abbr}
                 </span>
-                <h3>{p.name}</h3>
+                <h3>{t(p.name)}</h3>
                 {badge(c.status)}
                 <span className="tag">{caps.join(" · ")}</span>
-                {!p.wired && <span className="badge warn">后端未接入</span>}
+                {!p.wired && <span className="badge warn">{t("common.notWired")}</span>}
               </div>
-              <div className="phelp">{p.authHelp}</div>
+              <div className="phelp">{t(p.authHelp)}</div>
               <div className="keyrow">
                 <input
                   type="password"
@@ -130,14 +136,14 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
                   onChange={(e) => patch(p.id, { value: e.target.value })}
                 />
                 <button className="btn" onClick={() => handleSave(p.id)}>
-                  保存
+                  {t("common.save")}
                 </button>
                 <button className="btn" onClick={() => handleTest(p.id)}>
-                  测试
+                  {t("common.test")}
                 </button>
                 {c.status === "set" || c.status === "ok" ? (
                   <button className="btn" onClick={() => handleClear(p.id)}>
-                    清除
+                    {t("common.clear")}
                   </button>
                 ) : null}
               </div>
@@ -152,7 +158,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
 
         <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
           <button className="btn" style={{ flex: 1 }} onClick={onClose}>
-            Close
+            {t("common.close")}
           </button>
         </div>
       </div>

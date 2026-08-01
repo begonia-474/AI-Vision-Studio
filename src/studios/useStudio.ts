@@ -4,6 +4,7 @@
 // 进度通过 mount 时订阅 "gen-progress" 事件，避免与生成调用竞态。
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { aspectToSize, type ModelDef, modelsForStudio } from "../models/registry";
 import { generate, onProgress, toAssetUrl } from "../api";
 import type { ProgressPayload } from "../types";
@@ -51,6 +52,7 @@ export interface StudioApi {
 }
 
 export function useStudio(studio: Studio): StudioApi {
+  const { t } = useTranslation();
   const initial = modelsForStudio(studio)[studio === "image" ? 0 : 1];
   const [model, setModel] = useState<ModelDef>(initial);
   const [ar, setAr] = useState(initial.aspectRatios[0]);
@@ -129,7 +131,7 @@ export function useStudio(studio: Studio): StudioApi {
     }));
     setResults((prev) => [...placeholders, ...prev]);
     setGenerating(true);
-    setProgress({ phase: "submitting", progress: 10, message: "正在提交生成请求..." });
+    setProgress({ phase: "submitting", progress: 10, message: t("prompt.phaseSubmitting") });
 
     try {
       const res = await generate({
@@ -158,7 +160,7 @@ export function useStudio(studio: Studio): StudioApi {
         return prev.map((it) => map.get(it.id) ?? it);
       });
     } catch (e) {
-      const msg = typeof e === "string" ? e : (e as Error)?.message ?? "生成失败";
+      const msg = typeof e === "string" ? e : (e as Error)?.message ?? t("common.generationFailed");
       setResults((prev) =>
         prev.map((it) => (ids.includes(it.id) ? { ...it, status: "error", error: msg } : it)),
       );
@@ -166,7 +168,7 @@ export function useStudio(studio: Studio): StudioApi {
     } finally {
       setGenerating(false);
     }
-  }, [generating, prompt, studio, batch, refs, model, ar, quality, duration]);
+  }, [generating, prompt, studio, batch, refs, model, ar, quality, duration, t]);
 
   return {
     studio,

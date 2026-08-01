@@ -2,6 +2,7 @@
 // loading 卡显示 spinner；done 卡显示本地产物 + hover 操作（下载/删除/图生视频）；
 // error 卡显示错误信息。空 results 时渲染 4 漂浮卡空态。
 
+import { useTranslation } from "react-i18next";
 import { IconDownload, IconPlay, IconTrash } from "../lib/icons";
 import type { ResultItem } from "../studios/useStudio";
 import type { ModelDef } from "../models/registry";
@@ -23,24 +24,24 @@ const FLOAT_TINT = [
 ];
 
 export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }: ResultGridProps) {
+  const { t } = useTranslation();
+
   if (results.length === 0) {
     return (
       <div className="empty-state">
         <div className="float-cards">
           {FLOAT_TINT.map((tint, i) => (
-            <div className="fc" key={i} style={{ background: "linear-gradient(135deg,#16161a,#0a0a0b)" }}>
+            <div className="fc" key={i} style={{ background: "var(--empty-card)" }}>
               <div style={{ width: "100%", height: "100%", background: tint }} />
             </div>
           ))}
         </div>
         <h1 className="empty-title">
-          <span className="pre">START CREATING WITH</span>
+          <span className="pre">{t("result.startWith")}</span>
           <span className="big">{model.name}</span>
         </h1>
         <p className="empty-desc">
-          {studio === "video"
-            ? "Describe a dynamic scene — and bring it to motion"
-            : "Describe a scene, character, mood, or style — and watch it come to life"}
+          {studio === "video" ? t("result.descVideo") : t("result.descImage")}
         </p>
       </div>
     );
@@ -72,18 +73,18 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
         if (it.status === "error") {
           return (
             <div className="result-card err-card" key={it.id}>
-              <div className="rimg">{it.error ?? "生成失败"}</div>
+              <div className="rimg">{it.error ?? t("common.generationFailed")}</div>
               <div className="rmeta">
                 <p className="rprompt">{it.prompt}</p>
                 <div className="rfoot">
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <span className="model-tag" style={{ color: "var(--danger)", background: "rgba(239,68,68,.10)", borderColor: "rgba(239,68,68,.20)" }}>
-                      failed
+                      {t("common.failed")}
                     </span>
                     <span className="ar-tag">{it.ar}</span>
                   </div>
                   <div className="ract">
-                    <button title="删除" className="del" onClick={() => onDelete(it.id)}>
+                    <button title={t("common.delete")} className="del" onClick={() => onDelete(it.id)}>
                       <IconTrash size={14} />
                     </button>
                   </div>
@@ -103,7 +104,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
                 <div
                   style={{
                     position: "relative", width: 48, height: 48, borderRadius: "50%",
-                    background: "rgba(0,0,0,.60)", backdropFilter: "blur(8px)", border: "1px solid var(--border-4)",
+                    background: "var(--btn-dark)", backdropFilter: "blur(8px)", border: "1px solid var(--border-4)",
                     display: "grid", placeItems: "center", color: "var(--text)",
                   }}
                 >
@@ -114,7 +115,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
             <div className="rhover">
               <button
                 className="dl"
-                title="打开"
+                title={t("common.open")}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (it.url) window.open(it.url, "_blank");
@@ -122,7 +123,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
               >
                 <IconDownload size={14} />
               </button>
-              <button className="del" title="删除" onClick={(e) => { e.stopPropagation(); onDelete(it.id); }}>
+              <button className="del" title={t("common.delete")} onClick={(e) => { e.stopPropagation(); onDelete(it.id); }}>
                 <IconTrash size={14} />
               </button>
             </div>
@@ -138,7 +139,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
                 {studio === "image" && onImageToVideo && (
                   <div className="ract">
                     <button className="i2v" onClick={(e) => { e.stopPropagation(); onImageToVideo(it.url ?? "", it.prompt); }}>
-                      🎬 图生视频
+                      {t("result.imgToVideo")}
                     </button>
                   </div>
                 )}

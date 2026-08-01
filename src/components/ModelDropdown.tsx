@@ -3,6 +3,7 @@
 // 数据源 registry.ts；wired=false 的厂商标记「未接入」。
 
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Popover } from "./Popover";
 import { IconSearch, IconStar } from "../lib/icons";
 import {
@@ -21,6 +22,7 @@ interface ModelDropdownProps {
 }
 
 export function ModelDropdown({ open, onClose, studio, current, onSelect }: ModelDropdownProps) {
+  const { t } = useTranslation();
   const all = useMemo(() => modelsForStudio(studio), [studio]);
   const [selProvider, setSelProvider] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -46,7 +48,7 @@ export function ModelDropdown({ open, onClose, studio, current, onSelect }: Mode
         <div className="providers">
           <button
             className={"prov-btn all" + (selProvider === "all" ? " active" : "")}
-            title="All Providers"
+            title={t("model.allProviders")}
             onClick={(e) => {
               e.stopPropagation();
               setSelProvider("all");
@@ -61,7 +63,7 @@ export function ModelDropdown({ open, onClose, studio, current, onSelect }: Mode
               <button
                 key={pid}
                 className={"prov-btn" + (sel ? " active" : "")}
-                title={p.name}
+                title={t(p.name)}
                 onClick={(e) => {
                   e.stopPropagation();
                   setSelProvider(pid);
@@ -84,19 +86,19 @@ export function ModelDropdown({ open, onClose, studio, current, onSelect }: Mode
             <IconSearch size={14} style={{ color: "var(--muted)" }} />
             <input
               type="text"
-              placeholder="Search models..."
+              placeholder={t("model.search")}
               value={search}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
           <div className="model-list-title">
-            <span>Available models</span>
-            {selProvider !== "all" && <span className="prov-name">{PROVIDERS[selProvider].name}</span>}
+            <span>{t("model.available")}</span>
+            {selProvider !== "all" && <span className="prov-name">{t(PROVIDERS[selProvider].name)}</span>}
           </div>
           <div className="model-list-scroll">
             {filtered.length === 0 ? (
-              <div className="empty-models">No models found</div>
+              <div className="empty-models">{t("model.none")}</div>
             ) : (
               filtered.map((m) => {
                 const sel = current.id === m.id;
@@ -104,10 +106,10 @@ export function ModelDropdown({ open, onClose, studio, current, onSelect }: Mode
                 const i2iLabel =
                   studio === "image"
                     ? m.capabilities.includes("i2i")
-                      ? " · supports i2i"
+                      ? t("model.supportsI2i")
                       : ""
                     : m.capabilities.includes("i2v")
-                      ? " · supports i2v"
+                      ? t("model.supportsI2v")
                       : "";
                 return (
                   <div
@@ -126,18 +128,18 @@ export function ModelDropdown({ open, onClose, studio, current, onSelect }: Mode
                       <div className="mi-name">
                         <span className="nm">
                           {m.name}
-                          {!p.wired && <span style={{ color: "var(--warn)", marginLeft: 6 }}>· 未接入</span>}
+                          {!p.wired && <span style={{ color: "var(--warn)", marginLeft: 6 }}>{t("model.notWired")}</span>}
                         </span>
                         {selProvider === "all" && (
                           <span className="pv">
-                            {p.name}
+                            {t(p.name)}
                             {i2iLabel}
                           </span>
                         )}
                       </div>
                     </div>
                     {sel && (
-                      <svg className="mi-check" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" strokeWidth={4}>
+                      <svg className="mi-check" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth={4}>
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     )}
