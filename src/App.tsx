@@ -3,15 +3,16 @@
 // BYOK / Settings 为独立 modal，由 sidebar 底部入口触发。
 // 图像 → 视频跳转：ImageStudio/GalleryView 触发 onImageToVideo，App 切换 tab 并向 VideoStudio 注入 jump。
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Header } from "./shell/Header";
 import { Sidebar } from "./shell/Sidebar";
 import { ImageStudio } from "./studios/ImageStudio";
 import { VideoStudio } from "./studios/VideoStudio";
 import { GalleryView } from "./components/GalleryView";
 import { ByokModal } from "./components/ByokModal";
+import { CustomProviderModal } from "./components/CustomProviderModal";
 import { SettingsModal } from "./components/SettingsModal";
-import { IMAGE_MODELS, VIDEO_MODELS } from "./models/registry";
+import { IMAGE_MODELS, VIDEO_MODELS, refreshCustomProviders } from "./models/registry";
 
 export type View = "image" | "video" | "gallery";
 
@@ -19,8 +20,14 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>("image");
   const [collapsed, setCollapsed] = useState(false);
   const [byokOpen, setByokOpen] = useState(false);
+  const [customProviderOpen, setCustomProviderOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [videoJump, setVideoJump] = useState<{ src: string; prompt: string } | null>(null);
+
+  // 启动加载自定义厂商（JSON 配置）→ 注册表 emitter 通知两个 studio 刷新列表
+  useEffect(() => {
+    refreshCustomProviders().catch(() => {});
+  }, []);
 
   const handleImageToVideo = (src: string, prompt: string) => {
     setVideoJump({ src, prompt });
@@ -37,6 +44,7 @@ export default function App() {
           collapsed={collapsed}
           onSwitch={setActiveView}
           onOpenByok={() => setByokOpen(true)}
+          onOpenCustomProvider={() => setCustomProviderOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -54,6 +62,7 @@ export default function App() {
       </div>
 
       <ByokModal open={byokOpen} onClose={() => setByokOpen(false)} />
+      <CustomProviderModal open={customProviderOpen} onClose={() => setCustomProviderOpen(false)} />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

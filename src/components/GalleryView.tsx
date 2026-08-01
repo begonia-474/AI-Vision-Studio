@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { deleteHistories, listHistory, onProgress, setStar, toAssetUrl } from "../api";
 import type { HistoryTask } from "../types";
-import { PROVIDERS } from "../models/registry";
+import { providerDisplayName } from "../models/registry";
 import { IconLibrary, IconPlay, IconSearch, IconStar, IconTrash } from "../lib/icons";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -109,13 +109,7 @@ export function GalleryView({ onImageToVideo }: GalleryViewProps) {
     [items, type, starredOnly, q],
   );
 
-  const providerName = useCallback(
-    (it: HistoryTask) => {
-      const meta = PROVIDERS[it.provider];
-      return meta ? t(meta.name) : it.provider;
-    },
-    [t],
-  );
+  const providerName = useCallback((it: HistoryTask) => providerDisplayName(it.provider, t), [t]);
 
   const toggleSelect = (id: number) =>
     setSelected((prev) => {
@@ -402,7 +396,7 @@ function DetailDialog({
                 <IconStar size={14} filled={item.starred} /> {item.starred ? t("gallery.unstar") : t("gallery.star")}
               </Button>
               {img && first && onImageToVideo && (
-                <Button className="btn gd-act-i2v" variant="default" onClick={() => onImageToVideo(toAssetUrl(first), item.prompt)}>
+                <Button className="btn gd-act-i2v" variant="default" onClick={() => onImageToVideo(first, item.prompt)}>
                   {t("gallery.imgToVideo")}
                 </Button>
               )}

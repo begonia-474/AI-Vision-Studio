@@ -90,7 +90,7 @@ npm run tauri build  # 产出安装包到 src-tauri/target/release/bundle/
 
 - **API Key**：经 `keyring` 写入系统凭据管理器（`src-tauri/src/storage.rs`），SQLite 只存生成历史，不存任何密钥
 - **CSP**：生产环境启用严格 Content-Security-Policy（`tauri.conf.json`），仅允许自身源 + IPC + asset 协议
-- **asset 协议**：`convertFileSrc` 的访问范围收窄到 `%LOCALAPPDATA%\AIVisionStudio\assets\`，WebView 无法读取任意本地文件
+- **asset 协议**：`convertFileSrc` 的访问范围收窄到 `%LOCALAPPDATA%\AIVisionStudio\assets\`（glob 模式 `**/AppData/Local/AIVisionStudio/assets/**`，兼容 Windows canonicalize 的 `\\?\` 前缀路径），WebView 无法读取任意本地文件
 - **零服务端**：应用无自有服务器，所有调用直连你配置的厂商 API
 
 ## 数据位置（Windows）

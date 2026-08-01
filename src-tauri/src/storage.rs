@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use rusqlite::{params, Connection};
 
-use crate::models::HistoryTaskDto;
+use crate::models::{CustomProviderRow, HistoryTaskDto};
 
 const APP_DIR_NAME: &str = "AIVisionStudio";
 const KEYRING_SERVICE: &str = "AIVisionStudio.ApiKey";
@@ -46,7 +46,13 @@ pub async fn save_remote(
     let ext = guess_extension(url);
     let ts = now.format("%Y%m%d_%H%M%S").to_string();
     let short_id = uuid::Uuid::new_v4().simple().to_string();
-    let mut name = format!("{}_{}_{}", ts, provider_id, short_id);
+    // 厂商 id 可能含 ":"（custom:<uuid>）等非法文件名字符（Windows 会当作 NTFS 数据流分隔符），
+    // 统一替换为安全字符。
+    let safe_provider: String = provider_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let mut name = format!("{}_{}_{}", ts, safe_provider, short_id);
     if name.len() > 32 {
         name.truncate(32);
     }
@@ -105,6 +111,57 @@ fn guess_extension(url: &str) -> String {
 
 // —— 缩略图 / 图片元数据 ——
 
+/// 把本地参考图引用归一化为 base64 data URL（厂商只能拿到公网 URL 或 data URL）：
+/// - data: / http(s):// 原样返回
+/// - 本地绝对路径 / asset:// 形式的 URL：读取文件 → base64
+pub fn normalize_reference(r: &str) -> Result<String, String> {
+    let lower = r.to_lowercase();
+    if lower.starts_with("data:") || lower.starts_with("http://") || lower.starts_with("https://") {
+        return Ok(r.to_string());
+    }
+    let path = if lower.starts_with("asset://") {
+        // asset://localhost/C%3A%5CUsers%5C... → 去掉 scheme/host 后百分号解码
+        let after_host = r.splitn(3, '/').nth(2).unwrap_or(r);
+        percent_decode(after_host).trim_start_matches('/').to_string()
+    } else {
+        r.to_string()
+    };
+    let bytes = fs::read(&path).map_err(|e| format!("读取参考图失败: {}", e))?;
+    let mime = match Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+/// 仅解码 %XX 序列（够 asset URL 用，避免引入解码依赖）。
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h = (bytes[i + 1] as char).to_digit(16);
+            let l = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (h, l) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
 /// 是否为可解码的图像文件（png/jpg/jpeg/webp）。
 pub fn is_image_path(p: &str) -> bool {
     let lower = p.to_lowercase();
@@ -137,25 +194,6 @@ pub fn make_thumbnail(src: &str) -> Result<String, String> {
     }
 }
 
-/// 为 PNG 写入 tEXt 元数据块（key=`parameters`，A1111 生态通用格式），
-/// 使作品文件脱离数据库仍可移植。非 PNG / 解码失败时静默跳过。
-pub fn write_png_metadata(path: &str, metadata_json: &str) {
-    if !path.to_lowercase().ends_with(".png") {
-        return;
-    }
-    let Ok(img) = image::open(path) else { return };
-    let rgba = img.to_rgba8();
-    let Ok(file) = fs::File::create(path) else { return };
-    let mut encoder = png::Encoder::new(file, img.width(), img.height());
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    if encoder.add_text_chunk("parameters".to_string(), metadata_json.to_string()).is_err() {
-        return;
-    }
-    let Ok(mut writer) = encoder.write_header() else { return };
-    let _ = writer.write_image_data(&rgba);
-}
-
 // —— HistoryDb ——
 
 pub fn ensure_schema() -> Result<(), String> {
@@ -175,7 +213,12 @@ pub fn ensure_schema() -> Result<(), String> {
             remote_urls_json TEXT,
             raw_response TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
+        CREATE TABLE IF NOT EXISTS custom_providers (
+            id TEXT PRIMARY KEY,
+            config_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );",
     )
     .map_err(|e| e.to_string())?;
     // 渐进式迁移：旧库补列（starred 收藏 / thumbnail_path 缩略图）
@@ -311,6 +354,66 @@ pub fn set_starred(id: i64, starred: bool) -> Result<(), String> {
     Ok(())
 }
 
+// —— 自定义厂商（JSON 配置存储） ——
+// 前端是 schema 所有者：config_json 原样存取，后端不解析字段。
+
+pub fn list_custom_providers() -> Result<Vec<CustomProviderRow>, String> {
+    let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, config_json, created_at FROM custom_providers ORDER BY created_at ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CustomProviderRow {
+                id: row.get(0)?,
+                config_json: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// 取单个厂商配置（协议适配器构建时用）。未找到返回 None。
+pub fn get_custom_provider_config(id: &str) -> Result<Option<String>, String> {
+    let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT config_json FROM custom_providers WHERE id=?1")
+        .map_err(|e| e.to_string())?;
+    let mut rows = stmt
+        .query_map(params![id], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e.to_string()),
+        None => Ok(None),
+    }
+}
+
+pub fn save_custom_provider(id: &str, config_json: &str) -> Result<(), String> {
+    let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    let created = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO custom_providers (id, config_json, created_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json",
+        params![id, config_json, created],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn delete_custom_provider(id: &str) -> Result<(), String> {
+    let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM custom_providers WHERE id=?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // —— SecureKeyStore ——
 
 /// 用系统凭据管理器（Windows Credential Manager，底层 DPAPI）安全存储各厂商 API Key。
@@ -352,23 +455,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thumbnail_and_png_metadata_roundtrip() {
+    fn thumbnail_roundtrip() {
         let dir = std::env::temp_dir().join("avs_storage_test");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let png = dir.join("a.png");
-        let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([10u8, 200, 30, 255]));
-        img.save(&png).unwrap();
+        // 噪点图（接近真实照片的压缩率）
+        let mut buf = image::RgbaImage::new(512, 512);
+        let mut seed = 42u32;
+        for px in buf.pixels_mut() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let v = (seed >> 24) as u8;
+            *px = image::Rgba([v, v.wrapping_add(30), v.wrapping_add(60), 255]);
+        }
+        buf.save(&png).unwrap();
 
         let thumb = make_thumbnail(png.to_str().unwrap()).unwrap();
         assert!(Path::new(&thumb).exists());
         let decoded = image::open(&thumb).unwrap();
         assert!(decoded.width() <= 256 && decoded.height() <= 256);
-
-        let json = r#"{"provider":"volcark","model":"seedream","capability":"t2i","prompt":"hi","params":{}}"#;
-        write_png_metadata(png.to_str().unwrap(), json);
-        let decoded_png = image::open(&png).unwrap();
-        assert_eq!(decoded_png.width(), 64);
         let _ = fs::remove_dir_all(&dir);
     }
 }

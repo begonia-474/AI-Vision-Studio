@@ -9,10 +9,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Command, CommandEmpty, CommandItem, CommandList } from "./ui/command";
 import { IconSearch, IconStar } from "../lib/icons";
 import {
-  PROVIDERS,
+  providerDisplayName,
+  providerMeta,
   type ModelDef,
   type Studio,
   modelsForStudio,
+  useCustomProviders,
 } from "../models/registry";
 
 interface ModelDropdownProps {
@@ -26,7 +28,8 @@ interface ModelDropdownProps {
 
 export function ModelDropdown({ open, onOpenChange, trigger, studio, current, onSelect }: ModelDropdownProps) {
   const { t } = useTranslation();
-  const all = useMemo(() => modelsForStudio(studio), [studio]);
+  const customProviders = useCustomProviders();
+  const all = useMemo(() => modelsForStudio(studio), [studio, customProviders]);
   const [selProvider, setSelProvider] = useState<string>("all");
   const [search, setSearch] = useState("");
 
@@ -69,14 +72,14 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
               <IconStar size={15} />
             </button>
             {providersInStudio.map((pid) => {
-              const p = PROVIDERS[pid];
+              const p = providerMeta(pid);
               const sel = selProvider === pid;
               return (
                 <button
                   key={pid}
                   className={"prov-btn" + (sel ? " active" : "")}
-                  title={t(p.name)}
-                  aria-label={t("model.providerTab", { name: t(p.name) })}
+                  title={providerDisplayName(pid, t)}
+                  aria-label={t("model.providerTab", { name: providerDisplayName(pid, t) })}
                   aria-pressed={sel}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -108,15 +111,22 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
               </div>
               <div className="model-list-title">
                 <span>{t("model.available")}</span>
-                {selProvider !== "all" && <span className="prov-name">{t(PROVIDERS[selProvider].name)}</span>}
+                {selProvider !== "all" && (
+                  <span className="prov-name">{providerDisplayName(selProvider, t)}</span>
+                )}
               </div>
               <CommandList className="model-list-scroll">
                 {filtered.length === 0 ? (
-                  <CommandEmpty className="empty-models">{t("model.none")}</CommandEmpty>
+                  <CommandEmpty className="empty-models">
+                    {selProvider.startsWith("custom:")
+                      ? t("customProvider.empty")
+                      : t("model.none")}
+                  </CommandEmpty>
                 ) : (
                   filtered.map((m) => {
                     const sel = current.id === m.id;
-                    const p = PROVIDERS[m.providerId];
+                    const p = providerMeta(m.providerId);
+                    const isCustom = m.providerId.startsWith("custom:");
                     const i2iLabel =
                       studio === "image"
                         ? m.capabilities.includes("i2i")
@@ -127,8 +137,8 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
                           : "";
                     return (
                       <CommandItem
-                        key={m.id}
-                        value={m.id}
+                        key={`${m.providerId}:${m.id}`}
+                        value={`${m.providerId}:${m.id}`}
                         onSelect={() => pick(m)}
                         className="model-item"
                       >
@@ -140,10 +150,11 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
                             <span className="nm">
                               {m.name}
                               {!p.wired && <span style={{ color: "var(--warn)", marginLeft: 6 }}>{t("model.notWired")}</span>}
+                              {isCustom && <span className="cm-badge">{t("customProvider.badge")}</span>}
                             </span>
                             {selProvider === "all" && (
                               <span className="pv">
-                                {t(p.name)}
+                                {providerDisplayName(m.providerId, t)}
                                 {i2iLabel}
                               </span>
                             )}

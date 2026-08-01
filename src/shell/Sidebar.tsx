@@ -3,7 +3,7 @@
 // collapsed 时仅显示图标（CSS 控制宽度与 label 隐藏）。
 
 import { useTranslation } from "react-i18next";
-import { IconImage, IconKey, IconLibrary, IconSettings, IconVideo } from "../lib/icons";
+import { IconBox, IconImage, IconKey, IconLibrary, IconSettings, IconVideo } from "../lib/icons";
 import type { View } from "../App";
 
 interface SidebarProps {
@@ -11,10 +11,11 @@ interface SidebarProps {
   collapsed: boolean;
   onSwitch: (v: View) => void;
   onOpenByok: () => void;
+  onOpenCustomProvider: () => void;
   onOpenSettings: () => void;
 }
 
-export function Sidebar({ activeView, collapsed, onSwitch, onOpenByok, onOpenSettings }: SidebarProps) {
+export function Sidebar({ activeView, collapsed, onSwitch, onOpenByok, onOpenCustomProvider, onOpenSettings }: SidebarProps) {
   const { t } = useTranslation();
 
   return (
@@ -46,6 +47,10 @@ export function Sidebar({ activeView, collapsed, onSwitch, onOpenByok, onOpenSet
         </div>
 
         <div className="nav-sep">
+          <button className="apps-btn" title={t("sidebar.customProviderTitle")} onClick={onOpenCustomProvider}>
+            <IconBox className="apps-ico" size={19} />
+            <span className="cat-label">{t("sidebar.customProvider")}</span>
+          </button>
           <button className="apps-btn" title={t("sidebar.byokTitle")} onClick={onOpenByok}>
             <IconKey className="apps-ico" size={19} />
             <span className="cat-label">{t("sidebar.byok")}</span>

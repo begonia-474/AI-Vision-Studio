@@ -4,7 +4,8 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{
-    GenRequest, GenerationResultDto, HistoryTaskDto, ProgressPayload, ProviderInfoDto, TaskPhase,
+    CustomProviderRow, GenRequest, GenerationResultDto, HistoryTaskDto, ProgressPayload,
+    ProviderInfoDto, TaskPhase,
 };
 use crate::providers::{all_providers, get_provider};
 use crate::storage;
@@ -61,7 +62,17 @@ pub async fn generate(
         },
     );
 
-    let handle = provider.submit(&req, &api_key).await?;
+    // 参考图归一化：上传的 data URL / 公网 URL 原样透传；
+    // 图库/结果跳转带来的本地路径或 asset:// URL 先转 base64 data URL，
+    // 厂商服务器才能拉取（厂商拿不到本机文件）。
+    let mut req2 = req.clone();
+    req2.references = req
+        .references
+        .iter()
+        .map(|r| storage::normalize_reference(r))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let handle = provider.submit(&req2, &api_key).await?;
     if handle.phase == TaskPhase::Failed {
         let err = handle.error.unwrap_or_else(|| "生成失败".to_string());
         let _ = app.emit(
@@ -159,20 +170,9 @@ pub async fn generate(
         "duration": req.duration,
         "references": req.references.len(),
     });
-    // 完整参数快照：DB 只存 params_json（可检索），PNG 内嵌完整快照（文件可移植）。
-    let meta_json = serde_json::json!({
-        "provider": provider_id,
-        "model": model,
-        "capability": req.capability,
-        "prompt": req.prompt,
-        "params": params_obj,
-    })
-    .to_string();
-    for p in &local_paths {
-        storage::write_png_metadata(p, &meta_json);
-    }
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
+    // 原图文件保持下载原样，不做任何重编码。
     let thumbnail_path = local_paths
         .first()
         .filter(|p| storage::is_image_path(p))
@@ -226,4 +226,21 @@ pub fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
         storage::delete_task(id)?;
     }
     Ok(())
+}
+
+// —— 自定义厂商（JSON 配置存储）——
+
+#[tauri::command]
+pub fn list_custom_providers() -> Result<Vec<CustomProviderRow>, String> {
+    storage::list_custom_providers()
+}
+
+#[tauri::command]
+pub fn save_custom_provider(id: String, config_json: String) -> Result<(), String> {
+    storage::save_custom_provider(&id, &config_json)
+}
+
+#[tauri::command]
+pub fn delete_custom_provider(id: String) -> Result<(), String> {
+    storage::delete_custom_provider(&id)
 }

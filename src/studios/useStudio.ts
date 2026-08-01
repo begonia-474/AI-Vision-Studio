@@ -3,9 +3,9 @@
 // 生成流程：占位卡入列 → invoke generate → 成功替换为本地资源 / 失败标记错误。
 // 进度通过 mount 时订阅 "gen-progress" 事件，避免与生成调用竞态。
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, type ModelDef, modelsForStudio } from "../models/registry";
+import { aspectToSize, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
 import { generate, onProgress, toAssetUrl } from "../api";
 import type { ProgressPayload } from "../types";
 
@@ -16,6 +16,7 @@ export interface ResultItem {
   id: string;
   status: ResultStatus;
   url?: string; // done 时为本地产物 asset url
+  path?: string; // done 时为本地绝对路径（i2v 跳转传原路径，后端转 data URL）
   prompt: string;
   model: string;
   ar: string;
@@ -53,11 +54,12 @@ export interface StudioApi {
 
 export function useStudio(studio: Studio): StudioApi {
   const { t } = useTranslation();
-  const initial = modelsForStudio(studio)[studio === "image" ? 0 : 1];
-  const [model, setModel] = useState<ModelDef>(initial);
-  const [ar, setAr] = useState(initial.aspectRatios[0]);
-  const [quality, setQuality] = useState(initial.qualities[0]);
-  const [duration, setDuration] = useState(initial.durations?.[0] ?? "5");
+  const customProviders = useCustomProviders();
+  const allModels = useMemo(() => modelsForStudio(studio), [studio, customProviders]);
+  const [model, setModel] = useState<ModelDef>(() => allModels[studio === "image" ? 0 : 1]);
+  const [ar, setAr] = useState(() => allModels[studio === "image" ? 0 : 1].aspectRatios[0]);
+  const [quality, setQuality] = useState(() => allModels[studio === "image" ? 0 : 1].qualities[0]);
+  const [duration, setDuration] = useState(() => allModels[studio === "image" ? 0 : 1].durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
   const [prompt, setPrompt] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
@@ -65,6 +67,11 @@ export function useStudio(studio: Studio): StudioApi {
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState<ProgressPayload | null>(null);
   const aliveRef = useRef(true);
+
+  // 自定义模型（魔搭）列表变化时，保持当前选中模型；若已被删除则回退默认。
+  useEffect(() => {
+    setModel((prev) => allModels.find((m) => m.id === prev.id) ?? allModels[studio === "image" ? 0 : 1]);
+  }, [allModels, studio]);
 
   // mount 时订阅一次进度事件，全程更新 progress；展示与否由 generating 决定。
   useEffect(() => {
@@ -119,6 +126,9 @@ export function useStudio(studio: Studio): StudioApi {
     const capability = refs.length > 0 ? (studio === "image" ? "i2i" : "i2v") : studio === "image" ? "t2i" : "t2v";
     const size = aspectToSize(model.providerId, ar);
     const extra = studio === "video" ? `${duration}s · ${quality}` : quality;
+    // 自定义厂商：透传用户按模型配置的自由参数（协议原生字段名，如
+    // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））
+    const customExtra = model.custom ? { params: model.custom.params } : undefined;
 
     const ids = Array.from({ length: n }, () => uid());
     const placeholders: ResultItem[] = ids.map((id) => ({
@@ -145,11 +155,13 @@ export function useStudio(studio: Studio): StudioApi {
         quality,
         duration: studio === "video" ? duration : undefined,
         references: refs,
+        extra: customExtra,
       });
       const done: ResultItem[] = res.local_paths.map((lp, i) => ({
         id: ids[i] ?? uid(),
         status: "done",
         url: toAssetUrl(lp),
+        path: lp,
         prompt: p,
         model: res.model,
         ar,

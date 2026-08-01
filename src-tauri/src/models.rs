@@ -14,6 +14,7 @@ pub struct ProviderInfoDto {
 /// 前端发起的生成请求。model/negative_prompt 可选，缺省由适配器补默认值。
 /// size 为即梦像素串（"2048x2048"）；其余厂商用 aspect_ratio/quality/duration。
 /// references 为 i2i/i2v 参考图（data:image/...;base64, 或 https URL），角色由适配器按 capability 推断。
+/// extra 为厂商自定义参数透传（魔搭：steps/guidance/seed/negative_prompt 等，来自自定义模型配置）。
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GenRequest {
     pub provider_id: String,
@@ -33,6 +34,8 @@ pub struct GenRequest {
     pub duration: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
+    #[serde(default)]
+    pub extra: Option<serde_json::Value>,
 }
 
 /// 一次生成返回给前端的结果。local_paths 已落盘。
@@ -42,6 +45,16 @@ pub struct GenerationResultDto {
     pub model: String,
     pub local_paths: Vec<String>,
     pub remote_urls: Vec<String>,
+}
+
+/// 自定义厂商配置行：完整配置以 JSON 存于 config_json（前端为 schema 所有者），
+/// 结构：{ id, name, protocol: "modelscope"|"huggingface"|"openai-compatible",
+///        base_url, models: [{ repo_id, name, capabilities, size_presets, params }] }。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct CustomProviderRow {
+    pub id: String,
+    pub config_json: String,
+    pub created_at: String,
 }
 
 /// 历史记录条目（对应 SQLite tasks 表一行）。

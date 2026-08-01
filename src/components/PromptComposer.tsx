@@ -15,7 +15,7 @@ import {
   IconSparkles,
   IconUpload,
 } from "../lib/icons";
-import { PROVIDERS } from "../models/registry";
+import { PROVIDERS, providerMeta } from "../models/registry";
 import type { StudioApi } from "../studios/useStudio";
 import { Progress } from "./ui/progress";
 
@@ -26,7 +26,7 @@ interface PromptComposerProps {
 export function PromptComposer({ api }: PromptComposerProps) {
   const { t } = useTranslation();
   const isVideo = api.studio === "video";
-  const provider = PROVIDERS[api.model.providerId];
+  const provider = PROVIDERS[api.model.providerId] ?? providerMeta(api.model.providerId);
   const [openModel, setOpenModel] = useState(false);
   const [openAr, setOpenAr] = useState(false);
   const [openQuality, setOpenQuality] = useState(false);

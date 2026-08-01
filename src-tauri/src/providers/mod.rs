@@ -1,8 +1,10 @@
+pub mod custom;
 pub mod kling;
 pub mod minimax;
 pub mod volcark;
 pub mod wanxiang;
 
+pub use custom::{CustomProvider, PROVIDER_PREFIX};
 pub use kling::KlingProvider;
 pub use minimax::MiniMaxProvider;
 pub use volcark::VolcArkProvider;
@@ -28,7 +30,7 @@ pub trait GenerationProvider: Send + Sync {
     fn default_model(&self) -> &str;
 }
 
-/// 已注册厂商的元信息列表。
+/// 已注册厂商的元信息列表（内置厂商；自定义厂商由前端 custom_providers 配置驱动）。
 pub fn all_providers() -> Vec<ProviderInfoDto> {
     vec![
         VolcArkProvider::info(),
@@ -39,7 +41,12 @@ pub fn all_providers() -> Vec<ProviderInfoDto> {
 }
 
 /// 按 id 取一个 provider 实例。未命中返回 None。
+/// 内置厂商走静态适配器；"custom:" 前缀从 SQLite 加载 JSON 配置构建协议适配器。
 pub fn get_provider(id: &str, client: reqwest::Client) -> Option<Box<dyn GenerationProvider>> {
+    if let Some(rest) = id.strip_prefix(PROVIDER_PREFIX) {
+        return CustomProvider::try_load(rest, client)
+            .map(|p| Box::new(p) as Box<dyn GenerationProvider>);
+    }
     match id {
         "volcark" => Some(Box::new(VolcArkProvider::new(client))),
         "minimax" => Some(Box::new(MiniMaxProvider::new(client))),

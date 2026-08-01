@@ -149,7 +149,7 @@ export function ResultGrid({ results, studio, model, onImageToVideo, onDelete }:
                 </div>
                 {studio === "image" && onImageToVideo && (
                   <div className="ract">
-                    <button className="i2v" onClick={(e) => { e.stopPropagation(); onImageToVideo(it.url ?? "", it.prompt); }}>
+                    <button className="i2v" onClick={(e) => { e.stopPropagation(); onImageToVideo(it.path ?? it.url ?? "", it.prompt); }}>
                       {t("result.imgToVideo")}
                     </button>
                   </div>

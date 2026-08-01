@@ -1,12 +1,14 @@
 // BYOK 厂商 Key 管理 Modal
-// 四厂卡片：名称 + 状态徽标 + 能力标签 + 帮助文本 + Key 输入 + 保存/测试。
+// 内置四厂卡片 + 自定义厂商（魔搭/HF/OpenAI 兼容）卡片，同一 keyring 命名空间。
 // Key 经 keyring（Windows Credential Manager / DPAPI）加密存储；测试调用各厂商 test_connectivity。
-// 数据源 registry.ts PROVIDER_LIST；后端命令 list_providers 给出能力清单。
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { deleteApiKey, getApiKey, saveApiKey, testApiKey } from "../api";
-import { PROVIDER_LIST } from "../models/registry";
+import {
+  getCustomProviderMeta,
+  PROVIDER_LIST,
+} from "../models/registry";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -34,13 +36,14 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
     if (!open) return;
     let active = true;
     (async () => {
+      const ids = [...PROVIDER_LIST.map((p) => p.id), ...Object.keys(getCustomProviderMeta())];
       const next: Record<string, CardState> = {};
-      for (const p of PROVIDER_LIST) {
+      for (const id of ids) {
         try {
-          const k = await getApiKey(p.id);
-          next[p.id] = { value: "", status: k ? "set" : "unset" };
+          const k = await getApiKey(id);
+          next[id] = { value: "", status: k ? "set" : "unset" };
         } catch {
-          next[p.id] = { value: "", status: "unset" };
+          next[id] = { value: "", status: "unset" };
         }
       }
       if (active) setCards(next);
@@ -104,7 +107,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
         <DialogTitle>{t("byok.title")}</DialogTitle>
         <DialogDescription className="mdesc">{t("byok.desc")}</DialogDescription>
 
-        {PROVIDER_LIST.map((p) => {
+        {[...PROVIDER_LIST, ...Object.values(getCustomProviderMeta())].map((p) => {
           const c = cards[p.id] ?? { value: "", status: "unset" as Status };
           const caps = p.capabilities
             .map((cap) =>
@@ -124,12 +127,12 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
                 >
                   {p.abbr}
                 </span>
-                <h3>{t(p.name)}</h3>
+                <h3>{p.i18nName ? t(p.name) : p.name}</h3>
                 {badge(c.status)}
                 <Badge variant="outline" className="tag">{caps.join(" · ")}</Badge>
                 {!p.wired && <Badge variant="outline" className="badge warn">{t("common.notWired")}</Badge>}
               </div>
-              <div className="phelp">{t(p.authHelp)}</div>
+              <div className="phelp">{p.i18nName ? t(p.authHelp) : p.authHelp}</div>
               <div className="keyrow">
                 <Input
                   type="password"

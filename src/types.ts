@@ -19,6 +19,33 @@ export interface GenRequest {
   quality?: string;
   duration?: string;
   references?: string[];
+  /** 自定义厂商透传：{ params: 用户按模型配置的自由参数 } */
+  extra?: Record<string, unknown>;
+}
+
+export type ProtocolType = "modelscope" | "huggingface" | "openai-compatible";
+
+export interface CustomModelConfig {
+  repo_id: string;
+  name: string;
+  capabilities: string[];
+  size_presets: string[];
+  /** 自由参数（协议原生字段名，如 steps/guidance/num_inference_steps/quality 等） */
+  params: Record<string, string | number | null>;
+}
+
+export interface CustomProviderConfig {
+  id: string;
+  name: string;
+  protocol: ProtocolType;
+  base_url: string;
+  models: CustomModelConfig[];
+}
+
+export interface CustomProviderRow {
+  id: string;
+  config_json: string;
+  created_at: string;
 }
 
 export interface GenerationResult {

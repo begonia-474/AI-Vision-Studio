@@ -1,6 +1,15 @@
 // 模型注册表（前端侧）—— 数据源 docs/model-registry.md
-// 与后端 provider_id 对齐：volcark(已接入) / kling / wanxiang / minimax(待接入)
+// 与后端 provider_id 对齐：volcark / kling / wanxiang / minimax 内置；
+// custom:<uuid> 为自定义厂商（JSON 配置，协议：modelscope / huggingface / openai-compatible）。
 // ModelDropdown 与参数 popover 均读此表动态渲染。
+
+import { useEffect, useReducer } from "react";
+import { listCustomProviders } from "../api";
+import type {
+  CustomModelConfig,
+  CustomProviderConfig,
+  ProtocolType,
+} from "../types";
 
 export type Studio = "image" | "video";
 export type Capability = "t2i" | "i2i" | "t2v" | "i2v" | "r2v";
@@ -13,6 +22,7 @@ export interface ProviderMeta {
   wired: boolean; // 后端是否已接入（仅 wired=true 可真实生成）
   capabilities: Capability[];
   authHelp: string;
+  i18nName?: boolean; // name 是否为 i18n key（内置 true；自定义厂商 false，name 即显示名）
 }
 
 export interface ModelDef {
@@ -26,30 +36,36 @@ export interface ModelDef {
   durations?: string[]; // 仅视频
   maxRef?: number; // 参考图上限
   blurb: string; // 模型一句话描述
+  custom?: CustomModelConfig; // 自定义厂商模型配置，供生成时透传参数
 }
 
 // ============ 厂商元信息 ============
-// name / authHelp 为 i18n key（src/i18n/locales），渲染处需经 t() 转换。
+// 内置厂商 name / authHelp 为 i18n key（src/i18n/locales），渲染处需经 t() 转换；
+// 自定义厂商为明文显示名（i18nName=false），由动态注册表提供。
 export const PROVIDERS: Record<string, ProviderMeta> = {
   volcark: {
     id: "volcark", name: "providers.volcark.name", abbr: "BD", color: "#a855f7", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.volcark.authHelp",
+    i18nName: true,
   },
   kling: {
     id: "kling", name: "providers.kling.name", abbr: "KL", color: "#f43f5e", wired: true,
     capabilities: ["t2v", "i2v"],
     authHelp: "providers.kling.authHelp",
+    i18nName: true,
   },
   wanxiang: {
     id: "wanxiang", name: "providers.wanxiang.name", abbr: "AL", color: "#0ea5e9", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.wanxiang.authHelp",
+    i18nName: true,
   },
   minimax: {
     id: "minimax", name: "providers.minimax.name", abbr: "MX", color: "#ec4899", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.minimax.authHelp",
+    i18nName: true,
   },
 };
 
@@ -83,8 +99,146 @@ export const VIDEO_MODELS: ModelDef[] = [
 ];
 
 // ============ 辅助 ============
-export function modelsForStudio(studio: Studio): ModelDef[] {
-  return studio === "image" ? IMAGE_MODELS : VIDEO_MODELS;
+
+// —— 自定义厂商动态注册表 ——
+// 配置存后端 SQLite（JSON），此处为前端内存镜像 + 变更订阅，
+// 供两个 studio 的模型列表 / ModelDropdown / BYOK 响应式更新。
+export const CUSTOM_PREFIX = "custom:";
+
+export const PROTOCOL_COLORS: Record<ProtocolType, string> = {
+  modelscope: "#4f46e5",
+  huggingface: "#f59e0b",
+  "openai-compatible": "#10b981",
+};
+
+let customProviders: CustomProviderConfig[] = [];
+let customModels: ModelDef[] = [];
+let customMeta: Record<string, ProviderMeta> = {};
+const listeners = new Set<() => void>();
+
+export function subscribeCustomProviders(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+function notify() {
+  listeners.forEach((fn) => fn());
+}
+
+/** 前端兜底 id 生成（crypto.randomUUID 在非安全上下文不可用，必须兜底）。 */
+export function uid(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+/** 从后端拉取自定义厂商并同步注册表（新增/删除后调用）。 */
+export async function refreshCustomProviders(): Promise<CustomProviderConfig[]> {
+  const rows = await listCustomProviders();
+  const configs = rows
+    .map((r) => {
+      try {
+        return JSON.parse(r.config_json) as CustomProviderConfig;
+      } catch {
+        return null;
+      }
+    })
+    .filter((c): c is CustomProviderConfig => c !== null);
+  setCustomProviders(configs);
+  return configs;
+}
+
+export function setCustomProviders(configs: CustomProviderConfig[]) {
+  customProviders = configs;
+  customMeta = {};
+  customModels = [];
+  for (const p of configs) {
+    const pid = `${CUSTOM_PREFIX}${p.id}`;
+    const caps = Array.from(
+      new Set(p.models.flatMap((m) => m.capabilities)),
+    ) as Capability[];
+    customMeta[pid] = {
+      id: pid,
+      name: p.name,
+      abbr: p.name.slice(0, 2).toUpperCase(),
+      color: PROTOCOL_COLORS[p.protocol] ?? "#64748b",
+      wired: true,
+      capabilities: caps,
+      authHelp: p.base_url,
+      i18nName: false,
+    };
+    customModels.push(...p.models.map((m) => toModelDef(p, m)));
+  }
+  notify();
+}
+
+export function getCustomProviders(): CustomProviderConfig[] {
+  return customProviders;
+}
+
+export function getCustomProviderMeta(): Record<string, ProviderMeta> {
+  return customMeta;
+}
+
+/** 订阅自定义厂商变更；列表变化时触发重渲染。 */
+export function useCustomProviders(): CustomProviderConfig[] {
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => subscribeCustomProviders(force), []);
+  return customProviders;
+}
+
+/** 内置 + 自定义厂商元信息统一查找。 */
+export function providerMeta(pid: string): ProviderMeta {
+  return (
+    PROVIDERS[pid] ??
+    customMeta[pid] ?? {
+      id: pid,
+      name: pid,
+      abbr: pid.slice(0, 2).toUpperCase(),
+      color: "#64748b",
+      wired: true,
+      capabilities: [],
+      authHelp: "",
+      i18nName: false,
+    }
+  );
+}
+
+/** 厂商显示名（内置为 i18n key，自定义为明文）。 */
+export function providerDisplayName(pid: string, t: (k: string) => string): string {
+  const p = providerMeta(pid);
+  return p.i18nName ? t(p.name) : p.name;
+}
+
+export function toModelDef(p: CustomProviderConfig, m: CustomModelConfig): ModelDef {
+  const caps = m.capabilities.filter((x): x is Capability =>
+    x === "t2i" || x === "i2i" || x === "t2v" || x === "i2v",
+  );
+  const isVid = caps.includes("t2v") || caps.includes("i2v");
+  return {
+    id: m.repo_id,
+    name: m.name || m.repo_id,
+    providerId: `${CUSTOM_PREFIX}${p.id}`,
+    studio: isVid ? "video" : "image",
+    capabilities: caps,
+    aspectRatios: m.size_presets.length > 0 ? m.size_presets : ["1024x1024"],
+    qualities: ["默认"],
+    durations: isVid ? ["5", "10"] : undefined,
+    maxRef: caps.includes("i2v") || caps.includes("i2i") ? 1 : 0,
+    blurb: `${p.name} · ${m.repo_id}`,
+    custom: m,
+  };
+}
+
+export function modelsForStudio(studio: Studio, custom: ModelDef[] = customModels): ModelDef[] {
+  const builtin = studio === "image" ? IMAGE_MODELS : VIDEO_MODELS;
+  const caps = studio === "image" ? ["t2i", "i2i"] : ["t2v", "i2v"];
+  const extra = custom.filter((m) => m.capabilities.some((c) => caps.includes(c)));
+  return [...builtin, ...extra];
 }
 
 export function getModel(studio: Studio, id: string): ModelDef | undefined {

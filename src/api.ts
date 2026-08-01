@@ -1,7 +1,14 @@
 // Tauri invoke 封装。注意：Tauri 会把 camelCase 形参键自动转为 Rust 的 snake_case。
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { GenRequest, GenerationResult, HistoryTask, ProgressPayload, ProviderInfo } from "./types";
+import type {
+  CustomProviderRow,
+  GenRequest,
+  GenerationResult,
+  HistoryTask,
+  ProgressPayload,
+  ProviderInfo,
+} from "./types";
 
 export const listProviders = () => invoke<ProviderInfo[]>("list_providers");
 
@@ -28,6 +35,15 @@ export const setStar = (id: number, starred: boolean) =>
 
 export const deleteHistories = (ids: number[]) =>
   invoke<void>("delete_histories", { ids });
+
+// ============ 自定义厂商（JSON 配置存储） ============
+export const listCustomProviders = () => invoke<CustomProviderRow[]>("list_custom_providers");
+
+export const saveCustomProvider = (id: string, configJson: string) =>
+  invoke<void>("save_custom_provider", { id, configJson });
+
+export const deleteCustomProvider = (id: string) =>
+  invoke<void>("delete_custom_provider", { id });
 
 // ============ 进度事件订阅 ============
 // 后端 commands::generate 通过 app.emit("gen-progress", ProgressPayload) 推送。
