@@ -1,0 +1,36 @@
+[package]
+name = "ai-vision-studio"
+version = "0.1.0"
+description = "AI Vision Studio - multi-provider AI image and video generation desktop app"
+authors = ["begonia-474 <wengshizhuang@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/begonia-474/ai-vision-studio"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "ai_vision_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+reqwest = { version = "0.13.4", features = ["json"] }
+tokio = { version = "1.53.1", features = ["full"] }
+keyring = "4.1.5"
+uuid = { version = "1.24.0", features = ["v4"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+base64 = "0.23.0"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+async-trait = "0.1"
