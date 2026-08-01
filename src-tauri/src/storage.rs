@@ -2,7 +2,7 @@
 //! 三者共用 %LOCALAPPDATA%\AIVisionStudio\ 目录。每次操作打开独立连接，避免 Send/Sync 约束。
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use rusqlite::{params, Connection};
@@ -103,6 +103,59 @@ fn guess_extension(url: &str) -> String {
     ".png".to_string()
 }
 
+// —— 缩略图 / 图片元数据 ——
+
+/// 是否为可解码的图像文件（png/jpg/jpeg/webp）。
+pub fn is_image_path(p: &str) -> bool {
+    let lower = p.to_lowercase();
+    [".png", ".jpg", ".jpeg", ".webp"].iter().any(|e| lower.ends_with(e))
+}
+
+/// 为图片生成 256px 缩略图（WEBP，失败回退 PNG），输出到原图同目录 `{stem}.thumb.*`。
+/// 生成失败返回 Err（调用方忽略即可，不影响主流程）。
+pub fn make_thumbnail(src: &str) -> Result<String, String> {
+    let path = PathBuf::from(src);
+    let img = image::open(&path).map_err(|e| e.to_string())?;
+    let thumb = img.thumbnail(256, 256);
+
+    let stem = path
+        .file_stem()
+        .ok_or("invalid file name")?
+        .to_string_lossy()
+        .to_string();
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let webp_dest = dir.join(format!("{}.thumb.webp", stem));
+    match thumb.save_with_format(&webp_dest, image::ImageFormat::WebP) {
+        Ok(()) => Ok(webp_dest.to_string_lossy().to_string()),
+        Err(_) => {
+            let png_dest = dir.join(format!("{}.thumb.png", stem));
+            thumb
+                .save_with_format(&png_dest, image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            Ok(png_dest.to_string_lossy().to_string())
+        }
+    }
+}
+
+/// 为 PNG 写入 tEXt 元数据块（key=`parameters`，A1111 生态通用格式），
+/// 使作品文件脱离数据库仍可移植。非 PNG / 解码失败时静默跳过。
+pub fn write_png_metadata(path: &str, metadata_json: &str) {
+    if !path.to_lowercase().ends_with(".png") {
+        return;
+    }
+    let Ok(img) = image::open(path) else { return };
+    let rgba = img.to_rgba8();
+    let Ok(file) = fs::File::create(path) else { return };
+    let mut encoder = png::Encoder::new(file, img.width(), img.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    if encoder.add_text_chunk("parameters".to_string(), metadata_json.to_string()).is_err() {
+        return;
+    }
+    let Ok(mut writer) = encoder.write_header() else { return };
+    let _ = writer.write_image_data(&rgba);
+}
+
 // —— HistoryDb ——
 
 pub fn ensure_schema() -> Result<(), String> {
@@ -125,6 +178,24 @@ pub fn ensure_schema() -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);",
     )
     .map_err(|e| e.to_string())?;
+    // 渐进式迁移：旧库补列（starred 收藏 / thumbnail_path 缩略图）
+    ensure_column(&conn, "tasks", "starred", "starred INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&conn, "tasks", "thumbnail_path", "thumbnail_path TEXT")?;
+    Ok(())
+}
+
+/// 幂等补列：pragma_table_info 无该列时执行 ALTER TABLE ADD COLUMN。
+fn ensure_column(conn: &Connection, table: &str, column: &str, ddl: &str) -> Result<(), String> {
+    let sql = format!("SELECT 1 FROM pragma_table_info(?1) WHERE name=?2");
+    let exists: bool = conn
+        .prepare(&sql)
+        .map_err(|e| e.to_string())?
+        .exists(params![table, column])
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        let alter = format!("ALTER TABLE {} ADD COLUMN {}", table, ddl);
+        conn.execute(&alter, []).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -137,14 +208,15 @@ pub struct HistoryInsert {
     pub status: String,
     pub local_paths_json: String,
     pub remote_urls_json: Option<String>,
+    pub thumbnail_path: Option<String>,
 }
 
 pub fn insert_task(h: HistoryInsert) -> Result<i64, String> {
     let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
     let created = chrono::Local::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO tasks (provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json, raw_response)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
+        "INSERT INTO tasks (provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json, raw_response, thumbnail_path)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10)",
         params![
             h.provider,
             h.model,
@@ -155,6 +227,7 @@ pub fn insert_task(h: HistoryInsert) -> Result<i64, String> {
             created,
             h.local_paths_json,
             h.remote_urls_json,
+            h.thumbnail_path,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -165,12 +238,13 @@ pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
     let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json
+            "SELECT id, provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json, starred, thumbnail_path
              FROM tasks ORDER BY created_at DESC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
+            let starred: i64 = row.get(10)?;
             Ok(HistoryTaskDto {
                 id: row.get(0)?,
                 provider: row.get(1)?,
@@ -182,6 +256,8 @@ pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
                 created_at: row.get(7)?,
                 local_paths_json: row.get(8)?,
                 remote_urls_json: row.get(9)?,
+                starred: starred != 0,
+                thumbnail_path: row.get(11)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -192,10 +268,46 @@ pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
     Ok(out)
 }
 
+/// 删除任务行，并清理本地产物文件与缩略图（文件不存在时忽略错误）。
 pub fn delete_task(id: i64) -> Result<(), String> {
     let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    let local_json: String = conn
+        .query_row(
+            "SELECT local_paths_json FROM tasks WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let thumb: Option<String> = conn
+        .query_row(
+            "SELECT thumbnail_path FROM tasks WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tasks WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
+    drop(conn);
+
+    if let Ok(paths) = serde_json::from_str::<Vec<String>>(&local_json) {
+        for p in paths {
+            let _ = fs::remove_file(p);
+        }
+    }
+    if let Some(t) = thumb {
+        let _ = fs::remove_file(t);
+    }
+    Ok(())
+}
+
+/// 收藏置位。
+pub fn set_starred(id: i64, starred: bool) -> Result<(), String> {
+    let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE tasks SET starred=?1 WHERE id=?2",
+        params![starred as i64, id],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -233,4 +345,30 @@ pub fn delete_key(provider_id: &str) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, provider_id).map_err(|e| e.to_string())?;
     let _ = entry.delete_credential();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thumbnail_and_png_metadata_roundtrip() {
+        let dir = std::env::temp_dir().join("avs_storage_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("a.png");
+        let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([10u8, 200, 30, 255]));
+        img.save(&png).unwrap();
+
+        let thumb = make_thumbnail(png.to_str().unwrap()).unwrap();
+        assert!(Path::new(&thumb).exists());
+        let decoded = image::open(&thumb).unwrap();
+        assert!(decoded.width() <= 256 && decoded.height() <= 256);
+
+        let json = r#"{"provider":"volcark","model":"seedream","capability":"t2i","prompt":"hi","params":{}}"#;
+        write_png_metadata(png.to_str().unwrap(), json);
+        let decoded_png = image::open(&png).unwrap();
+        assert_eq!(decoded_png.width(), 64);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

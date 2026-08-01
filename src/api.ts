@@ -23,8 +23,11 @@ export const generate = (req: GenRequest) =>
 
 export const listHistory = () => invoke<HistoryTask[]>("list_history");
 
-export const deleteHistory = (id: number) =>
-  invoke<void>("delete_history", { id });
+export const setStar = (id: number, starred: boolean) =>
+  invoke<void>("set_star", { id, starred });
+
+export const deleteHistories = (ids: number[]) =>
+  invoke<void>("delete_histories", { ids });
 
 // ============ 进度事件订阅 ============
 // 后端 commands::generate 通过 app.emit("gen-progress", ProgressPayload) 推送。

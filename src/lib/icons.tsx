@@ -108,9 +108,16 @@ export const IconSidebar = ({ size = 18, className, style }: IconProps) => (
 );
 
 // All-providers 星形 tab
-export const IconStar = ({ size = 16, className, style }: IconProps) => (
-  <svg {...base(size)} className={className} style={style}>
+export const IconStar = ({ size = 16, className, style, filled = false }: IconProps & { filled?: boolean }) => (
+  <svg {...base(size)} className={className} style={style} fill={filled ? "currentColor" : "none"}>
     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </svg>
+);
+
+// 图库（书架）
+export const IconLibrary = ({ size = 18, className, style }: IconProps) => (
+  <svg {...base(size)} className={className} style={style}>
+    <path d="m16 6 4 14" /><path d="M12 6v14" /><path d="M8 8v12" /><path d="M4 4v16" />
   </svg>
 );
 

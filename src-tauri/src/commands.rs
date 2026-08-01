@@ -151,6 +151,33 @@ pub async fn generate(
         .model
         .clone()
         .unwrap_or_else(|| provider.default_model().to_string());
+    let params_obj = serde_json::json!({
+        "size": req.size,
+        "n": req.n,
+        "aspect_ratio": req.aspect_ratio,
+        "quality": req.quality,
+        "duration": req.duration,
+        "references": req.references.len(),
+    });
+    // 完整参数快照：DB 只存 params_json（可检索），PNG 内嵌完整快照（文件可移植）。
+    let meta_json = serde_json::json!({
+        "provider": provider_id,
+        "model": model,
+        "capability": req.capability,
+        "prompt": req.prompt,
+        "params": params_obj,
+    })
+    .to_string();
+    for p in &local_paths {
+        storage::write_png_metadata(p, &meta_json);
+    }
+
+    // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
+    let thumbnail_path = local_paths
+        .first()
+        .filter(|p| storage::is_image_path(p))
+        .and_then(|p| storage::make_thumbnail(p).ok());
+
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
 
@@ -159,20 +186,11 @@ pub async fn generate(
         model: model.clone(),
         capability: req.capability.clone(),
         prompt: req.prompt.clone(),
-        params_json: Some(
-            serde_json::json!({
-                "size": req.size,
-                "n": req.n,
-                "aspect_ratio": req.aspect_ratio,
-                "quality": req.quality,
-                "duration": req.duration,
-                "references": req.references.len(),
-            })
-            .to_string(),
-        ),
+        params_json: Some(params_obj.to_string()),
         status: "succeeded".to_string(),
         local_paths_json: local_json,
         remote_urls_json: remote_json,
+        thumbnail_path,
     })?;
 
     let _ = app.emit(
@@ -198,6 +216,14 @@ pub fn list_history() -> Result<Vec<HistoryTaskDto>, String> {
 }
 
 #[tauri::command]
-pub fn delete_history(id: i64) -> Result<(), String> {
-    storage::delete_task(id)
+pub fn set_star(id: i64, starred: bool) -> Result<(), String> {
+    storage::set_starred(id, starred)
+}
+
+#[tauri::command]
+pub fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
+    for id in ids {
+        storage::delete_task(id)?;
+    }
+    Ok(())
 }

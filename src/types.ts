@@ -39,6 +39,8 @@ export interface HistoryTask {
   created_at: string;
   local_paths_json: string;
   remote_urls_json: string | null;
+  starred: boolean;
+  thumbnail_path: string | null;
 }
 
 export interface ProgressPayload {

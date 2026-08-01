@@ -1,19 +1,20 @@
 // Sidebar —— 侧栏
-// 扁平两项（Image / Video Studio）+ 底部 BYOK / Settings 入口。
+// 三个入口（Image / Video Studio / Gallery）+ 底部 BYOK / Settings 入口。
 // collapsed 时仅显示图标（CSS 控制宽度与 label 隐藏）。
 
 import { useTranslation } from "react-i18next";
-import { IconImage, IconKey, IconSettings, IconVideo } from "../lib/icons";
+import { IconImage, IconKey, IconLibrary, IconSettings, IconVideo } from "../lib/icons";
+import type { View } from "../App";
 
 interface SidebarProps {
-  activeStudio: "image" | "video";
+  activeView: View;
   collapsed: boolean;
-  onSwitch: (s: "image" | "video") => void;
+  onSwitch: (v: View) => void;
   onOpenByok: () => void;
   onOpenSettings: () => void;
 }
 
-export function Sidebar({ activeStudio, collapsed, onSwitch, onOpenByok, onOpenSettings }: SidebarProps) {
+export function Sidebar({ activeView, collapsed, onSwitch, onOpenByok, onOpenSettings }: SidebarProps) {
   const { t } = useTranslation();
 
   return (
@@ -21,18 +22,26 @@ export function Sidebar({ activeStudio, collapsed, onSwitch, onOpenByok, onOpenS
       <nav aria-label="Studio navigation">
         <div className="nav-group">
           <button
-            className={"cat-btn" + (activeStudio === "image" ? " active" : "")}
+            className={"cat-btn" + (activeView === "image" ? " active" : "")}
             onClick={() => onSwitch("image")}
           >
             <IconImage className="cat-ico" size={19} />
             <span className="cat-label">{t("sidebar.imageStudio")}</span>
           </button>
           <button
-            className={"cat-btn" + (activeStudio === "video" ? " active" : "")}
+            className={"cat-btn" + (activeView === "video" ? " active" : "")}
             onClick={() => onSwitch("video")}
           >
             <IconVideo className="cat-ico" size={19} />
             <span className="cat-label">{t("sidebar.videoStudio")}</span>
+          </button>
+          <button
+            className={"cat-btn" + (activeView === "gallery" ? " active" : "")}
+            title={t("sidebar.galleryTitle")}
+            onClick={() => onSwitch("gallery")}
+          >
+            <IconLibrary className="cat-ico" size={19} />
+            <span className="cat-label">{t("sidebar.gallery")}</span>
           </button>
         </div>
 

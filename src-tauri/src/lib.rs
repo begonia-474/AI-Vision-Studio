@@ -30,7 +30,8 @@ pub fn run() {
             commands::test_api_key,
             commands::generate,
             commands::list_history,
-            commands::delete_history,
+            commands::set_star,
+            commands::delete_histories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -57,6 +57,8 @@ pub struct HistoryTaskDto {
     pub created_at: String,
     pub local_paths_json: String,
     pub remote_urls_json: Option<String>,
+    pub starred: bool,
+    pub thumbnail_path: Option<String>,
 }
 
 /// 生成进度事件 payload，通过 app.emit("gen-progress", ...) 推送前端。

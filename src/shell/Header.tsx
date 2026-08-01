@@ -3,14 +3,22 @@
 
 import { useTranslation } from "react-i18next";
 import { IconSidebar } from "../lib/icons";
+import type { View } from "../App";
 
 interface HeaderProps {
-  activeStudio: "image" | "video";
+  activeView: View;
   onToggleSidebar: () => void;
 }
 
-export function Header({ activeStudio, onToggleSidebar }: HeaderProps) {
+export function Header({ activeView, onToggleSidebar }: HeaderProps) {
   const { t } = useTranslation();
+
+  const crumb =
+    activeView === "video"
+      ? t("header.videoStudio")
+      : activeView === "gallery"
+        ? t("sidebar.gallery")
+        : t("header.imageStudio");
 
   return (
     <header className="header">
@@ -35,7 +43,7 @@ export function Header({ activeStudio, onToggleSidebar }: HeaderProps) {
 
       <div className="crumb">
         <span className="dot" />
-        <b>{activeStudio === "video" ? t("header.videoStudio") : t("header.imageStudio")}</b>
+        <b>{crumb}</b>
       </div>
     </header>
   );
