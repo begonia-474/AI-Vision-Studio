@@ -44,6 +44,7 @@ pub struct GenRequest {
 /// 一次生成返回给前端的结果。local_paths 已落盘。
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GenerationResultDto {
+    pub history_id: i64,
     pub provider_id: String,
     pub model: String,
     pub local_paths: Vec<String>,

@@ -20,9 +20,11 @@ import type { StudioApi } from "../studios/useStudio";
 
 interface PromptComposerProps {
   api: StudioApi;
+  collapsed?: boolean;
+  onExpand?: () => void;
 }
 
-export function PromptComposer({ api }: PromptComposerProps) {
+export function PromptComposer({ api, collapsed = false, onExpand }: PromptComposerProps) {
   const { t } = useTranslation();
   const isVideo = api.studio === "video";
   const provider = PROVIDERS[api.model.providerId] ?? providerMeta(api.model.providerId);
@@ -78,8 +80,9 @@ export function PromptComposer({ api }: PromptComposerProps) {
 
   // 多任务并行：生成按钮始终可用，进行中的任务数用角标提示。
   return (
-    <div className="prompt-composer">
-      <div className="pc-top">
+    <div className={"prompt-composer" + (collapsed ? " is-collapsed" : "")}>
+      <div className="pc-expanded-content" aria-hidden={collapsed}>
+        <div className="pc-top">
         {/* 参考图行 */}
         {(api.refs.length > 0 || canAddRef) && (
           <div className="upload-row">
@@ -124,9 +127,9 @@ export function PromptComposer({ api }: PromptComposerProps) {
             }
           }}
         />
-      </div>
+        </div>
 
-      <div className="pc-footer">
+        <div className="pc-footer">
         <div className="pc-controls">
           {/* 模型 */}
           <ModelDropdown
@@ -277,14 +280,25 @@ export function PromptComposer({ api }: PromptComposerProps) {
           <span>{t("prompt.generate")}</span>
           <IconSparkles size={14} />
         </button>
-      </div>
-
-      {/* 进行中任务角标：输入框外右上角，x/y 正在生成中（x=已完成，y=本次会话任务总数） */}
-      {api.running > 0 && (
-        <div className="gen-badge" role="status">
-          {t("prompt.runningTasks", { done: api.finished, total: api.results.length })}
         </div>
-      )}
+
+        {/* 进行中任务角标：输入框外右上角，x/y 正在生成中（x=已完成，y=本次会话任务总数） */}
+        {api.running > 0 && (
+          <div className="gen-badge" role="status">
+            {t("prompt.runningTasks", { done: api.finished, total: api.sessionTotal })}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        className="pc-collapsed-bar"
+        onClick={onExpand}
+        title={t("prompt.backToBottom")}
+        aria-hidden={!collapsed}
+      >
+        <span>{api.prompt.trim() || (isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage"))}</span>
+        <IconSparkles size={14} />
+      </button>
     </div>
   );
 }

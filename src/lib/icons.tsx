@@ -135,3 +135,11 @@ export const IconPlay = ({ size = 14, className, style }: IconProps) => (
     <polygon points="5 3 19 12 5 21 5 3" />
   </svg>
 );
+
+// 重新生成（rotate-cw）
+export const IconRefresh = ({ size = 14, className, style }: IconProps) => (
+  <svg {...base(size)} className={className} style={style}>
+    <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
+  </svg>
+);

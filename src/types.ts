@@ -51,6 +51,7 @@ export interface CustomProviderRow {
 }
 
 export interface GenerationResult {
+  history_id: number;
   provider_id: string;
   model: string;
   local_paths: string[];

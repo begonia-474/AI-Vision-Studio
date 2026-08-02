@@ -186,7 +186,7 @@ pub async fn generate(
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
 
-    storage::insert_task(storage::HistoryInsert {
+    let history_id = storage::insert_task(storage::HistoryInsert {
         provider: provider_id.clone(),
         model: model.clone(),
         capability: req.capability.clone(),
@@ -209,6 +209,7 @@ pub async fn generate(
     );
 
     Ok(GenerationResultDto {
+        history_id,
         provider_id,
         model,
         local_paths,

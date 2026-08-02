@@ -12,6 +12,7 @@ import { GalleryView } from "./components/GalleryView";
 import { ByokModal } from "./components/ByokModal";
 import { CustomProviderModal } from "./components/CustomProviderModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { useSessionStore } from "./studios/sessionStore";
 import { IMAGE_MODELS, VIDEO_MODELS, refreshCustomProviders } from "./models/registry";
 
 export type View = "image" | "video" | "gallery";
@@ -23,6 +24,22 @@ export default function App() {
   const [customProviderOpen, setCustomProviderOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [videoJump, setVideoJump] = useState<{ src: string; prompt: string } | null>(null);
+
+  // 会话存储提升到 App 层：工作室与侧边栏共享同一份状态。
+  const imageSession = useSessionStore("image");
+  const videoSession = useSessionStore("video");
+
+  // 图库视图没有会话，侧边栏固定展示「最近所在工作室」的会话列表，
+  // 避免布局跳动（ChatGPT/豆包等侧边栏会话区常驻）。
+  const [lastStudio, setLastStudio] = useState<"image" | "video">("image");
+  useEffect(() => {
+    if (activeView === "image" || activeView === "video") setLastStudio(activeView);
+  }, [activeView]);
+  const effectiveStudio = activeView === "image" || activeView === "video" ? activeView : lastStudio;
+  const sessions = effectiveStudio === "video" ? videoSession : imageSession;
+
+  // 侧边栏点击会话 / 新建会话时，跳回该会话所属工作室。
+  const activateStudio = () => setActiveView(effectiveStudio);
 
   // 启动加载自定义厂商（JSON 配置）→ 注册表 emitter 通知两个 studio 刷新列表
   useEffect(() => {
@@ -43,6 +60,8 @@ export default function App() {
           activeView={activeView}
           collapsed={collapsed}
           onSwitch={setActiveView}
+          sessions={sessions}
+          onActivateStudio={activateStudio}
           onOpenByok={() => setByokOpen(true)}
           onOpenCustomProvider={() => setCustomProviderOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -50,10 +69,10 @@ export default function App() {
 
         <div className="content">
           <div className={"studio" + (activeView === "image" ? "" : " hidden")}>
-            <ImageStudio onImageToVideo={handleImageToVideo} />
+            <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} />
           </div>
           <div className={"studio" + (activeView === "video" ? "" : " hidden")}>
-            <VideoStudio jump={videoJump} onJumpConsumed={() => setVideoJump(null)} />
+            <VideoStudio session={videoSession} jump={videoJump} onJumpConsumed={() => setVideoJump(null)} />
           </div>
           <div className={"studio" + (activeView === "gallery" ? "" : " hidden")}>
             <GalleryView onImageToVideo={handleImageToVideo} />
