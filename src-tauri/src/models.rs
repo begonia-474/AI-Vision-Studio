@@ -17,6 +17,9 @@ pub struct ProviderInfoDto {
 /// extra 为厂商自定义参数透传（魔搭：steps/guidance/seed/negative_prompt 等，来自自定义模型配置）。
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GenRequest {
+    /// 前端生成的任务 ID（一次提交一张任务卡），进度事件原样回传用于路由。
+    #[serde(default)]
+    pub task_id: String,
     pub provider_id: String,
     pub capability: String,
     pub prompt: String,
@@ -75,8 +78,10 @@ pub struct HistoryTaskDto {
 }
 
 /// 生成进度事件 payload，通过 app.emit("gen-progress", ...) 推送前端。
+/// task_id 对应 GenRequest.task_id，前端按它把进度路由到具体任务卡（多任务并发时互不串台）。
 #[derive(Serialize, Clone)]
 pub struct ProgressPayload {
+    pub task_id: String,
     pub phase: String,
     pub progress: i32,
     pub message: String,

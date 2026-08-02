@@ -56,6 +56,7 @@ pub async fn generate(
     let _ = app.emit(
         "gen-progress",
         ProgressPayload {
+            task_id: req.task_id.clone(),
             phase: "submitting".to_string(),
             progress: 10,
             message: "正在提交生成请求...".to_string(),
@@ -78,6 +79,7 @@ pub async fn generate(
         let _ = app.emit(
             "gen-progress",
             ProgressPayload {
+                task_id: req.task_id.clone(),
                 phase: "failed".to_string(),
                 progress: 100,
                 message: err.clone(),
@@ -110,6 +112,7 @@ pub async fn generate(
                     let _ = app.emit(
                         "gen-progress",
                         ProgressPayload {
+                            task_id: req.task_id.clone(),
                             phase: "failed".to_string(),
                             progress: 100,
                             message: err.clone(),
@@ -127,6 +130,7 @@ pub async fn generate(
                     let _ = app.emit(
                         "gen-progress",
                         ProgressPayload {
+                            task_id: req.task_id.clone(),
                             phase: "running".to_string(),
                             progress: last_progress,
                             message: snap
@@ -144,6 +148,7 @@ pub async fn generate(
     let _ = app.emit(
         "gen-progress",
         ProgressPayload {
+            task_id: req.task_id.clone(),
             phase: "downloading".to_string(),
             progress: 95,
             message: "正在下载生成结果...".to_string(),
@@ -196,6 +201,7 @@ pub async fn generate(
     let _ = app.emit(
         "gen-progress",
         ProgressPayload {
+            task_id: req.task_id.clone(),
             phase: "done".to_string(),
             progress: 100,
             message: "完成".to_string(),

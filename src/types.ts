@@ -8,6 +8,8 @@ export interface ProviderInfo {
 }
 
 export interface GenRequest {
+  /** 前端生成的任务 ID，后端进度事件原样回传用于路由 */
+  task_id: string;
   provider_id: string;
   capability: string;
   prompt: string;
@@ -71,6 +73,7 @@ export interface HistoryTask {
 }
 
 export interface ProgressPayload {
+  task_id: string;
   phase: string;
   progress: number;
   message: string;

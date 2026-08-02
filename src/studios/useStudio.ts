@@ -7,13 +7,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aspectToSize, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
 import { generate, onProgress, toAssetUrl } from "../api";
-import type { ProgressPayload } from "../types";
 
 export type Studio = "image" | "video";
 export type ResultStatus = "loading" | "done" | "error";
 
 export interface ResultItem {
   id: string;
+  taskId: string; // 同一次提交（一次 invoke）的所有卡片共享；进度事件按它路由
   status: ResultStatus;
   url?: string; // done 时为本地产物 asset url
   path?: string; // done 时为本地绝对路径（i2v 跳转传原路径，后端转 data URL）
@@ -22,6 +22,10 @@ export interface ResultItem {
   ar: string;
   extra: string; // 图像：quality；视频：duration + " · " + quality
   error?: string;
+  // loading 期间实时阶段（由 gen-progress 事件按 taskId 写入；进度数值不展示，
+  // 卡片上用装饰性动画代替，避免后端跳变式进度显得卡顿）
+  phase?: string;
+  msg?: string;
 }
 
 let _seq = 0;
@@ -37,8 +41,8 @@ export interface StudioApi {
   prompt: string;
   refs: string[];
   results: ResultItem[];
-  generating: boolean;
-  progress: ProgressPayload | null;
+  running: number; // 进行中任务数（loading 卡数）
+  finished: number; // 已完成任务数（done + error 卡数）
   setPrompt: (v: string) => void;
   setAr: (v: string) => void;
   setQuality: (v: string) => void;
@@ -64,21 +68,34 @@ export function useStudio(studio: Studio): StudioApi {
   const [prompt, setPrompt] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
   const [results, setResults] = useState<ResultItem[]>([]);
-  const [generating, setGenerating] = useState(false);
-  const [progress, setProgress] = useState<ProgressPayload | null>(null);
   const aliveRef = useRef(true);
+
+  // 会话级统计（不持久化，每次启动归零）：
+  // running = 进行中任务数；finished = 已完成任务数（成功 + 失败）。
+  // 角标格式 "x/y 正在生成中"：x=finished，y=本次会话提交的任务总数（results 全长）。
+  const running = useMemo(() => results.filter((it) => it.status === "loading").length, [results]);
+  const finished = useMemo(
+    () => results.filter((it) => it.status === "done" || it.status === "error").length,
+    [results],
+  );
 
   // 自定义模型（魔搭）列表变化时，保持当前选中模型；若已被删除则回退默认。
   useEffect(() => {
     setModel((prev) => allModels.find((m) => m.id === prev.id) ?? allModels[studio === "image" ? 0 : 1]);
   }, [allModels, studio]);
 
-  // mount 时订阅一次进度事件，全程更新 progress；展示与否由 generating 决定。
+  // mount 时订阅一次进度事件；按 task_id 路由到对应任务卡，
+  // 多任务并发时各卡进度互不串台（task_id 为空则忽略）。
   useEffect(() => {
     aliveRef.current = true;
     let un: (() => void) | undefined;
     onProgress((p) => {
-      if (aliveRef.current) setProgress(p);
+      if (!aliveRef.current || !p.task_id) return;
+      setResults((prev) =>
+        prev.map((it) =>
+          it.taskId === p.task_id ? { ...it, phase: p.phase, msg: p.message } : it,
+        ),
+      );
     }).then((u) => {
       un = u;
     });
@@ -117,8 +134,10 @@ export function useStudio(studio: Studio): StudioApi {
     [studio],
   );
 
+  // 一次提交 = 一个任务（taskId），与占位卡一一对应；无并发守卫，
+  // 提交后立即返回，可随时再次提交新任务（多任务并行执行，各自独立进度）。
   const handleGenerate = useCallback(async () => {
-    if (generating) return;
+    const taskId = uid();
     const p =
       prompt.trim() ||
       (studio === "video" ? "cinematic dynamic scene, high quality" : "a beautiful scene, highly detailed");
@@ -133,18 +152,19 @@ export function useStudio(studio: Studio): StudioApi {
     const ids = Array.from({ length: n }, () => uid());
     const placeholders: ResultItem[] = ids.map((id) => ({
       id,
+      taskId,
       status: "loading",
       prompt: p,
       model: model.name,
       ar,
       extra,
+      phase: "submitting",
     }));
     setResults((prev) => [...placeholders, ...prev]);
-    setGenerating(true);
-    setProgress({ phase: "submitting", progress: 10, message: t("prompt.phaseSubmitting") });
 
     try {
       const res = await generate({
+        task_id: taskId,
         provider_id: model.providerId,
         capability,
         prompt: p,
@@ -159,6 +179,7 @@ export function useStudio(studio: Studio): StudioApi {
       });
       const done: ResultItem[] = res.local_paths.map((lp, i) => ({
         id: ids[i] ?? uid(),
+        taskId,
         status: "done",
         url: toAssetUrl(lp),
         path: lp,
@@ -176,11 +197,8 @@ export function useStudio(studio: Studio): StudioApi {
       setResults((prev) =>
         prev.map((it) => (ids.includes(it.id) ? { ...it, status: "error", error: msg } : it)),
       );
-      setProgress({ phase: "failed", progress: 100, message: msg });
-    } finally {
-      setGenerating(false);
     }
-  }, [generating, prompt, studio, batch, refs, model, ar, quality, duration, t]);
+  }, [prompt, studio, batch, refs, model, ar, quality, duration, t]);
 
   return {
     studio,
@@ -192,8 +210,8 @@ export function useStudio(studio: Studio): StudioApi {
     prompt,
     refs,
     results,
-    generating,
-    progress,
+    running,
+    finished,
     setPrompt,
     setAr,
     setQuality,

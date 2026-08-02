@@ -262,6 +262,8 @@ body {
 .result-card .rhover button:hover { background: var(--accent); color: #000; }
 .result-card .rhover button.del:hover { background: var(--danger); color: #fff; }
 .result-card.loading .rimg { display: grid; place-items: center; }
+.result-card .fake-pct { font-size: 28px; font-weight: 800; color: var(--accent); text-shadow: 0 0 24px rgba(34,211,238,.40); letter-spacing: 1px; }
+.result-card .rphase { font-size: 10px; color: var(--text-2); white-space: nowrap; }
 .spinner { width: 32px; height: 32px; border: 2px solid rgba(34,211,238,.30); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
 .err-card .rimg { display: grid; place-items: center; color: var(--danger); font-size: 11px; padding: 16px; text-align: center; }
 
@@ -406,11 +408,8 @@ body {
 .result-card .ract button.i2v { width: auto; padding: 0 12px; font-size: 11px; font-weight: 700; gap: 4px; background: var(--accent); color: #000; border-color: var(--accent); display: flex; align-items: center; }
 .result-card .ract button.i2v:hover { background: var(--accent-h); }
 
-/* 进度条（生成中，Radix Progress） */
-.gen-progress { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); z-index: 25; display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--overlay); backdrop-filter: blur(12px); border: 1px solid var(--border-3); font-size: 12px; color: var(--text-2); box-shadow: 0 8px 24px var(--shadow-lg); animation: fadeInUp .2s; }
-.gen-progress .pb { width: 120px; height: 4px; border-radius: 999px; background: var(--scroll-thumb); overflow: hidden; }
-.gen-progress .pb [data-slot="progress-indicator"] { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
-.gen-progress.failed { color: var(--danger); border-color: rgba(239,68,68,.30); }
+/* 进行中任务角标（输入框外右上角） */
+.gen-badge { position: absolute; top: -14px; right: 28px; z-index: 40; padding: 5px 14px; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--accent), var(--accent-2)); color: #000; font-size: 11px; font-weight: 800; letter-spacing: .3px; box-shadow: 0 6px 18px rgba(34,211,238,.35); white-space: nowrap; animation: fadeInUp .2s; }
 
 /* ============ 图库 Gallery ============ */
 .gallery-root { height: 100%; display: flex; flex-direction: column; }

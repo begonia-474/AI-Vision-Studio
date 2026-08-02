@@ -17,7 +17,6 @@ import {
 } from "../lib/icons";
 import { PROVIDERS, providerMeta } from "../models/registry";
 import type { StudioApi } from "../studios/useStudio";
-import { Progress } from "./ui/progress";
 
 interface PromptComposerProps {
   api: StudioApi;
@@ -77,24 +76,7 @@ export function PromptComposer({ api }: PromptComposerProps) {
     input.click();
   };
 
-  const phaseLabel = (phase: string) => {
-    switch (phase) {
-      case "submitting":
-        return t("prompt.phaseSubmitting");
-      case "downloading":
-        return t("prompt.phaseDownloading");
-      case "done":
-        return t("prompt.phaseDone");
-      case "failed":
-        return t("prompt.phaseFailed");
-      default:
-        return phase;
-    }
-  };
-
-  const showProgress = api.generating && api.progress;
-  const failed = api.progress?.phase === "failed";
-
+  // 多任务并行：生成按钮始终可用，进行中的任务数用角标提示。
   return (
     <div className="prompt-composer">
       <div className="pc-top">
@@ -285,24 +267,22 @@ export function PromptComposer({ api }: PromptComposerProps) {
         {/* Generate */}
         <button
           className="gen-action"
-          disabled={api.generating || !provider.wired}
+          disabled={!provider.wired}
           onClick={(e) => {
             e.stopPropagation();
             api.handleGenerate();
           }}
           title={provider.wired ? t("prompt.shortcut") : t("prompt.notWired")}
         >
-          <span>{api.generating ? t("prompt.generating") : t("prompt.generate")}</span>
+          <span>{t("prompt.generate")}</span>
           <IconSparkles size={14} />
         </button>
       </div>
 
-      {/* 进度提示 */}
-      {showProgress && (
-        <div className={"gen-progress" + (failed ? " failed" : "")}>
-          <span>{phaseLabel(api.progress!.phase)}</span>
-          {!failed && <Progress className="pb" value={api.progress!.progress} />}
-          {failed && <span style={{ color: "var(--danger)" }}>{api.progress!.message}</span>}
+      {/* 进行中任务角标：输入框外右上角，x/y 正在生成中（x=已完成，y=本次会话任务总数） */}
+      {api.running > 0 && (
+        <div className="gen-badge" role="status">
+          {t("prompt.runningTasks", { done: api.finished, total: api.results.length })}
         </div>
       )}
     </div>
