@@ -79,3 +79,14 @@ export interface ProgressPayload {
   progress: number;
   message: string;
 }
+
+/** 工作室跳转参数（图生视频 / 作为参考图 / 重新编辑共用） */
+export interface StudioJump {
+  prompt: string;
+  modelId?: string;
+  ar?: string;
+  quality?: string;
+  duration?: string;
+  n?: number;
+  refs?: string[];
+}

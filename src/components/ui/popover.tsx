@@ -27,6 +27,7 @@ function PopoverContent({
     <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
           data-slot="popover-content"
+          data-scrollable
           align={align}
           sideOffset={sideOffset}
           onCloseAutoFocus={(e) => e.preventDefault()}

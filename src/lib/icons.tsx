@@ -143,3 +143,12 @@ export const IconRefresh = ({ size = 14, className, style }: IconProps) => (
     <path d="M21 3v5h-5" />
   </svg>
 );
+
+// 更多（三个圆点）
+export const IconMore = ({ size = 16, className, style }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} style={style}>
+    <circle cx="5" cy="12" r="2" />
+    <circle cx="12" cy="12" r="2" />
+    <circle cx="19" cy="12" r="2" />
+  </svg>
+);

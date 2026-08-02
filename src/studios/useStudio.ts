@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { aspectToSize, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import type { ResultItem, SessionApi } from "./sessionStore";
+import type { StudioJump } from "../types";
 
 let _seq = 0;
 const uid = () => `r_${Date.now().toString(36)}_${_seq++}`;
@@ -37,7 +38,7 @@ export interface StudioApi {
   removeResult: (id: string) => void;
   removeTask: (taskId: string) => void;
   regenerate: (taskId: string) => void;
-  applyVideoJump: (src: string, prompt: string) => void;
+  applyJump: (j: StudioJump) => void;
   handleGenerate: () => Promise<void>;
 }
 
@@ -94,14 +95,20 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     [results, session.patchActive],
   );
 
-  // 图生视频跳转：把源图作为首帧参考 + 回填 prompt（仅视频 studio 使用）。
-  const applyVideoJump = useCallback(
-    (src: string, p: string) => {
-      if (studio !== "video") return;
-      setRefs([src]);
-      setPrompt(p);
+  // 工作室跳转（图生视频/作为参考图/重新编辑）：按参数快照回填表单。
+  // 模型按 id 匹配，匹配失败保持当前模型；ar/quality/duration 仅在该模型支持时生效。
+  const applyJump = useCallback(
+    (j: StudioJump) => {
+      const m = allModels.find((x) => x.id === j.modelId);
+      if (m) selectModel(m);
+      setPrompt(j.prompt);
+      if (j.ar && (!m || m.aspectRatios.includes(j.ar))) setAr(j.ar);
+      if (j.quality && (!m || m.qualities.includes(j.quality))) setQuality(j.quality);
+      if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
+      if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m?.maxRef ?? 4));
+      if (j.refs) setRefs(j.refs);
     },
-    [studio],
+    [allModels, selectModel],
   );
 
   // 一次提交 = 一个任务（taskId），与占位卡一一对应；无并发守卫，
@@ -265,7 +272,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     removeResult,
     removeTask,
     regenerate,
-    applyVideoJump,
+    applyJump,
     handleGenerate,
   };
 }
