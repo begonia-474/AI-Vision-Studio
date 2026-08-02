@@ -155,6 +155,7 @@ export const enUS: ZhDict = {
     descVideo: "Describe a dynamic scene — and bring it to motion",
     imgToVideo: "🎬 To video",
     regenerate: "Regenerate",
+    deleteTask: "Delete this task",
     cardGroup: "Generation result",
   },
   customProvider: {

@@ -9,6 +9,8 @@ import { switchLanguage, type Lang } from "../i18n";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
+import { cn } from "../lib/utils";
+import { BTN, MDESC, MODAL, SEG, SEG_BTN } from "../lib/classes";
 
 interface SettingsModalProps {
   open: boolean;
@@ -28,30 +30,30 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="modal" showCloseButton={false}>
+      <DialogContent className={MODAL} showCloseButton={false}>
         <DialogTitle>{t("settings.title")}</DialogTitle>
-        <DialogDescription className="mdesc">{t("settings.desc")}</DialogDescription>
+        <DialogDescription className={MDESC}>{t("settings.desc")}</DialogDescription>
 
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.defaultImage")}</div>
-            <div className="sd">{t("settings.defaultImageDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.defaultImage")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.defaultImageDesc")}</div>
           </div>
-          <div className="sv">{defaultImage}</div>
+          <div className="font-mono text-xs text-text-2">{defaultImage}</div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.defaultVideo")}</div>
-            <div className="sd">{t("settings.defaultVideoDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.defaultVideo")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.defaultVideoDesc")}</div>
           </div>
-          <div className="sv">{defaultVideo}</div>
+          <div className="font-mono text-xs text-text-2">{defaultVideo}</div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.concurrency")}</div>
-            <div className="sd">{t("settings.concurrencyDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.concurrency")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.concurrencyDesc")}</div>
           </div>
-          <div className="seg">
+          <div className={SEG}>
             <ToggleGroup
               type="single"
               variant="outline"
@@ -59,19 +61,19 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
               onValueChange={(v) => v && setConc(Number(v))}
             >
               {CONCURRENCY.map((n) => (
-                <ToggleGroupItem key={n} value={String(n)}>
+                <ToggleGroupItem key={n} value={String(n)} className={SEG_BTN}>
                   {n}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
           </div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.theme")}</div>
-            <div className="sd">{t("settings.themeDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.theme")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.themeDesc")}</div>
           </div>
-          <div className="seg">
+          <div className={SEG}>
             <ToggleGroup
               type="single"
               variant="outline"
@@ -79,19 +81,19 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
               onValueChange={(v) => v && setTheme(v as ThemeMode)}
             >
               {THEMES.map((m) => (
-                <ToggleGroupItem key={m} value={m}>
+                <ToggleGroupItem key={m} value={m} className={SEG_BTN}>
                   {t(`common.${m}`)}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
           </div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.language")}</div>
-            <div className="sd">{t("settings.languageDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.language")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.languageDesc")}</div>
           </div>
-          <div className="seg">
+          <div className={SEG}>
             <ToggleGroup
               type="single"
               variant="outline"
@@ -99,38 +101,38 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
               onValueChange={(l) => l && switchLanguage(l as Lang)}
             >
               {LANGS.map((l) => (
-                <ToggleGroupItem key={l} value={l}>
+                <ToggleGroupItem key={l} value={l} className={SEG_BTN}>
                   {l === "zh-CN" ? t("lang.zh") : t("lang.en")}
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
           </div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.assetsPath")}</div>
-            <div className="sd">{t("settings.assetsPathDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.assetsPath")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.assetsPathDesc")}</div>
           </div>
-          <div className="sv">%LOCALAPPDATA%\assets\YYYY\MM\</div>
+          <div className="font-mono text-xs text-text-2">%LOCALAPPDATA%\assets\YYYY\MM\</div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>
-            <div className="sk">{t("settings.history")}</div>
-            <div className="sd">{t("settings.historyDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.history")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.historyDesc")}</div>
           </div>
-          <div className="sv">{t("settings.historyForever")}</div>
+          <div className="font-mono text-xs text-text-2">{t("settings.historyForever")}</div>
         </div>
-        <div className="set-row">
+        <div className="flex items-center justify-between gap-3 py-3.5">
           <div>
-            <div className="sk">{t("settings.about")}</div>
-            <div className="sd">{t("settings.aboutDesc")}</div>
+            <div className="text-[13px] font-semibold">{t("settings.about")}</div>
+            <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.aboutDesc")}</div>
           </div>
-          <div className="sv">v0.1.0</div>
+          <div className="font-mono text-xs text-text-2">v0.1.0</div>
         </div>
 
         <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
           <DialogClose asChild>
-            <Button className="btn" style={{ flex: 1 }}>
+            <Button className={cn(BTN, "flex-1")}>
               {t("common.close")}
             </Button>
           </DialogClose>

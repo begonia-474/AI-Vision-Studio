@@ -7,6 +7,8 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ModelDropdown } from "./ModelDropdown";
 import { ParamPopover } from "./Popover";
+import { cn } from "../lib/utils";
+import { PROVIDER_LOGO } from "../lib/classes";
 import {
   IconAspect,
   IconChevron,
@@ -79,18 +81,37 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
   };
 
   // 多任务并行：生成按钮始终可用，进行中的任务数用角标提示。
+  const ctrlBtn =
+    "group/ctrl relative flex h-[38px] cursor-pointer items-center gap-2 whitespace-nowrap rounded-[6px] border border-border-2 bg-ctrl-bg px-4 text-xs font-semibold text-foreground transition-all duration-150 hover:bg-ctrl-bg-h";
+  const ctrlBtnActive =
+    ctrlBtn + " border-[rgba(59,130,246,.25)] bg-accent text-primary hover:bg-[rgba(59,130,246,.15)]";
+  const ctrlIco = "size-4 shrink-0 opacity-70 transition-opacity group-hover/ctrl:opacity-100";
+  const ctrlLabel =
+    "text-xs font-semibold opacity-70 transition-opacity group-hover/ctrl:text-primary group-hover/ctrl:opacity-100";
+
   return (
-    <div className={"prompt-composer" + (collapsed ? " is-collapsed" : "")}>
-      <div className="pc-expanded-content" aria-hidden={collapsed}>
-        <div className="pc-top">
+    <div
+      className={cn(
+        "absolute bottom-4 left-1/2 z-30 flex w-[95%] max-w-[896px] -translate-x-1/2 flex-col rounded-[32px] border border-border-3 bg-[linear-gradient(to_bottom,var(--panel-from),var(--panel-via)_50%,var(--panel-to))] p-4 shadow-[0_15px_50px_var(--shadow-lg)] backdrop-blur-[24px] transition-[width,padding,border-radius] duration-[280ms] ease-in-out animate-[fadeInUp_.5s_.15s_backwards]",
+        collapsed && "w-[min(560px,92%)] rounded-3xl px-3 py-2",
+      )}
+    >
+      <div
+        className={cn(
+          "flex max-h-[600px] flex-col gap-3 overflow-visible opacity-100 translate-y-0 transition-[max-height,opacity,transform] duration-[280ms] ease-in-out pointer-events-auto",
+          collapsed && "max-h-0 overflow-hidden opacity-0 translate-y-[6px] pointer-events-none",
+        )}
+        aria-hidden={collapsed}
+      >
+        <div className="flex flex-col gap-3">
         {/* 参考图行 */}
         {(api.refs.length > 0 || canAddRef) && (
-          <div className="upload-row">
+          <div className="flex flex-wrap items-center gap-2.5">
             {api.refs.map((r, i) => (
-              <div className="thumb-circle" key={i}>
-                <img src={r} alt="" />
+              <div className="relative size-10 shrink-0 overflow-hidden rounded-full border border-border-4 shadow-[0_4px_12px_var(--shadow-xs)]" key={i}>
+                <img src={r} alt="" className="h-full w-full object-cover" />
                 <button
-                  className="rmv"
+                  className="absolute top-0.5 right-0.5 grid size-4 cursor-pointer place-items-center rounded-full border border-border-1 bg-btn-dark text-[9px] leading-none text-white"
                   aria-label={t("prompt.removeRef")}
                   onClick={() => api.removeRef(i)}
                 >
@@ -100,7 +121,7 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
             ))}
             {canAddRef && (
               <button
-                className="upload-btn"
+                className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full border border-border-2 bg-chip text-muted-foreground transition-all duration-150 hover:border-[rgba(59,130,246,.40)] hover:bg-[rgba(59,130,246,.05)] hover:text-primary"
                 title={isVideo ? t("prompt.uploadI2v") : t("prompt.uploadI2i")}
                 aria-label={isVideo ? t("prompt.uploadI2v") : t("prompt.uploadI2i")}
                 onClick={onPickRef}
@@ -113,7 +134,7 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
 
         <textarea
           ref={taRef}
-          className="pc-textarea"
+          className="min-h-10 w-full max-h-[250px] resize-none border-0 bg-transparent p-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-faint-2"
           placeholder={isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage")}
           aria-label={t("prompt.textareaLabel")}
           rows={1}
@@ -129,8 +150,8 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
         />
         </div>
 
-        <div className="pc-footer">
-        <div className="pc-controls">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line-soft pt-3">
+        <div className="relative flex flex-wrap items-center gap-2">
           {/* 模型 */}
           <ModelDropdown
             open={openModel}
@@ -141,13 +162,13 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
             trigger={
               <button
                 type="button"
-                className={"ctrl-btn" + (openModel ? " active" : "")}
+                className={cn(ctrlBtn, openModel && ctrlBtnActive)}
               >
-                <span className="provider-logo" style={{ background: provider.color }}>
+                <span className={cn(PROVIDER_LOGO, "size-4")} style={{ background: provider.color }}>
                   {provider.abbr}
                 </span>
-                <span className="ctrl-label">{api.model.name}</span>
-                <IconChevron className="ctrl-chev" size={10} />
+                <span className={cn(ctrlLabel, openModel && "opacity-100")}>{api.model.name}</span>
+                <IconChevron className="size-[10px] shrink-0 opacity-45 group-hover/ctrl:opacity-100" size={10} />
               </button>
             }
           />
@@ -163,10 +184,10 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
             trigger={
               <button
                 type="button"
-                className={"ctrl-btn" + (openAr ? " active" : "")}
+                className={cn(ctrlBtn, openAr && ctrlBtnActive)}
               >
-                <IconAspect className="ctrl-ico" size={16} />
-                <span className="ctrl-label">{api.ar}</span>
+                <IconAspect className={ctrlIco} size={16} />
+                <span className={cn(ctrlLabel, openAr && "opacity-100")}>{api.ar}</span>
               </button>
             }
           />
@@ -182,10 +203,10 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
             trigger={
               <button
                 type="button"
-                className={"ctrl-btn" + (openQuality ? " active" : "")}
+                className={cn(ctrlBtn, openQuality && ctrlBtnActive)}
               >
-                <IconQuality className="ctrl-ico" size={16} />
-                <span className="ctrl-label">{api.quality}</span>
+                <IconQuality className={ctrlIco} size={16} />
+                <span className={cn(ctrlLabel, openQuality && "opacity-100")}>{api.quality}</span>
               </button>
             }
           />
@@ -202,10 +223,10 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
               trigger={
                 <button
                   type="button"
-                  className={"ctrl-btn" + (openDuration ? " active" : "")}
+                  className={cn(ctrlBtn, openDuration && ctrlBtnActive)}
                 >
-                  <IconDuration className="ctrl-ico" size={16} />
-                  <span className="ctrl-label">{api.duration}s</span>
+                  <IconDuration className={ctrlIco} size={16} />
+                  <span className={cn(ctrlLabel, openDuration && "opacity-100")}>{api.duration}s</span>
                 </button>
               }
             />
@@ -213,9 +234,10 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
 
           {/* 批量（仅图像） */}
           {!isVideo && (
-            <div className="ctrl-stepper">
+            <div className="flex h-[38px] select-none items-center gap-1 rounded-[6px] border border-border-2 bg-ctrl-bg px-3">
               <button
                 type="button"
+                className="cursor-pointer border-0 bg-transparent p-0 px-1 text-sm font-extrabold leading-none text-muted-foreground hover:text-foreground"
                 aria-label={t("prompt.lessBatch")}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -224,11 +246,12 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
               >
                 −
               </button>
-              <span className="stepper-val">
+              <span className="min-w-7 text-center text-xs font-semibold text-text-2">
                 {api.batch}/{api.model.maxRef ?? 4}
               </span>
               <button
                 type="button"
+                className="cursor-pointer border-0 bg-transparent p-0 px-1 text-sm font-extrabold leading-none text-muted-foreground hover:text-foreground"
                 aria-label={t("prompt.moreBatch")}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -243,7 +266,7 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
           {/* Draw（仅图像，占位） */}
           {!isVideo && (
             <button
-              className="ctrl-btn"
+              className={ctrlBtn}
               onClick={(e) => {
                 e.stopPropagation();
                 alert(t("prompt.drawAlert"));
@@ -251,7 +274,7 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
               title={t("prompt.drawTitle")}
             >
                 <svg
-                  className="ctrl-ico"
+                  className={ctrlIco}
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -262,14 +285,14 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
                   <path d="M12 20h9" />
                   <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
                 </svg>
-                <span className="ctrl-label">{t("prompt.draw")}</span>
+                <span className={ctrlLabel}>{t("prompt.draw")}</span>
               </button>
           )}
         </div>
 
         {/* Generate */}
         <button
-          className="gen-action"
+          className="flex cursor-pointer items-center gap-2 rounded-full border border-[rgba(59,130,246,.10)] bg-primary px-7 py-3 text-[13px] font-extrabold text-black shadow-[0_4px_12px_rgba(59,130,246,.20)] transition-all duration-150 hover:scale-[1.02] hover:opacity-95 active:scale-[.98] disabled:pointer-events-none disabled:scale-100 disabled:opacity-50"
           disabled={!provider.wired}
           onClick={(e) => {
             e.stopPropagation();
@@ -284,20 +307,26 @@ export function PromptComposer({ api, collapsed = false, onExpand }: PromptCompo
 
         {/* 进行中任务角标：输入框外右上角，x/y 正在生成中（x=已完成，y=本次会话任务总数） */}
         {api.running > 0 && (
-          <div className="gen-badge" role="status">
+          <div
+            className="absolute -top-3.5 right-7 z-40 whitespace-nowrap rounded-full bg-[linear-gradient(90deg,var(--accent),var(--accent-2))] px-3.5 py-1.5 text-[11px] font-extrabold tracking-[.3px] text-black shadow-[0_6px_18px_rgba(59,130,246,.35)] animate-[fadeInUp_.2s]"
+            role="status"
+          >
             {t("prompt.runningTasks", { done: api.finished, total: api.sessionTotal })}
           </div>
         )}
       </div>
       <button
         type="button"
-        className="pc-collapsed-bar"
+        className={cn(
+          "pointer-events-none flex max-h-0 min-h-0 w-full cursor-pointer items-center justify-between gap-3 overflow-hidden border-0 bg-transparent px-1 text-left text-text-2 opacity-0 transition-[max-height,opacity] duration-[280ms] ease-in-out",
+          collapsed && "pointer-events-auto max-h-9 min-h-9 opacity-100",
+        )}
         onClick={onExpand}
         title={t("prompt.backToBottom")}
         aria-hidden={!collapsed}
       >
-        <span>{api.prompt.trim() || (isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage"))}</span>
-        <IconSparkles size={14} />
+        <span className="min-w-0 truncate text-[13px]">{api.prompt.trim() || (isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage"))}</span>
+        <IconSparkles size={14} className="shrink-0 text-primary" />
       </button>
     </div>
   );

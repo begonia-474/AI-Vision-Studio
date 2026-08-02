@@ -8,6 +8,8 @@ import { useTranslation } from "react-i18next";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Command, CommandEmpty, CommandItem, CommandList } from "./ui/command";
 import { IconSearch, IconStar } from "../lib/icons";
+import { cn } from "../lib/utils";
+import { CM_BADGE, CM_BADGE_ACCENT } from "../lib/classes";
 import {
   providerDisplayName,
   providerMeta,
@@ -55,12 +57,15 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent side="top" align="start" className="popover wide">
-        <div className="model-pop">
+      <PopoverContent side="top" align="start" className="w-auto min-w-[480px] max-w-[calc(100vw-32px)] max-h-[40vh] overflow-y-auto rounded-lg border border-border-3 bg-overlay p-3.5 shadow-[0_10px_40px_var(--shadow-lg)] backdrop-blur-[24px] animate-[fadeInUp_.2s]">
+        <div className="flex max-h-[60vh] min-h-[350px] gap-4 overflow-x-hidden">
           {/* 厂商 tab */}
-          <div className="providers">
+          <div className="scrollbar-none flex w-14 shrink-0 flex-col items-center gap-2.5 overflow-y-auto border-r border-border-1 py-0.5 pr-2">
             <button
-              className={"prov-btn all" + (selProvider === "all" ? " active" : "")}
+              className={cn(
+                "grid size-8 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-full border border-border-1 bg-chip text-[10px] font-extrabold text-muted-foreground transition-all duration-150 hover:bg-hover hover:text-foreground",
+                selProvider === "all" && "scale-105 border-[rgba(250,204,21,.30)] bg-hover-2 text-[#facc15]",
+              )}
               title={t("model.allProviders")}
               aria-label={t("model.allTab")}
               aria-pressed={selProvider === "all"}
@@ -77,7 +82,10 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
               return (
                 <button
                   key={pid}
-                  className={"prov-btn" + (sel ? " active" : "")}
+                  className={cn(
+                    "grid size-8 shrink-0 cursor-pointer place-items-center overflow-hidden rounded-full border border-border-1 bg-chip text-[10px] font-extrabold text-muted-foreground transition-all duration-150 hover:bg-hover hover:text-foreground",
+                    sel && "scale-105 border-[rgba(255,255,255,.25)] shadow-[0_4px_12px_var(--shadow-xs)]",
+                  )}
                   title={providerDisplayName(pid, t)}
                   aria-label={t("model.providerTab", { name: providerDisplayName(pid, t) })}
                   aria-pressed={sel}
@@ -98,26 +106,27 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
           </div>
 
           {/* 列表区 */}
-          <div className="list">
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
             <Command shouldFilter={false}>
-              <div className="model-search">
+              <div className="flex items-center gap-3 rounded-lg border border-border-1 bg-soft px-4 py-2 transition-colors duration-150 focus-within:border-[rgba(59,130,246,.50)]">
                 <IconSearch size={14} style={{ color: "var(--muted)" }} />
                 <input
                   type="text"
+                  className="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
                   placeholder={t("model.search")}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              <div className="model-list-title">
+              <div className="flex shrink-0 items-center justify-between px-1 py-1 text-xs font-semibold text-text-2">
                 <span>{t("model.available")}</span>
                 {selProvider !== "all" && (
-                  <span className="prov-name">{providerDisplayName(selProvider, t)}</span>
+                  <span className="rounded-[6px] bg-soft px-2 py-0.5 text-[10px] text-muted-foreground">{providerDisplayName(selProvider, t)}</span>
                 )}
               </div>
-              <CommandList className="model-list-scroll">
+              <CommandList className="scrollbar-none flex flex-1 flex-col gap-1.5 overflow-y-auto pr-1">
                 {filtered.length === 0 ? (
-                  <CommandEmpty className="empty-models">
+                  <CommandEmpty className="py-6 text-center text-xs text-muted-foreground">
                     {selProvider.startsWith("custom:")
                       ? t("customProvider.empty")
                       : t("model.none")}
@@ -140,20 +149,23 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
                         key={`${m.providerId}:${m.id}`}
                         value={`${m.providerId}:${m.id}`}
                         onSelect={() => pick(m)}
-                        className="model-item"
+                        className={cn(
+                          "flex cursor-pointer items-center justify-between gap-3 rounded-md border border-transparent bg-transparent px-3 py-3 transition-all duration-150 hover:border-border-1 hover:bg-hover",
+                          sel && "border-border-1 bg-hover",
+                        )}
                       >
-                        <div className="mi-left">
-                          <div className="mi-logo" style={{ background: p.color }}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="grid size-8 shrink-0 place-items-center rounded-full border border-border-1 text-[11px] font-extrabold text-black" style={{ background: p.color }}>
                             {p.abbr}
                           </div>
-                          <div className="mi-name">
-                            <span className="nm">
+                          <div className="flex min-w-0 flex-col gap-0.5">
+                            <span className="text-xs font-bold tracking-tight text-foreground">
                               {m.name}
                               {!p.wired && <span style={{ color: "var(--warn)", marginLeft: 6 }}>{t("model.notWired")}</span>}
-                              {isCustom && <span className="cm-badge">{t("customProvider.badge")}</span>}
+                              {isCustom && <span className={cn(CM_BADGE, CM_BADGE_ACCENT)}>{t("customProvider.badge")}</span>}
                             </span>
                             {selProvider === "all" && (
-                              <span className="pv">
+                              <span className="text-[9px] text-muted-foreground">
                                 {providerDisplayName(m.providerId, t)}
                                 {i2iLabel}
                               </span>
@@ -161,7 +173,7 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
                           </div>
                         </div>
                         {sel && (
-                          <svg className="mi-check" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth={4}>
+                          <svg className="size-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth={4}>
                             <polyline points="20 6 9 17 4 12" />
                           </svg>
                         )}

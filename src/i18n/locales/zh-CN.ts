@@ -153,6 +153,7 @@ export const zhCN = {
     descVideo: "描述一个动态场景——并赋予它运动。",
     imgToVideo: "🎬 图生视频",
     regenerate: "重新生成",
+    deleteTask: "删除该任务",
     cardGroup: "生成结果",
   },  customProvider: {
     title: "自定义厂商",

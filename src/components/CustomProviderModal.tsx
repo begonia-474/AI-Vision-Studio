@@ -11,6 +11,8 @@ import { PROTOCOL_COLORS, refreshCustomProviders, uid } from "../models/registry
 import type { CustomModelConfig, CustomProviderConfig, ProtocolType } from "../types";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { cn } from "../lib/utils";
+import { BTN, BTN_PRIMARY, CM_BADGE, CM_BADGE_ACCENT, G_CHIP, G_CHIP_ON, MDESC, MODAL } from "../lib/classes";
 
 interface CustomProviderModalProps {
   open: boolean;
@@ -245,19 +247,28 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
     modelForm != null && !!modelForm.repo_id.trim() && !!modelForm.name.trim();
   const specs = PARAM_SPECS[form.protocol];
 
+  const cmField = "flex flex-col gap-1.5";
+  const cmFieldLabel = "text-[11px] font-semibold text-text-3";
+  const cmInput =
+    "resize-none rounded-md border border-border-2 bg-soft px-2.5 py-[7px] text-xs text-foreground outline-none transition-colors duration-150 focus:border-[rgba(59,130,246,.50)]";
+  const cmSelect =
+    "rounded-md border border-border-2 bg-soft px-2.5 py-[7px] text-xs text-foreground outline-none focus:border-[rgba(59,130,246,.50)]";
+  const cmItem = "flex items-center justify-between gap-2.5 rounded-md border border-border-2 bg-chip px-3 py-2";
+  const cmItemBtn = cn(BTN, "h-[26px] px-2.5 text-[10px]");
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="modal cm-modal cm-modal-wide" showCloseButton={false}>
+      <DialogContent className={cn(MODAL, "w-[94vw] max-w-[700px]")} showCloseButton={false}>
         <DialogTitle>{t("customProvider.title")}</DialogTitle>
-        <DialogDescription className="mdesc">{t("customProvider.desc")}</DialogDescription>
+        <DialogDescription className={MDESC}>{t("customProvider.desc")}</DialogDescription>
 
-        {error && <div className="cm-error">{error}</div>}
+        {error && <div className="mb-3 rounded-md border border-[rgba(239,68,68,.30)] bg-[rgba(239,68,68,.10)] px-3 py-2 text-[11px] text-destructive">{error}</div>}
 
         {/* —— 厂商列表 —— */}
-        <div className="cm-section-title">
+        <div className="mb-2 flex items-center justify-between text-xs font-bold text-text-2">
           <span>{t("customProvider.list")}</span>
           <Button
-            className="btn"
+            className={BTN}
             size="sm"
             onClick={() => {
               setForm({ ...EMPTY_FORM });
@@ -267,26 +278,26 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
             ＋ {t("customProvider.add")}
           </Button>
         </div>
-        <div className="cm-list">
+        <div className="mb-4 flex max-h-[180px] flex-col gap-1.5 overflow-y-auto pr-1">
           {providers.length === 0 ? (
-            <div className="cm-empty">{t("customProvider.emptyList")}</div>
+            <div className="rounded-md border border-dashed border-border-2 py-4 text-center text-[11px] text-muted-foreground">{t("customProvider.emptyList")}</div>
           ) : (
             providers.map((p) => (
-              <div className={"cm-item" + (form.id === p.id ? " editing" : "")} key={p.id}>
-                <div className="cm-item-info">
-                  <span className="cm-name">
+              <div className={cn(cmItem, form.id === p.id && "border-[rgba(59,130,246,.45)]")} key={p.id}>
+                <div className="flex min-w-0 flex-col">
+                  <span className="text-xs font-semibold">
                     {p.name}
-                    <span className="cm-badge" style={{ color: PROTOCOL_COLORS[p.protocol] }}>
+                    <span className={cn(CM_BADGE, CM_BADGE_ACCENT)} style={{ color: PROTOCOL_COLORS[p.protocol] }}>
                       {t(`customProvider.protocolName.${p.protocol}`)}
                     </span>
                   </span>
-                  <span className="cm-repo">
+                  <span className="font-mono text-[10px] text-muted-foreground">
                     {p.base_url} · {p.models.length} {t("customProvider.modelsCount")}
                   </span>
                 </div>
-                <div className="cm-item-actions">
-                  <button className="btn" onClick={() => startEditProvider(p)}>{t("customProvider.edit")}</button>
-                  <button className="btn" style={{ color: "var(--danger)", borderColor: "rgba(239,68,68,.35)" }} onClick={() => remove(p)}>{t("customProvider.delete")}</button>
+                <div className="flex shrink-0 gap-1.5">
+                  <button className={cmItemBtn} onClick={() => startEditProvider(p)}>{t("customProvider.edit")}</button>
+                  <button className={cmItemBtn} style={{ color: "var(--danger)", borderColor: "rgba(239,68,68,.35)" }} onClick={() => remove(p)}>{t("customProvider.delete")}</button>
                 </div>
               </div>
             ))
@@ -294,15 +305,16 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
         </div>
 
         {/* —— 厂商表单 —— */}
-        <div className="cm-form">
-          <div className="cm-grid2">
-            <label className="cm-field">
-              <span>{t("customProvider.name")} *</span>
-              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={t("customProvider.namePh")} />
+        <div className="flex flex-col gap-2.5 border-t border-border-2 pt-3.5">
+          <div className="grid grid-cols-2 gap-2.5">
+            <label className={cmField}>
+              <span className={cmFieldLabel}>{t("customProvider.name")} *</span>
+              <input className={cmInput} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={t("customProvider.namePh")} />
             </label>
-            <label className="cm-field">
-              <span>{t("customProvider.protocol")}</span>
+            <label className={cmField}>
+              <span className={cmFieldLabel}>{t("customProvider.protocol")}</span>
               <select
+                className={cmSelect}
                 value={form.protocol}
                 onChange={(e) => pickProtocol(e.target.value as ProtocolType)}
               >
@@ -313,39 +325,40 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
             </label>
           </div>
 
-          <label className="cm-field">
-            <span>{t("customProvider.baseUrl")} *</span>
+          <label className={cmField}>
+            <span className={cmFieldLabel}>{t("customProvider.baseUrl")} *</span>
             <input
+              className={cmInput}
               value={form.baseUrl}
               onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
               placeholder="https://..."
             />
           </label>
-          <p className="cm-hint">{t(`customProvider.protocolHint.${form.protocol}`)}</p>
+          <p className="m-0 text-[10px] text-muted-foreground">{t(`customProvider.protocolHint.${form.protocol}`)}</p>
 
           {/* 模型子列表 */}
-          <div className="cm-section-title">
+          <div className="mb-2 flex items-center justify-between text-xs font-bold text-text-2">
             <span>{t("customProvider.models")}</span>
-            <Button className="btn" size="sm" onClick={startAddModel}>
+            <Button className={BTN} size="sm" onClick={startAddModel}>
               ＋ {t("customProvider.addModel")}
             </Button>
           </div>
-          <div className="cm-models">
+          <div className="flex max-h-[160px] flex-col gap-1.5 overflow-y-auto pr-1">
             {form.models.length === 0 ? (
-              <div className="cm-empty">{t("customProvider.emptyModels")}</div>
+              <div className="rounded-md border border-dashed border-border-2 py-4 text-center text-[11px] text-muted-foreground">{t("customProvider.emptyModels")}</div>
             ) : (
               form.models.map((m, i) => (
-                <div className={"cm-item" + (modelIdx === i ? " editing" : "")} key={`${m.repo_id}_${i}`}>
-                  <div className="cm-item-info">
-                    <span className="cm-name">
+                <div className={cn(cmItem, modelIdx === i && "border-[rgba(59,130,246,.45)]")} key={`${m.repo_id}_${i}`}>
+                  <div className="flex min-w-0 flex-col">
+                    <span className="text-xs font-semibold">
                       {m.name || m.repo_id}
-                      <span className="cm-badge">{m.capabilities.join(" / ")}</span>
+                      <span className={CM_BADGE}>{m.capabilities.join(" / ")}</span>
                     </span>
-                    <span className="cm-repo">{m.repo_id}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">{m.repo_id}</span>
                   </div>
-                  <div className="cm-item-actions">
-                    <button className="btn" onClick={() => startEditModel(i)}>{t("customProvider.edit")}</button>
-                    <button className="btn" style={{ color: "var(--danger)", borderColor: "rgba(239,68,68,.35)" }} onClick={() => removeModel(i)}>{t("customProvider.delete")}</button>
+                  <div className="flex shrink-0 gap-1.5">
+                    <button className={cmItemBtn} onClick={() => startEditModel(i)}>{t("customProvider.edit")}</button>
+                    <button className={cmItemBtn} style={{ color: "var(--danger)", borderColor: "rgba(239,68,68,.35)" }} onClick={() => removeModel(i)}>{t("customProvider.delete")}</button>
                   </div>
                 </div>
               ))
@@ -354,35 +367,35 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
 
           {/* 模型子表单（选中模型时展开） */}
           {modelForm && (
-            <div className="cm-subform">
-              <div className="cm-section-title">
+            <div className="mt-1 flex flex-col gap-2.5 rounded-xl border border-[rgba(59,130,246,.25)] bg-chip p-3">
+              <div className="mb-2 flex items-center justify-between text-xs font-bold text-text-2">
                 <span>
                   {t("customProvider.modelEdit")}
-                  <span className="cm-badge">{modelForm.name || modelForm.repo_id || "?"}</span>
+                  <span className={CM_BADGE}>{modelForm.name || modelForm.repo_id || "?"}</span>
                 </span>
-                <Button className="btn" size="sm" disabled={!modelFormValid} onClick={confirmModel}>
+                <Button className={BTN} size="sm" disabled={!modelFormValid} onClick={confirmModel}>
                   {t("customProvider.done")}
                 </Button>
               </div>
-              <div className="cm-grid2">
-                <label className="cm-field">
-                  <span>{t("customProvider.repoId")} *</span>
-                  <input value={modelForm.repo_id} onChange={(e) => patchModel(modelIdx!, { repo_id: e.target.value })} placeholder={t("customProvider.repoIdPh")} />
+              <div className="grid grid-cols-2 gap-2.5">
+                <label className={cmField}>
+                  <span className={cmFieldLabel}>{t("customProvider.repoId")} *</span>
+                  <input className={cmInput} value={modelForm.repo_id} onChange={(e) => patchModel(modelIdx!, { repo_id: e.target.value })} placeholder={t("customProvider.repoIdPh")} />
                 </label>
-                <label className="cm-field">
-                  <span>{t("customProvider.name")} *</span>
-                  <input value={modelForm.name} onChange={(e) => patchModel(modelIdx!, { name: e.target.value })} placeholder={t("customProvider.namePh")} />
+                <label className={cmField}>
+                  <span className={cmFieldLabel}>{t("customProvider.name")} *</span>
+                  <input className={cmInput} value={modelForm.name} onChange={(e) => patchModel(modelIdx!, { name: e.target.value })} placeholder={t("customProvider.namePh")} />
                 </label>
               </div>
 
-              <div className="cm-field">
-                <span>{t("customProvider.capabilities")}</span>
-                <div className="cm-chip-row">
+              <div className={cmField}>
+                <span className={cmFieldLabel}>{t("customProvider.capabilities")}</span>
+                <div className="flex flex-wrap gap-2">
                   {PROTOCOL_CAPS[form.protocol].map((c) => (
                     <button
                       key={c}
                       type="button"
-                      className={"g-chip" + (modelForm.capabilities.includes(c) ? " on" : "")}
+                      className={cn(G_CHIP, "h-7", modelForm.capabilities.includes(c) && G_CHIP_ON)}
                       onClick={() =>
                         patchModel(modelIdx!, {
                           capabilities: modelForm.capabilities.includes(c)
@@ -397,20 +410,21 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
                 </div>
               </div>
 
-              <label className="cm-field">
-                <span>{t("customProvider.sizePresets")}</span>
-                <input value={modelForm.size_presets.join(", ")} onChange={(e) => patchModel(modelIdx!, { size_presets: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })} placeholder={t("customProvider.sizePh")} />
+              <label className={cmField}>
+                <span className={cmFieldLabel}>{t("customProvider.sizePresets")}</span>
+                <input className={cmInput} value={modelForm.size_presets.join(", ")} onChange={(e) => patchModel(modelIdx!, { size_presets: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })} placeholder={t("customProvider.sizePh")} />
               </label>
 
               {/* 常用参数：中文标签具名表单（标签→接口字段名由 PARAM_SPECS 映射） */}
-              <div className="cm-field">
-                <span>{t("customProvider.params")}</span>
-                <div className="cm-params">
+              <div className={cmField}>
+                <span className={cmFieldLabel}>{t("customProvider.params")}</span>
+                <div className="flex flex-col gap-2">
                   {specs.map((spec) => (
-                    <label className="cm-param" key={spec.key}>
-                      <span>{t(`customProvider.field.${spec.label}`)}</span>
+                    <label className="flex items-center gap-2.5" key={spec.key}>
+                      <span className="shrink-0 flex-[0_0_96px] text-[11px] font-semibold text-text-3">{t(`customProvider.field.${spec.label}`)}</span>
                       {spec.type === "select" ? (
                         <select
+                          className={cmSelect}
                           value={labeledDraft[spec.key] ?? ""}
                           onChange={(e) => setLabeled(spec.key, e.target.value)}
                         >
@@ -421,6 +435,7 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
                         </select>
                       ) : (
                         <input
+                          className={cmSelect}
                           type={spec.type === "number" ? "number" : "text"}
                           min={spec.min}
                           max={spec.max}
@@ -436,14 +451,14 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
               </div>
 
               {/* 高级参数：自由键值对（熟悉接口的用户补充字段） */}
-              <div className="cm-field">
-                <span>{t("customProvider.advanced")}</span>
-                <p className="cm-hint" style={{ marginBottom: 6 }}>{t("customProvider.advancedHint")}</p>
-                <div className="kv-editor">
+              <div className={cmField}>
+                <span className={cmFieldLabel}>{t("customProvider.advanced")}</span>
+                <p className="m-0 mb-1.5 text-[10px] text-muted-foreground">{t("customProvider.advancedHint")}</p>
+                <div className="flex flex-col gap-1.5">
                   {kvDraft.map((row) => (
-                    <div className="kv-row" key={row.id}>
+                    <div className="flex gap-1.5" key={row.id}>
                       <input
-                        className="kv-key"
+                        className={cn(cmInput, "font-mono flex-[0_0_45%] px-2.5 py-1.5 text-[11px]")}
                         value={row.key}
                         placeholder={t("customProvider.kvKeyPh")}
                         onChange={(e) =>
@@ -451,7 +466,7 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
                         }
                       />
                       <input
-                        className="kv-val"
+                        className={cn(cmInput, "font-mono flex-1 px-2.5 py-1.5 text-[11px]")}
                         value={row.value}
                         placeholder={t("customProvider.kvValPh")}
                         onChange={(e) =>
@@ -460,7 +475,7 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
                       />
                       <button
                         type="button"
-                        className="kv-del"
+                        className="grid size-[26px] shrink-0 cursor-pointer place-items-center rounded-md border border-border-2 bg-chip text-[13px] leading-none text-muted-foreground transition-all duration-150 hover:border-[rgba(239,68,68,.40)] hover:text-destructive"
                         title={t("customProvider.kvDel")}
                         onClick={() => updateKv(kvDraft.filter((r) => r.id !== row.id))}
                       >
@@ -470,7 +485,7 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
                   ))}
                   <button
                     type="button"
-                    className="kv-add"
+                    className="self-start cursor-pointer rounded-md border border-dashed border-border-3 bg-transparent px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-all duration-150 hover:border-[rgba(59,130,246,.40)] hover:text-primary"
                     onClick={() =>
                       updateKv([...kvDraft, { id: ++kvSeq.current, key: "", value: "" }])
                     }
@@ -483,12 +498,12 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
           )}
         </div>
 
-        <div className="cm-actions">
+        <div className="mt-4 flex justify-end gap-2.5">
           <DialogClose asChild>
-            <Button className="btn">{t("common.close")}</Button>
+            <Button className={BTN}>{t("common.close")}</Button>
           </DialogClose>
           <Button
-            className="btn primary"
+            className={BTN_PRIMARY}
             disabled={!form.name.trim() || form.models.length === 0 || modelIdx != null}
             onClick={save}
           >

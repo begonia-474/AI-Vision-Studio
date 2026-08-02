@@ -1,10 +1,11 @@
-// App = Shell
-// header + body(sidebar + content)。两个 studio 与图库常驻挂载，用 hidden 类切换以保留状态。
+// App = Shell（两区：侧边栏 + 功能区）
+// 顶部无独立 header：logo/程序名/折叠按钮并入侧边栏顶栏（见 Sidebar）。
+// 两个 studio 与图库常驻挂载，用 hidden 类切换以保留状态。
 // BYOK / Settings 为独立 modal，由 sidebar 底部入口触发。
 // 图像 → 视频跳转：ImageStudio/GalleryView 触发 onImageToVideo，App 切换 tab 并向 VideoStudio 注入 jump。
 
 import { useEffect, useState } from "react";
-import { Header } from "./shell/Header";
+import { cn } from "./lib/utils";
 import { Sidebar } from "./shell/Sidebar";
 import { ImageStudio } from "./studios/ImageStudio";
 import { VideoStudio } from "./studios/VideoStudio";
@@ -52,29 +53,28 @@ export default function App() {
   };
 
   return (
-    <div className="shell">
-      <Header activeView={activeView} onToggleSidebar={() => setCollapsed((v) => !v)} />
-
-      <div className="body">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      <div className="flex flex-1 overflow-hidden">
         <Sidebar
           activeView={activeView}
           collapsed={collapsed}
           onSwitch={setActiveView}
           sessions={sessions}
           onActivateStudio={activateStudio}
+          onToggleSidebar={() => setCollapsed((v) => !v)}
           onOpenByok={() => setByokOpen(true)}
           onOpenCustomProvider={() => setCustomProviderOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="content">
-          <div className={"studio" + (activeView === "image" ? "" : " hidden")}>
+        <div className="relative flex-1 overflow-hidden bg-background">
+          <div className={cn("h-full w-full", activeView !== "image" && "hidden")}>
             <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} />
           </div>
-          <div className={"studio" + (activeView === "video" ? "" : " hidden")}>
+          <div className={cn("h-full w-full", activeView !== "video" && "hidden")}>
             <VideoStudio session={videoSession} jump={videoJump} onJumpConsumed={() => setVideoJump(null)} />
           </div>
-          <div className={"studio" + (activeView === "gallery" ? "" : " hidden")}>
+          <div className={cn("h-full w-full", activeView !== "gallery" && "hidden")}>
             <GalleryView onImageToVideo={handleImageToVideo} />
           </div>
         </div>

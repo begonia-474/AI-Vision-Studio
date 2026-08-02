@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconDownload, IconPlay, IconRefresh, IconTrash } from "../lib/icons";
+import { cn } from "../lib/utils";
 import type { ResultItem, ResultStatus } from "../studios/sessionStore";
 import type { ModelDef } from "../models/registry";
 
@@ -18,7 +19,6 @@ interface TaskTimelineProps {
   onBottomStateChange?: (atBottom: boolean) => void;
   onImageToVideo?: (src: string, prompt: string) => void;
   onDeleteTask: (taskId: string) => void;
-  onDeleteItem: (id: string) => void;
   onRegenerate: (taskId: string) => void;
 }
 
@@ -73,15 +73,22 @@ function FakePct() {
     }, 150);
     return () => clearInterval(id);
   }, []);
-  return <span className="fake-pct">{pct}%</span>;
+  return <span className="text-[30px] font-extrabold tracking-wide text-primary drop-shadow-[0_0_24px_rgba(59,130,246,.40)]">{pct}%</span>;
 }
 
 const FLOAT_TINT = [
-  "radial-gradient(circle at 50% 40%, rgba(34,211,238,.18), transparent 70%)",
-  "radial-gradient(circle at 50% 40%, rgba(168,85,247,.18), transparent 70%)",
-  "radial-gradient(circle at 50% 40%, rgba(34,211,238,.18), transparent 70%)",
-  "radial-gradient(circle at 50% 40%, rgba(168,85,247,.18), transparent 70%)",
+  "radial-gradient(circle at 50% 40%, rgba(59,130,246,.18), transparent 70%)",
+  "radial-gradient(circle at 50% 40%, rgba(96,165,250,.18), transparent 70%)",
+  "radial-gradient(circle at 50% 40%, rgba(59,130,246,.18), transparent 70%)",
+  "radial-gradient(circle at 50% 40%, rgba(96,165,250,.18), transparent 70%)",
 ];
+
+const FC_BASE =
+  "h-[112px] w-24 shrink-0 overflow-hidden rounded-2xl border border-border-4 bg-chip shadow-[0_10px_30px_var(--shadow)] transition-all duration-300 hover:z-20 hover:scale-110 hover:rotate-0";
+const FC_POS = ["-rotate-12", "-rotate-4 -ml-4", "size-24 rounded-full rotate-6 -ml-4", "rotate-12 -ml-4"];
+
+const tlHoverBtn =
+  "grid size-8 cursor-pointer place-items-center rounded-full border border-border-4 bg-btn-dark text-foreground backdrop-blur-[8px] transition-all duration-150 hover:bg-primary hover:text-black";
 
 export function TaskTimeline({
   results,
@@ -91,7 +98,6 @@ export function TaskTimeline({
   onBottomStateChange,
   onImageToVideo,
   onDeleteTask,
-  onDeleteItem,
   onRegenerate,
 }: TaskTimelineProps) {
   const { t } = useTranslation();
@@ -152,19 +158,19 @@ export function TaskTimeline({
 
   if (groups.length === 0) {
     return (
-      <div className="empty-state">
-        <div className="float-cards">
+      <div className="flex h-full min-h-[50vh] flex-col items-center justify-center p-4 text-center animate-[fadeInUp_.7s]">
+        <div className="mb-10 flex items-center justify-center gap-3">
           {FLOAT_TINT.map((tint, i) => (
-            <div className="fc" key={i} style={{ background: "var(--empty-card)" }}>
+            <div className={cn(FC_BASE, FC_POS[i])} key={i} style={{ background: "var(--empty-card)" }}>
               <div style={{ width: "100%", height: "100%", background: tint }} />
             </div>
           ))}
         </div>
-        <h1 className="empty-title">
-          <span className="pre">{t("result.startWith")}</span>
-          <span className="big">{model.name}</span>
+        <h1 className="m-0 mb-4 flex flex-col items-center gap-1 text-4xl font-extrabold tracking-tight">
+          <span className="text-[30px] font-black uppercase tracking-[.05em] text-foreground/90">{t("result.startWith")}</span>
+          <span className="text-[40px] font-black uppercase tracking-tight text-primary">{model.name}</span>
         </h1>
-        <p className="empty-desc">
+        <p className="m-0 max-w-[480px] text-sm leading-relaxed text-muted-foreground">
           {studio === "video" ? t("result.descVideo") : t("result.descImage")}
         </p>
       </div>
@@ -172,42 +178,34 @@ export function TaskTimeline({
   }
 
   return (
-    <div className="tl-stream">
+    <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-[30px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
       {groups.map((g) => (
-        <div className="tl-item" key={g.taskId}>
-          {/* 用户气泡：prompt + 参数 + 时间 + 删除 */}
-          <div className="tl-user">
-            <div className="tl-bubble">
-              <div className="tl-prompt-wrap">
-                <p className="tl-prompt">{g.prompt}</p>
+        <div className="grid items-start gap-x-[18px] grid-cols-[minmax(220px,.36fr)_minmax(0,1fr)] max-[760px]:flex max-[760px]:flex-col max-[760px]:gap-2.5" key={g.taskId}>
+          {/* 用户气泡：prompt + 参数 + 时间（删除入口在产物卡右上角，整任务删除） */}
+          <div className="flex justify-start">
+            <div className="flex w-full max-w-none flex-col gap-1.5 rounded-[16px_16px_16px_4px] border border-border-2 bg-chip px-3.5 py-2.5">
+              <div className="relative min-w-0">
+                <p className="m-0 aspect-square overflow-y-auto whitespace-pre-wrap break-words pr-1 text-[13px] leading-relaxed text-foreground [scrollbar-color:var(--scroll-thumb)_transparent] [scrollbar-width:thin]">{g.prompt}</p>
               </div>
-              <div className="tl-meta">
-                <span className="model-tag">{g.model}</span>
-                <span className="ar-tag">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-[6px] border border-[rgba(59,130,246,.20)] bg-[rgba(59,130,246,.10)] px-2 py-0.5 text-[10px] font-bold capitalize text-primary">{g.model}</span>
+                <span className="text-[10px] text-muted-foreground">
                   {g.ar} · {g.extra}
                 </span>
-                <span className="tl-time">
+                <span className="text-[10px] text-faint-2">
                   {new Date(g.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
                 </span>
-                <button
-                  className="tl-del"
-                  title={t("common.delete")}
-                  aria-label={t("common.delete")}
-                  onClick={() => onDeleteTask(g.taskId)}
-                >
-                  <IconTrash size={12} />
-                </button>
               </div>
             </div>
           </div>
 
           {/* 生成区 */}
           {g.status === "loading" && (
-            <div className="tl-gen tl-loading-wrap" aria-busy="true">
-              <div className="tl-loading-grid">
+            <div className="flex min-w-0 flex-col gap-2" aria-busy="true">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
                 {g.items.map((it) => (
                   <div
-                    className="tl-placeholder"
+                    className="grid min-w-0 place-items-center overflow-hidden rounded-xl border border-dashed border-border-3 bg-card-shade"
                     key={it.id}
                     style={{ aspectRatio: mediaAspect(g.ar) }}
                   >
@@ -215,37 +213,37 @@ export function TaskTimeline({
                   </div>
                 ))}
               </div>
-              {g.phase && <span className="tl-phase">{phaseLabel(t, g.phase)}</span>}
+              {g.phase && <span className="self-end text-[11px] text-text-2">{phaseLabel(t, g.phase)}</span>}
             </div>
           )}
           {g.status === "error" && (
-            <div className="tl-gen tl-error" role="alert">
+            <div className="min-w-0 rounded-md border border-[rgba(239,68,68,.25)] bg-[rgba(239,68,68,.06)] px-4 py-3.5 text-xs leading-relaxed break-words text-destructive" role="alert">
               {g.items[0]?.error ?? t("common.generationFailed")}
             </div>
           )}
           {g.status === "done" && (
-            <div className="tl-gen tl-images">
+            <div className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
               {g.items.map((it) => (
                 <div
-                  className="tl-img"
+                  className="group/img relative cursor-pointer overflow-hidden rounded-xl border border-border-4 bg-card transition-colors duration-300 hover:border-[rgba(59,130,246,.50)]"
                   key={it.id}
                   role="group"
                   aria-label={t("result.cardGroup")}
                   style={{ aspectRatio: mediaAspect(g.ar) }}
                 >
                   {studio === "image" ? (
-                    <img src={it.url} alt="" loading="lazy" />
+                    <img src={it.url} alt="" loading="lazy" className="block h-full w-full object-cover" />
                   ) : (
                     <>
                       <img src={it.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", position: "absolute", inset: 0 }} />
-                      <div className="tl-play">
-                        <IconPlay size={16} />
+                      <div className="absolute inset-0 grid place-items-center before:absolute before:inset-0 before:content-[''] before:bg-black/25">
+                        <IconPlay size={16} className="relative size-12 rounded-full border border-border-4 bg-btn-dark p-4 text-foreground backdrop-blur-[8px]" />
                       </div>
                     </>
                   )}
-                  <div className="tl-hover">
+                  <div className="absolute top-2 right-2 z-10 flex flex-col gap-2 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
                     <button
-                      className="dl"
+                      className={tlHoverBtn}
                       title={t("common.open")}
                       aria-label={t("common.open")}
                       onClick={(e) => {
@@ -256,20 +254,20 @@ export function TaskTimeline({
                       <IconDownload size={14} />
                     </button>
                     <button
-                      className="del"
-                      title={t("common.delete")}
-                      aria-label={t("common.delete")}
+                      className={cn(tlHoverBtn, "hover:bg-destructive hover:text-white")}
+                      title={t("result.deleteTask")}
+                      aria-label={t("result.deleteTask")}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDeleteItem(it.id);
+                        onDeleteTask(g.taskId);
                       }}
                     >
                       <IconTrash size={14} />
                     </button>
                   </div>
-                  <div className="tl-bottom">
+                  <div className="absolute bottom-2 left-2 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
                     <button
-                      className="tl-regen"
+                      className="flex cursor-pointer items-center gap-1 rounded-full border border-border-4 bg-btn-dark px-3 py-1.5 text-[11px] font-bold text-foreground backdrop-blur-[8px] transition-all duration-150 hover:border-primary hover:bg-primary hover:text-black"
                       title={t("result.regenerate")}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -281,7 +279,7 @@ export function TaskTimeline({
                     </button>
                     {studio === "image" && onImageToVideo && (
                       <button
-                        className="tl-i2v"
+                        className="flex cursor-pointer items-center gap-1 rounded-full border border-[rgba(59,130,246,.10)] bg-primary px-3 py-1.5 text-[11px] font-bold text-black transition-all duration-150 hover:bg-accent-h"
                         onClick={(e) => {
                           e.stopPropagation();
                           onImageToVideo(it.path ?? it.url ?? "", g.prompt);

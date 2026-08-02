@@ -36,8 +36,8 @@ export function ImageStudio({ session, onImageToVideo }: ImageStudioProps) {
   }, []);
 
   return (
-    <div className="studio-root">
-      <div className="results-stream" ref={streamRef}>
+    <div className="relative flex h-full w-full flex-col items-center justify-center bg-background p-4">
+      <div className="m-0 flex-1 w-full overflow-y-auto px-2 pb-[220px]" ref={streamRef}>
         <TaskTimeline
           key={session.activeId}
           results={api.results}
@@ -47,17 +47,19 @@ export function ImageStudio({ session, onImageToVideo }: ImageStudioProps) {
           onBottomStateChange={handleBottomChange}
           onImageToVideo={onImageToVideo}
           onDeleteTask={api.removeTask}
-          onDeleteItem={api.removeResult}
           onRegenerate={api.regenerate}
         />
       </div>
       {!atBottom && (
         <button
-          className={"back-bottom" + (composerCollapsed ? " compact" : "")}
+          className={
+            "absolute left-1/2 z-[35] flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-full border border-border-3 bg-overlay px-3.5 py-[7px] text-[11px] text-text-2 shadow-[0_8px_24px_var(--shadow-lg)] backdrop-blur-[16px] transition-colors duration-150 animate-[fadeInUp_.2s] hover:border-primary hover:text-primary" +
+            (composerCollapsed ? " bottom-[88px]" : " bottom-[300px]")
+          }
           type="button"
           onClick={scrollToBottom}
         >
-          <IconChevron className="back-bottom-icon" size={14} />
+          <IconChevron className="rotate-180" size={14} />
           <span>{t("prompt.backToBottom")}</span>
         </button>
       )}
