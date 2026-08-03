@@ -1,4 +1,4 @@
-// 模型注册表（前端侧）—— 数据源 docs/model-registry.md
+// 模型注册表（前端侧）—— 本文件为内置模型的单一数据源
 // 与后端 provider_id 对齐：volcark / kling / wanxiang / minimax 内置；
 // custom:<uuid> 为自定义厂商（JSON 配置，协议：modelscope / huggingface / openai-compatible）。
 // ModelDropdown 与参数 popover 均读此表动态渲染。
