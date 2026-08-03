@@ -31,12 +31,19 @@ export function VideoStudio({ session, jump, onJumpConsumed, onReEdit }: VideoSt
   const [detailIdx, setDetailIdx] = useState<number | null>(null);
   const { t } = useTranslation();
 
+  // 底部预留：输入条本体 + bottom-4 偏移(16) + 与任务时间线一致的间距(pb-6 = 24)。
+  // 折叠时贴合胶囊条（~52 + 40 ≈ 92），不残留死空间；展开时内容末尾始终停在输入条上方 24px。
+  const bottomPadding = Math.max(composerH + 40, 92);
+
   // 输入条高度变化：滚动区底部让位，长提示词展开时不被遮住（即梦/krea 行为）。
   const handleComposerHeight = useCallback((h: number) => setComposerH(h), []);
 
   // 时间线汇报底部状态：上滑离开底部时输入条收起（即梦式折叠），回到底部时展开。
-  const handleBottomChange = useCallback((bottom: boolean) => {
+  // layout 事件 = 折叠动画让位引发的被动回滚：用户实际已在底部，只同步位置，
+  // 不触发展开，否则折叠到一半又被展开、输入条持续遮挡结果网格。
+  const handleBottomChange = useCallback((bottom: boolean, layout = false) => {
     setAtBottom(bottom);
+    if (layout && bottom) return;
     setComposerCollapsed(!bottom);
   }, []);
 
@@ -87,13 +94,14 @@ export function VideoStudio({ session, jump, onJumpConsumed, onReEdit }: VideoSt
 
   return (
     <div className="relative flex h-full w-full flex-col items-center justify-center bg-background p-4">
-      <div className="m-0 flex-1 w-full overflow-y-auto px-2" ref={streamRef} style={{ paddingBottom: Math.max(composerH + 24, 220) }}>
+      <div className="m-0 flex-1 w-full overflow-y-auto px-2" ref={streamRef} style={{ paddingBottom: bottomPadding }}>
         <TaskTimeline
           key={session.activeId}
           results={api.results}
           studio="video"
           model={api.model}
           scrollRef={streamRef}
+          bottomPadding={bottomPadding}
           onBottomStateChange={handleBottomChange}
           onDeleteTask={api.removeTask}
           onRegenerate={api.regenerate}

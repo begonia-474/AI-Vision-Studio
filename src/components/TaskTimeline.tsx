@@ -17,7 +17,11 @@ interface TaskTimelineProps {
   studio: "image" | "video";
   model: ModelDef;
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  onBottomStateChange?: (atBottom: boolean) => void;
+  /** 底部输入条预留高度（滚动容器 paddingBottom 的当前值）。用它把「距滚动区底部」换算成「距内容末尾」：
+   *  展开/折叠动画改变预留时内容末尾不移动，atBottom 不会因底部被推远/拉近而误翻转 */
+  bottomPadding?: number;
+  /** 是否位于底部附近（滚动区让输入条展开/收起）。layout=true 表示该次变化由布局收缩（折叠动画让位）被动钳制产生，非用户滚动 */
+  onBottomStateChange?: (atBottom: boolean, layout?: boolean) => void;
   onImageToVideo?: (src: string, prompt: string) => void;
   onDeleteTask: (taskId: string) => void;
   onRegenerate: (taskId: string) => void;
@@ -97,6 +101,7 @@ export function TaskTimeline({
   studio,
   model,
   scrollRef,
+  bottomPadding,
   onBottomStateChange,
   onImageToVideo,
   onDeleteTask,
@@ -144,14 +149,26 @@ export function TaskTimeline({
   // 注意：不在挂载时立即调用 onScroll()——否则高内容会把 stick 置为 false，
   // 导致重启 / 切换会话后无法自动回到底部。
   const stick = useRef(true);
+  const lastScrollHeight = useRef(0);
+  const bottomPaddingRef = useRef(0);
+  bottomPaddingRef.current = bottomPadding ?? 0;
   const [menuTask, setMenuTask] = useState<string | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onScroll = () => {
-      const next = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      // 参照「内容末尾」（滚动区底部减去输入条预留）而非滚动区底部：预留随折叠动画伸缩时
+      // 内容末尾固定不动，atBottom 判定不会被动画推远/拉近——否则展开把底部推远，
+      // 继续滚动误判「离开底部」→ 折叠，形成「像没有最底部」的循环。
+      const next = el.scrollHeight - bottomPaddingRef.current - el.scrollTop - el.clientHeight < 80;
       stick.current = next;
-      onBottomStateChange?.(next);
+      // 折叠动画期间滚动区 padding 随输入条收缩 → scrollHeight 变小，
+      // 浏览器会把 scrollTop 被动钳制回新底部并派发 scroll 事件。
+      // 这类布局事件不算「用户滚回底部」，标记 layout 交给上层：只同步位置、不触发展开，
+      // 否则会出现折叠到一半又被展开的抖动（且展开态输入条会一直遮挡结果网格）。
+      const layoutShrink = el.scrollHeight < lastScrollHeight.current;
+      lastScrollHeight.current = el.scrollHeight;
+      onBottomStateChange?.(next, layoutShrink);
     };
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
