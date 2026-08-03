@@ -25,13 +25,9 @@ export const enUS: ZhDict = {
     imageStudio: "Image Studio",
     videoStudio: "Video Studio",
     gallery: "Gallery",
-    galleryTitle: "Works gallery",
     customProvider: "Custom Providers",
-    customProviderTitle: "Manage custom providers",
     byok: "BYOK",
-    byokTitle: "BYOK provider keys",
     settings: "Settings",
-    settingsTitle: "Settings",
   },
   gallery: {
     history: "Generation history",

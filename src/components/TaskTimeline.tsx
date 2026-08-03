@@ -249,7 +249,7 @@ export function TaskTimeline({
                   if (first?.url) window.open(first.url, "_blank");
                 }}
               >
-                <div className="max-h-[200px] overflow-y-auto [scrollbar-color:var(--scroll-thumb)_transparent] [scrollbar-width:thin] hover:[scrollbar-color:var(--scroll-thumb)_transparent]">
+                <div className="max-h-[200px] overflow-y-auto overscroll-contain [scrollbar-color:var(--scroll-thumb)_transparent] [scrollbar-width:thin] hover:[scrollbar-color:var(--scroll-thumb)_transparent]">
                   {g.prompt}
                 </div>
               </button>
@@ -372,7 +372,6 @@ export function TaskTimeline({
                           <div className="pointer-events-none flex flex-col-reverse">
                             <button
                               className="pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                              title={t("result.regenerate")}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onRegenerate(g.taskId);
@@ -383,7 +382,6 @@ export function TaskTimeline({
                             </button>
                             <button
                               className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                              title={t("gallery.reEdit")}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 onReEdit?.(it);
@@ -411,7 +409,6 @@ export function TaskTimeline({
                             {studio === "image" && onImageToVideo && (
                               <button
                                 className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                                title={t("result.imgToVideo")}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onImageToVideo(it.path ?? it.url ?? "", g.prompt);
@@ -439,7 +436,6 @@ export function TaskTimeline({
                           <span className="flex-grow" />
                           <button
                             className="pointer-events-auto flex w-fit min-w-[28px] cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                            title={t("common.open")}
                             onClick={(e) => {
                               e.stopPropagation();
                               if (it.url) window.open(it.url, "_blank");
@@ -457,7 +453,6 @@ export function TaskTimeline({
                 <div className="flex min-h-[28px] w-full flex-wrap items-center justify-end gap-1 text-xs font-medium text-text-3 transition-[translate,opacity] duration-150 ease-out translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100">
                   <button
                     className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-hover"
-                    title={t("gallery.download")}
                     onClick={() => {
                       const first = g.items.find((x) => x.path);
                       if (first?.path) {

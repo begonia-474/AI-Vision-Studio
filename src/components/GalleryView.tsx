@@ -520,16 +520,16 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
               <span className="px-1.5 text-[12px] font-medium whitespace-nowrap text-[#111827]">
                 {t("gallery.selectedItems", { n: selected.size })}
               </span>
-              <button className={batchBtn} disabled={selected.size === 0} onClick={removeSelected} title={t("gallery.deleteConfirm")}>
+              <button className={batchBtn} disabled={selected.size === 0} onClick={removeSelected}>
                 <IconTrash size={13} /> {t("common.delete")}
               </button>
-              <button className={batchBtn} disabled={selected.size === 0} onClick={downloadSelected} title={t("gallery.download")}>
+              <button className={batchBtn} disabled={selected.size === 0} onClick={downloadSelected}>
                 <IconDownload size={13} /> {t("gallery.download")}
               </button>
-              <button className={batchBtn} disabled title={t("gallery.publish")}>
+              <button className={batchBtn} disabled>
                 <IconUpload size={13} /> {t("gallery.publish")}
               </button>
-              <button className={batchBtn} disabled={selected.size === 0} onClick={starSelected} title={t("gallery.star")}>
+              <button className={batchBtn} disabled={selected.size === 0} onClick={starSelected}>
                 <IconStar size={13} filled /> {t("gallery.star")}
               </button>
               <span className="mx-1 h-4 w-px bg-[#e5e7eb]" />
@@ -785,7 +785,6 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
                           selected.has(it.id) && "z-[2] shadow-[0_0_0_2px_#2563eb]",
                         )}
                         key={entry.key}
-                        title={it.prompt}
                         onClick={() => (manage ? toggleSelect(it.id) : openDetail(entry))}
                       >
                         {entry.thumbnail && img ? (

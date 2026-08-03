@@ -23,13 +23,9 @@ export const zhCN = {
     imageStudio: "图像工作室",
     videoStudio: "视频工作室",
     gallery: "图库",
-    galleryTitle: "作品图库",
     customProvider: "自定义厂商",
-    customProviderTitle: "自定义厂商管理",
     byok: "BYOK",
-    byokTitle: "BYOK 厂商 Key 管理",
     settings: "设置",
-    settingsTitle: "设置",
   },
   gallery: {
     history: "生成历史",

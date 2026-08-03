@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toAssetUrl } from "../api";
 import { IconChevron } from "../lib/icons";
 import { PromptComposer } from "../components/PromptComposer";
 import { TaskTimeline } from "../components/TaskTimeline";
@@ -71,6 +72,10 @@ export function ImageStudio({ session, onImageToVideo, jump, onJumpConsumed, onR
             onImageToVideo: (src, prompt) => {
               setDetailIdx(null);
               onImageToVideo?.(src, prompt);
+            },
+            onImageToImage: (src, prompt) => {
+              setDetailIdx(null);
+              api.applyJump({ prompt, refs: [toAssetUrl(src)] });
             },
             onReEdit: () => {
               setDetailIdx(null);
