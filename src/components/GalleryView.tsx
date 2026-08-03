@@ -168,7 +168,14 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
     let un: (() => void) | undefined;
     onProgress((p) => {
       if (p.phase === "done" || p.phase === "failed") refresh();
-    }).then((u) => (un = u));
+    }).then((u) => {
+      // 竞态防护：listen 注册完成前若已卸载，立即注销，避免监听器残留
+      if (!aliveRef.current) {
+        u();
+      } else {
+        un = u;
+      }
+    });
     return () => {
       aliveRef.current = false;
       un?.();

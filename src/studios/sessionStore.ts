@@ -297,7 +297,12 @@ export function useSessionStore(studio: Studio): SessionApi {
         ),
       }));
     }).then((u) => {
-      un = u;
+      // 竞态防护：listen 注册完成前若已卸载，立即注销，避免监听器残留
+      if (!aliveRef.current) {
+        u();
+      } else {
+        un = u;
+      }
     });
     return () => {
       aliveRef.current = false;
