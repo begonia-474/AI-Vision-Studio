@@ -35,6 +35,9 @@ pub struct GenRequest {
     pub quality: Option<String>,
     #[serde(default)]
     pub duration: Option<String>,
+    /// 图像生图模式：single=每张图独立请求（循环 n 次）；group=一次请求组图 auto+max_images。
+    #[serde(default)]
+    pub mode: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
     #[serde(default)]

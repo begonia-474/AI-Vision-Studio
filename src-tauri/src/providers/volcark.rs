@@ -51,14 +51,36 @@ fn supports_sequential(model: &str) -> bool {
     !model.contains("5-0-pro")
 }
 
-/// 图像 size 像素串：按 model + quality + ratio 取官方像素表（方式2）。
-/// 各模型方式2 总像素区间与档位：
-///   - 5.0 pro:  [921600, 4624220]，档位 1K/1.5K/2K（无 4K）；像素表与 lite/4.5/4.0 不同
-///   - 5.0 lite: [3686400, 16777216]，档位 2K/3K/4K
-///   - 4.5:      [3686400, 16777216]，档位 2K/4K
-///   - 4.0:      [921600, 16777216]，档位 1K/2K/4K
-/// 1.5K 与 1K 同价且效果更优，归并到 2K 档像素。3K 仅 5.0 lite（注册表 qualities 控制）。
-fn volcark_image_size(model: &str, quality: &str, ar: &str) -> String {
+/// 各模型方式2 总像素区间（官方规格）：
+///   - 5.0 pro:  [921600, 4624220]
+///   - 5.0 lite: [3686400, 16777216]
+///   - 4.5:      [3686400, 16777216]
+///   - 4.0:      [921600, 16777216]
+fn total_pixel_bounds(model: &str) -> (u64, u64) {
+    if model.contains("5-0-pro") {
+        (921_600, 4_624_220)
+    } else if model.contains("4-0") {
+        (921_600, 16_777_216)
+    } else {
+        // 5.0 lite / 4.5
+        (3_686_400, 16_777_216)
+    }
+}
+
+/// 图像 size 像素串：优先接受前端自定义宽高像素值（须满足该模型总像素区间），
+/// 否则按 model + quality + ratio 取官方像素表（方式2）。
+fn volcark_image_size(model: &str, quality: &str, ar: &str, custom: Option<&str>) -> String {
+    if let Some(px) = custom {
+        if let Some((w, h)) = px.split_once('x') {
+            if let (Ok(w), Ok(h)) = (w.parse::<u64>(), h.parse::<u64>()) {
+                let total = w.saturating_mul(h);
+                let (lo, hi) = total_pixel_bounds(model);
+                if total >= lo && total <= hi {
+                    return format!("{w}x{h}");
+                }
+            }
+        }
+    }
     // 5.0 pro 独立像素表（与 lite/4.5/4.0 不同：如 2K 16:9 pro=2816x1584 vs lite=2848x1600）
     if model.contains("5-0-pro") {
         return match quality {
@@ -252,12 +274,19 @@ impl VolcArkProvider {
             .unwrap_or_else(|| DEFAULT_IMAGE_MODEL.to_string());
         let ar = req.aspect_ratio.as_deref().unwrap_or("1:1");
         let quality = req.quality.as_deref().unwrap_or("2K");
-        let size = volcark_image_size(&model, quality, ar);
+        let size = volcark_image_size(&model, quality, ar, Some(&req.size));
+
+        let want_n = req.n.max(1) as usize;
+        // 组图模式（mode=group 且模型支持）：一次请求 sequential auto + max_images（一组关联图）；
+        // 单图模式（默认，含 5.0 pro）：官方 API 无 n 参数，同样参数**并行**请求，每张图一个独立请求
+        // （哩布行为：N 张 = N 次请求，计费 N 份），全部归入同一任务。
+        let group = req.mode.as_deref() == Some("group") && want_n > 1 && supports_sequential(&model);
+        let loops = if group { 1 } else { want_n };
 
         let mut payload = json!({
-            "model": model,
+            "model": model.clone(),
             "prompt": req.prompt,
-            "size": size,
+            "size": size.clone(),
             "response_format": "url",
             "watermark": false, // 关闭「AI 生成」水印
         });
@@ -267,37 +296,77 @@ impl VolcArkProvider {
         if req.capability == "i2i" && !req.references.is_empty() {
             payload["image"] = json!(req.references);
         }
-        // 多图：API 无 `n` 参数，用组图模式（仅 4.5/4.0/lite；5.0 pro 强制单图）
-        let want_n = req.n.max(1) as usize;
-        if want_n > 1 && supports_sequential(&model) {
+        if group {
             payload["sequential_image_generation"] = json!("auto");
             payload["sequential_image_generation_options"] = json!({ "max_images": want_n });
         }
 
-        let resp = self
-            .client
+        // 并行发起（组图为单次请求；单图模式并发 N 个）。
+        let mut handles = Vec::with_capacity(loops);
+        for _ in 0..loops {
+            let client = self.client.clone();
+            let key = api_key.to_string();
+            let body = payload.clone();
+            handles.push(tokio::spawn(async move {
+                Self::image_generate_once(client, key, body).await
+            }));
+        }
+
+        let mut urls = Vec::new();
+        for h in handles {
+            match h.await {
+                Ok(Ok(mut u)) => urls.append(&mut u),
+                Ok(Err(msg)) => {
+                    return Ok(TaskHandle {
+                        provider_id: PROVIDER_ID.to_string(),
+                        task_id: String::new(),
+                        phase: TaskPhase::Failed,
+                        remote_urls: vec![],
+                        error: Some(msg),
+                    });
+                }
+                Err(e) => {
+                    return Ok(TaskHandle {
+                        provider_id: PROVIDER_ID.to_string(),
+                        task_id: String::new(),
+                        phase: TaskPhase::Failed,
+                        remote_urls: vec![],
+                        error: Some(format!("请求任务异常: {}", e)),
+                    });
+                }
+            }
+        }
+
+        Ok(TaskHandle {
+            provider_id: PROVIDER_ID.to_string(),
+            task_id: String::new(),
+            phase: TaskPhase::Succeeded,
+            remote_urls: urls,
+            error: None,
+        })
+    }
+
+    /// 单次图像生成请求：POST /images/generations → 解析 data[].url（组图场景一次返回多张）。
+    async fn image_generate_once(
+        client: reqwest::Client,
+        api_key: String,
+        payload: serde_json::Value,
+    ) -> Result<Vec<String>, String> {
+        let resp = client
             .post(format!("{}/images/generations", BASE_URL))
-            .bearer_auth(api_key)
+            .bearer_auth(&api_key)
             .json(&payload)
             .send()
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
-
         let status = resp.status();
         let body = resp
             .text()
             .await
             .map_err(|e| format!("读取响应失败: {}", e))?;
         if !status.is_success() {
-            return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
-                task_id: String::new(),
-                phase: TaskPhase::Failed,
-                remote_urls: vec![],
-                error: Some(format!("HTTP {}: {}", status, body)),
-            });
+            return Err(format!("HTTP {}: {}", status, body));
         }
-
         let v: serde_json::Value =
             serde_json::from_str(&body).map_err(|e| format!("解析响应失败: {}", e))?;
         // 顶层错误: { error: { code, message } }（整个请求未生成任何图时返回）
@@ -306,13 +375,7 @@ impl VolcArkProvider {
             .and_then(|e| e.get("message"))
             .and_then(|m| m.as_str())
         {
-            return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
-                task_id: String::new(),
-                phase: TaskPhase::Failed,
-                remote_urls: vec![],
-                error: Some(err_msg.to_string()),
-            });
+            return Err(err_msg.to_string());
         }
         let mut urls = Vec::new();
         if let Some(data) = v.get("data").and_then(|d| d.as_array()) {
@@ -328,24 +391,10 @@ impl VolcArkProvider {
                 }
             }
         }
-
         if urls.is_empty() {
-            return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
-                task_id: String::new(),
-                phase: TaskPhase::Failed,
-                remote_urls: vec![],
-                error: Some("响应未包含图片 URL".to_string()),
-            });
+            return Err("响应未包含图片 URL".to_string());
         }
-
-        Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
-            task_id: String::new(),
-            phase: TaskPhase::Succeeded,
-            remote_urls: urls,
-            error: None,
-        })
+        Ok(urls)
     }
 
     async fn submit_video(&self, req: &GenRequest, api_key: &str) -> Result<TaskHandle, String> {

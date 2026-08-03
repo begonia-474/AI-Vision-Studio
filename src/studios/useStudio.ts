@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
+import { aspectToSize, parseSizePx, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import type { ResultItem, SessionApi } from "./sessionStore";
 import type { StudioJump } from "../types";
@@ -20,7 +20,11 @@ export interface StudioApi {
   ar: string;
   quality: string;
   duration: string; // 仅视频
-  batch: number; // 仅图像
+  batch: number; // 仅图像；组图模式下为组图张数（max_images）
+  mode: "single" | "group"; // 生图模式：单图固定 1 张（API 无 n），组图 = sequential auto
+  size: { w: number; h: number } | null; // 自定义像素尺寸（仅声明 size 区的模型，选中比例时同步）
+  sizeLocked: boolean; // W/H 锁定比例联动
+  paramValues: Record<string, string | number>; // 自定义厂商自由参数（popover 运行时值，提交时覆盖 params 默认）
   prompt: string;
   refs: string[];
   results: ResultItem[]; // 当前会话的结果
@@ -32,6 +36,10 @@ export interface StudioApi {
   setQuality: (v: string) => void;
   setDuration: (v: string) => void;
   setBatch: (n: number) => void;
+  setMode: (v: "single" | "group") => void;
+  setSize: (w: number, h: number) => void;
+  setSizeLocked: (v: boolean) => void;
+  setParamValue: (key: string, v: string | number) => void;
   selectModel: (m: ModelDef) => void;
   addRef: (url: string) => void;
   removeRef: (i: number) => void;
@@ -51,11 +59,94 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const [quality, setQuality] = useState(() => allModels[studio === "image" ? 0 : 1].qualities[0]);
   const [duration, setDuration] = useState(() => allModels[studio === "image" ? 0 : 1].durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
+  const [mode, setMode] = useState<"single" | "group">("single");
+  const [size, setSizeState] = useState<{ w: number; h: number } | null>(null);
+  const [sizeLocked, setSizeLocked] = useState(false);
+  const [paramValues, setParamValues] = useState<Record<string, string | number>>({});
   const [prompt, setPrompt] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
 
   const { results, stats } = session;
   const { running, finished, sessionTotal } = stats;
+
+  // 模型是否声明了 W/H 自定义尺寸区（volcark 像素尺寸厂商）。
+  const supportsCustomSize = useCallback(
+    (m: ModelDef) =>
+      m.sections?.some((s) => (s.type === "ratio" && s.size) || s.type === "size") ?? false,
+    [],
+  );
+
+  /** 选中比例：声明 size 区的模型同步出像素尺寸并解除锁定。
+   *  volcark 查官方表（按画质档位）；自定义模型无官方表——选项为像素串直取，
+   *  比例选项按当前 W/H 长边换算（默认 2048 系）。 */
+  const applyAr = useCallback(
+    (m: ModelDef, v: string, q?: string) => {
+      setAr(v);
+      if (!supportsCustomSize(m)) {
+        setSizeState(null);
+        return;
+      }
+      if (m.providerId === "volcark") {
+        const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q));
+        setSizeState({ w, h });
+        setSizeLocked(false);
+        return;
+      }
+      const px = /^(\d+)x(\d+)$/.exec(v);
+      if (px) {
+        setSizeState({ w: Number(px[1]), h: Number(px[2]) });
+        setSizeLocked(false);
+        return;
+      }
+      const rb = /^(\d+):(\d+)$/.exec(v);
+      if (rb) {
+        const a = Number(rb[1]);
+        const b = Number(rb[2]);
+        const cur = size;
+        const longSide = cur ? Math.max(cur.w, cur.h) : 2048;
+        const m2 = Math.max(a, b);
+        setSizeState({ w: Math.round((longSide * a) / m2), h: Math.round((longSide * b) / m2) });
+        setSizeLocked(false);
+      } else {
+        setSizeState(null);
+      }
+    },
+    [supportsCustomSize, size],
+  );
+
+  /** 面板/跳转共用入口：按当前模型解析比例。 */
+  const setArCb = useCallback((v: string) => applyAr(model, v, quality), [applyAr, model, quality]);
+
+  /** 画质切换：声明 size 区的模型按新档位换算当前比例的像素尺寸（比例不变）。
+   *  volcark 查官方表；自定义模型识别 K 档（1K/2K/3K/4K → 长边 1024×档位，保持比例），其余档位不联动。 */
+  const setQualityCb = useCallback(
+    (v: string) => {
+      setQuality(v);
+      if (!supportsCustomSize(model)) return;
+      if (model.providerId === "volcark") {
+        const { w, h } = parseSizePx(aspectToSize(model.providerId, model.id, ar, v));
+        setSizeState({ w, h });
+        return;
+      }
+      if (!size) return;
+      const km = /^(\d+(?:\.\d+)?)K$/i.exec(v);
+      if (!km) return;
+      const longSide = Math.round(Number(km[1]) * 1024);
+      const M = Math.max(size.w, size.h);
+      setSizeState({
+        w: Math.round((longSide * size.w) / M),
+        h: Math.round((longSide * size.h) / M),
+      });
+    },
+    [model, ar, size, supportsCustomSize],
+  );
+
+  const setSize = useCallback((w: number, h: number) => setSizeState({ w, h }), []);
+
+  const setParamValue = useCallback(
+    (key: string, v: string | number) => setParamValues((p) => ({ ...p, [key]: v })),
+    [],
+  );
 
   // 自定义模型（魔搭）列表变化时，保持当前选中模型；若已被删除则回退默认。
   useEffect(() => {
@@ -65,12 +156,24 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const selectModel = useCallback(
     (m: ModelDef) => {
       setModel(m);
-      setAr((prev) => (m.aspectRatios.includes(prev) ? prev : m.aspectRatios[0]));
-      setQuality((prev) => (m.qualities.includes(prev) ? prev : m.qualities[0]));
+      // 先定画质再换算尺寸：保证比例 → 像素换算使用新模型的档位。
+      const nextQ = m.qualities.includes(quality) ? quality : m.qualities[0];
+      setQuality(nextQ);
+      applyAr(m, m.aspectRatios.includes(ar) ? ar : m.aspectRatios[0], nextQ);
       if (m.durations) setDuration((prev) => (m.durations!.includes(prev) ? prev : m.durations![0]));
-      if (studio === "image") setBatch((prev) => Math.min(prev, m.maxRef ?? 4));
+      if (studio === "image") setBatch((prev) => Math.min(prev, m.custom ? 4 : m.maxRef ?? 4));
+      setMode("single");
+      // 自由参数：按新模型 param 分区初始化（默认取模块 def，兼容旧 params 配置）。
+      const nextParams: Record<string, string | number> = {};
+      for (const s of m.sections ?? []) {
+        if (s.type === "param") {
+          const d = s.def ?? m.custom?.params?.[s.key];
+          if (d != null && d !== "") nextParams[s.key] = s.kind === "number" ? Number(d) : d;
+        }
+      }
+      setParamValues(nextParams);
     },
-    [studio],
+    [applyAr, ar, quality, studio],
   );
 
   const addRef = useCallback((url: string) => setRefs((r) => [...r, url]), []);
@@ -102,13 +205,13 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       const m = allModels.find((x) => x.id === j.modelId);
       if (m) selectModel(m);
       setPrompt(j.prompt);
-      if (j.ar && (!m || m.aspectRatios.includes(j.ar))) setAr(j.ar);
-      if (j.quality && (!m || m.qualities.includes(j.quality))) setQuality(j.quality);
+      if (j.ar && (!m || m.aspectRatios.includes(j.ar))) applyAr(m ?? model, j.ar, j.quality ?? quality);
+      if (j.quality && (!m || m.qualities.includes(j.quality))) setQualityCb(j.quality);
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
-      if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m?.maxRef ?? 4));
+      if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m?.custom ? 4 : m?.maxRef ?? 4));
       if (j.refs) setRefs(j.refs);
     },
-    [allModels, selectModel],
+    [allModels, model, selectModel, applyAr, setQualityCb, quality],
   );
 
   // 一次提交 = 一个任务（taskId），与占位卡一一对应；无并发守卫，
@@ -123,16 +226,31 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       quality: string;
       duration: string;
       n: number;
+      mode: "single" | "group";
       refs: string[];
       isVideo: boolean;
     }) => {
-      const { taskId, prompt: p, model: m, ar: ar0, quality: q, duration: d, n, refs: refs0, isVideo } = params;
+      const { taskId, prompt: p, model: m, ar: ar0, quality: q, duration: d, n, mode, refs: refs0, isVideo } = params;
       const capability = refs0.length > 0 ? (isVideo ? "i2v" : "i2i") : isVideo ? "t2v" : "t2i";
-      const size = aspectToSize(m.providerId, ar0);
+      // 声明 size 区的模型（volcark）用自定义像素尺寸直传 size；其余仍走 aspect_ratio。
+      const useCustomSize = size !== null && supportsCustomSize(m);
+      const sizeField = useCustomSize ? `${size.w}x${size.h}` : aspectToSize(m.providerId, m.id, ar0, q);
       const extra = isVideo ? `${d}s · ${q}` : q;
       // 自定义厂商：透传用户按模型配置的自由参数（协议原生字段名，如
-      // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））
-      const customExtra = m.custom ? { params: m.custom.params } : undefined;
+      // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））。
+      // popover 里调整过的参数（paramValues）覆盖配置默认值；数值参数转 number，空值跳过。
+      let customExtra: { params: Record<string, string | number | null> } | undefined;
+      if (m.custom) {
+        const merged: Record<string, string | number | null> = { ...m.custom.params };
+        for (const s of m.sections ?? []) {
+          if (s.type === "param" && paramValues[s.key] !== undefined) {
+            const raw = paramValues[s.key];
+            if (raw === "") continue;
+            merged[s.key] = s.kind === "number" ? Number(raw) : raw;
+          }
+        }
+        customExtra = { params: merged };
+      }
 
       const ids = Array.from({ length: n }, () => uid());
       const now = Date.now();
@@ -161,11 +279,12 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           capability,
           prompt: p,
           model: m.id,
-          size,
+          size: sizeField,
           n,
           aspect_ratio: ar0,
           quality: q,
           duration: isVideo ? d : undefined,
+          mode: isVideo ? undefined : mode,
           references: refs0,
           extra: customExtra,
         });
@@ -200,7 +319,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         );
       }
     },
-    [session.patchActive, t],
+    [session.patchActive, t, size, supportsCustomSize, paramValues],
   );
 
   const handleGenerate = useCallback(async () => {
@@ -213,6 +332,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       session.renameSession(session.activeId, p.trim().slice(0, 12));
     }
 
+    // 张数：单图模式 = 后端并行 N 次独立请求（哩布计费行为）；组图模式 = 一次请求
+    // sequential auto + max_images=N。mode 语义由后端 volcark 适配器实现。
+    const n = studio === "video" ? 1 : batch;
+
     await submitTask({
       taskId: uid(),
       prompt: p,
@@ -220,11 +343,12 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       ar,
       quality,
       duration,
-      n: studio === "image" ? batch : 1,
+      n,
+      mode,
       refs,
       isVideo: studio === "video",
     });
-  }, [prompt, studio, batch, refs, model, ar, quality, duration, results, session.activeId, session.renameSession, submitTask]);
+  }, [prompt, studio, batch, mode, refs, model, ar, quality, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
   const regenerate = useCallback(
@@ -241,11 +365,12 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         quality: task.quality ?? quality,
         duration: task.duration ?? duration,
         n,
+        mode,
         refs: task.refs ?? [],
         isVideo: studio === "video",
       });
     },
-    [results, allModels, model, quality, duration, studio, submitTask],
+    [results, allModels, model, mode, quality, duration, studio, submitTask],
   );
 
   return {
@@ -255,6 +380,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     quality,
     duration,
     batch,
+    mode,
+    size,
+    sizeLocked,
+    paramValues,
     prompt,
     refs,
     results,
@@ -262,10 +391,14 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     finished,
     sessionTotal,
     setPrompt,
-    setAr,
-    setQuality,
+    setAr: setArCb,
+    setQuality: setQualityCb,
     setDuration,
     setBatch,
+    setMode,
+    setSize,
+    setSizeLocked,
+    setParamValue,
     selectModel,
     addRef,
     removeRef,

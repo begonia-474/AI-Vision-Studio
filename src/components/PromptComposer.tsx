@@ -6,14 +6,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ModelDropdown } from "./ModelDropdown";
-import { ParamPopover } from "./Popover";
+import { ParamPanel } from "./Popover";
 import { cn } from "../lib/utils";
 import { PROVIDER_LOGO } from "../lib/classes";
 import {
   IconAspect,
   IconChevron,
-  IconDuration,
-  IconQuality,
   IconSparkles,
   IconUpload,
 } from "../lib/icons";
@@ -40,9 +38,7 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
   const isVideo = api.studio === "video";
   const provider = PROVIDERS[api.model.providerId] ?? providerMeta(api.model.providerId);
   const [openModel, setOpenModel] = useState(false);
-  const [openAr, setOpenAr] = useState(false);
-  const [openQuality, setOpenQuality] = useState(false);
-  const [openDuration, setOpenDuration] = useState(false);
+  const [openParams, setOpenParams] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -60,9 +56,7 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
   // 避免旧弹层 deferPointerDownOutside 的焦点回迁把新弹层误关）。
   const closeOthers = () => {
     setOpenModel(false);
-    setOpenAr(false);
-    setOpenQuality(false);
-    setOpenDuration(false);
+    setOpenParams(false);
   };
   const openOne = (set: (v: boolean) => void) => (o: boolean) => {
     if (o) {
@@ -226,95 +220,28 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
             }
           />
 
-          {/* 比例 */}
-          <ParamPopover
-            open={openAr}
-            onOpenChange={openOne(setOpenAr)}
-            title={t("prompt.aspectRatio")}
-            options={api.model.aspectRatios}
-            current={api.ar}
-            onSelect={api.setAr}
+          {/* 参数（哩布风格：单入口多分区面板，分区按模型 sections 声明渲染） */}
+          <ParamPanel
+            open={openParams}
+            onOpenChange={openOne(setOpenParams)}
+            model={api.model}
+            api={api}
             trigger={
               <button
                 type="button"
-                className={cn(ctrlBtn, openAr && ctrlBtnActive)}
+                className={cn(ctrlBtn, openParams && ctrlBtnActive)}
               >
                 <IconAspect className={ctrlIco} size={16} />
-                <span className={cn(ctrlLabel, openAr && "opacity-100")}>{api.ar}</span>
+                <span className={cn(ctrlLabel, openParams && "opacity-100")}>
+                  {api.size ? `${api.size.w}×${api.size.h}` : api.ar}
+                  {isVideo
+                    ? ` | ${api.duration}${t("prompt.seconds")}`
+                    : ` | ${api.batch}${t("prompt.countUnit")}`}
+                </span>
+                <IconChevron className="size-[10px] shrink-0 opacity-45 group-hover/ctrl:opacity-100" size={10} />
               </button>
             }
           />
-
-          {/* 画质 */}
-          <ParamPopover
-            open={openQuality}
-            onOpenChange={openOne(setOpenQuality)}
-            title={t("prompt.resolution")}
-            options={api.model.qualities}
-            current={api.quality}
-            onSelect={api.setQuality}
-            trigger={
-              <button
-                type="button"
-                className={cn(ctrlBtn, openQuality && ctrlBtnActive)}
-              >
-                <IconQuality className={ctrlIco} size={16} />
-                <span className={cn(ctrlLabel, openQuality && "opacity-100")}>{api.quality}</span>
-              </button>
-            }
-          />
-
-          {/* 时长（仅视频） */}
-          {isVideo && (
-            <ParamPopover
-              open={openDuration}
-              onOpenChange={openOne(setOpenDuration)}
-              title={t("prompt.duration")}
-              options={(api.model.durations ?? []).map((d) => ({ value: d, label: `${d}s` }))}
-              current={api.duration}
-              onSelect={api.setDuration}
-              trigger={
-                <button
-                  type="button"
-                  className={cn(ctrlBtn, openDuration && ctrlBtnActive)}
-                >
-                  <IconDuration className={ctrlIco} size={16} />
-                  <span className={cn(ctrlLabel, openDuration && "opacity-100")}>{api.duration}s</span>
-                </button>
-              }
-            />
-          )}
-
-          {/* 批量（仅图像） */}
-          {!isVideo && (
-            <div className="flex h-9 select-none items-center gap-1 rounded-full border border-border-2 bg-soft px-2.5">
-              <button
-                type="button"
-                className="cursor-pointer border-0 bg-transparent p-0 px-1 text-sm font-extrabold leading-none text-muted-foreground hover:text-foreground"
-                aria-label={t("prompt.lessBatch")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  api.setBatch(Math.max(1, api.batch - 1));
-                }}
-              >
-                −
-              </button>
-              <span className="min-w-7 text-center text-xs font-semibold text-text-2">
-                {api.batch}/{api.model.maxRef ?? 4}
-              </span>
-              <button
-                type="button"
-                className="cursor-pointer border-0 bg-transparent p-0 px-1 text-sm font-extrabold leading-none text-muted-foreground hover:text-foreground"
-                aria-label={t("prompt.moreBatch")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  api.setBatch(Math.min(api.model.maxRef ?? 4, api.batch + 1));
-                }}
-              >
-                +
-              </button>
-            </div>
-          )}
 
           {/* Draw（仅图像，占位） */}
           {!isVideo && (

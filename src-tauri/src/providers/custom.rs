@@ -75,6 +75,8 @@ impl CustomProvider {
     // ============ 协议实现 ============
 
     /// 魔搭：异步任务，POST {base}/v1/{images|videos}/generations → task_id。
+    /// 官方无 n 参数：N 张 = 同样参数并行创建 N 个任务（哩布行为），task_id 打包为 JSON 数组，
+    /// poll 时拆分轮询全部并聚合输出。
     async fn submit_modelscope(
         &self,
         req: &GenRequest,
@@ -99,9 +101,68 @@ impl CustomProvider {
             payload["image_url"] = json!(req.references);
         }
 
-        let resp = self
-            .client
-            .post(format!("{}/{}", self.base_url, endpoint))
+        let loops = req.n.max(1) as usize;
+        let mut handles = Vec::with_capacity(loops);
+        for _ in 0..loops {
+            let client = self.client.clone();
+            let key = api_key.to_string();
+            let base_url = self.base_url.clone();
+            let ep = endpoint.to_string();
+            let body = payload.clone();
+            handles.push(tokio::spawn(async move {
+                Self::ms_create_once(client, &key, &base_url, &ep, body).await
+            }));
+        }
+
+        let mut task_ids = Vec::new();
+        for h in handles {
+            match h.await {
+                Ok(Ok(t)) => task_ids.push(t),
+                Ok(Err(msg)) => {
+                    return Ok(TaskHandle {
+                        provider_id: self.id.clone(),
+                        task_id: String::new(),
+                        phase: TaskPhase::Failed,
+                        remote_urls: vec![],
+                        error: Some(msg),
+                    });
+                }
+                Err(e) => {
+                    return Ok(TaskHandle {
+                        provider_id: self.id.clone(),
+                        task_id: String::new(),
+                        phase: TaskPhase::Failed,
+                        remote_urls: vec![],
+                        error: Some(format!("请求任务异常: {}", e)),
+                    });
+                }
+            }
+        }
+        // 单个任务直接用原 id；多个打包 JSON 数组，poll 拆分。
+        let packed = if task_ids.len() == 1 {
+            task_ids[0].clone()
+        } else {
+            serde_json::to_string(&task_ids).unwrap_or_else(|_| task_ids.join(","))
+        };
+        Ok(TaskHandle {
+            provider_id: self.id.clone(),
+            task_id: packed,
+            phase: TaskPhase::Submitted,
+            remote_urls: vec![],
+            error: None,
+        })
+    }
+
+    /// 单次创建魔搭异步任务 → task_id。
+    async fn ms_create_once(
+        client: reqwest::Client,
+        api_key: &str,
+        base_url: &str,
+        endpoint: &str,
+        payload: serde_json::Value,
+    ) -> Result<String, String> {
+        let resp = client
+            .post(format!("{}/{}", base_url, endpoint))
             .bearer_auth(api_key)
             .header("X-ModelScope-Async-Mode", "true")
             .json(&payload)
@@ -109,44 +170,29 @@ impl CustomProvider {
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         if !status.is_success() {
-            return Ok(TaskHandle {
-                provider_id: self.id.clone(),
-                task_id: String::new(),
-                phase: TaskPhase::Failed,
-                remote_urls: vec![],
-                error: Some(format!("HTTP {}: {}", status, body)),
-            });
+            return Err(format!("HTTP {}: {}", status, body));
         }
         let v: Value =
             serde_json::from_str(&body).map_err(|e| format!("解析响应失败: {}", e))?;
-        let task_id = match v.get("task_id").and_then(|x| x.as_str()) {
-            Some(t) => t.to_string(),
+        match v.get("task_id").and_then(|x| x.as_str()) {
+            Some(t) => Ok(t.to_string()),
             None => {
                 let msg = v
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("响应缺 task_id");
-                return Ok(TaskHandle {
-                    provider_id: self.id.clone(),
-                    task_id: String::new(),
-                    phase: TaskPhase::Failed,
-                    remote_urls: vec![],
-                    error: Some(msg.to_string()),
-                });
+                Err(msg.to_string())
             }
-        };
-        Ok(TaskHandle {
-            provider_id: self.id.clone(),
-            task_id,
-            phase: TaskPhase::Submitted,
-            remote_urls: vec![],
-            error: None,
-        })
+        }
     }
 
     /// HuggingFace：POST {base}/models/{repo}，响应为原始图像字节 → data URL（同步）。
+    /// 接口无 n 参数：N 张 = 同样参数并行 N 次请求，全部归入同一任务（哩布行为）。
     async fn submit_hf(&self, req: &GenRequest, api_key: &str) -> Result<TaskHandle, String> {
         if req.capability != "t2i" {
             return Err("HuggingFace 协议当前仅支持文生图".to_string());
@@ -170,9 +216,63 @@ impl CustomProvider {
             "parameters": params,
         });
 
-        let resp = self
-            .client
-            .post(format!("{}/models/{}", self.base_url, model))
+        let loops = req.n.max(1) as usize;
+        let mut handles = Vec::with_capacity(loops);
+        for _ in 0..loops {
+            let client = self.client.clone();
+            let key = api_key.to_string();
+            let base_url = self.base_url.clone();
+            let repo = model.clone();
+            let body = payload.clone();
+            handles.push(tokio::spawn(async move {
+                Self::hf_generate_once(client, &key, &base_url, &repo, body).await
+            }));
+        }
+
+        let mut urls = Vec::new();
+        for h in handles {
+            match h.await {
+                Ok(Ok(u)) => urls.push(u),
+                Ok(Err(msg)) => {
+                    return Ok(TaskHandle {
+                        provider_id: self.id.clone(),
+                        task_id: String::new(),
+                        phase: TaskPhase::Failed,
+                        remote_urls: vec![],
+                        error: Some(msg),
+                    });
+                }
+                Err(e) => {
+                    return Ok(TaskHandle {
+                        provider_id: self.id.clone(),
+                        task_id: String::new(),
+                        phase: TaskPhase::Failed,
+                        remote_urls: vec![],
+                        error: Some(format!("请求任务异常: {}", e)),
+                    });
+                }
+            }
+        }
+
+        Ok(TaskHandle {
+            provider_id: self.id.clone(),
+            task_id: String::new(),
+            phase: TaskPhase::Succeeded,
+            remote_urls: urls,
+            error: None,
+        })
+    }
+
+    /// 单次 HF 推理请求 → 图像 data URL。
+    async fn hf_generate_once(
+        client: reqwest::Client,
+        api_key: &str,
+        base_url: &str,
+        repo: &str,
+        payload: serde_json::Value,
+    ) -> Result<String, String> {
+        let resp = client
+            .post(format!("{}/models/{}", base_url, repo))
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -181,25 +281,12 @@ impl CustomProvider {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Ok(TaskHandle {
-                provider_id: self.id.clone(),
-                task_id: String::new(),
-                phase: TaskPhase::Failed,
-                remote_urls: vec![],
-                error: Some(format!("HTTP {}: {}", status, body)),
-            });
+            return Err(format!("HTTP {}: {}", status, body));
         }
         let bytes = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
         // 图像字节 → data URL（下游 save_remote 支持 base64 data URL 落盘）
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let url = format!("data:image/png;base64,{}", b64);
-        Ok(TaskHandle {
-            provider_id: self.id.clone(),
-            task_id: String::new(),
-            phase: TaskPhase::Succeeded,
-            remote_urls: vec![url],
-            error: None,
-        })
+        Ok(format!("data:image/png;base64,{}", b64))
     }
 
     /// OpenAI 兼容：POST {base}/v1/images/generations，响应 {data:[{b64_json|url}]}（同步）。
@@ -323,74 +410,99 @@ impl GenerationProvider for CustomProvider {
                 handle.error.clone().unwrap_or_else(|| "生成失败".to_string()),
             ));
         }
-        for task_type in ["image_generation", "video_generation"] {
-            let resp = match self
-                .client
-                .get(format!("{}/v1/tasks/{}", self.base_url, handle.task_id))
-                .bearer_auth(api_key)
-                .header("X-ModelScope-Task-Type", task_type)
-                .send()
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let status = resp.status();
-            let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
-            if !status.is_success() {
-                if status.as_u16() == 404 || status.as_u16() == 400 {
-                    continue;
+        // 单图循环：task_id 打包为 JSON 数组（submit_modelscope），拆分轮询全部并聚合。
+        let ids: Vec<String> = if handle.task_id.starts_with('[') {
+            serde_json::from_str(&handle.task_id).unwrap_or_else(|_| vec![handle.task_id.clone()])
+        } else {
+            vec![handle.task_id.clone()]
+        };
+        let mut all_urls = Vec::new();
+        let mut any_failed: Option<String> = None;
+        let mut any_running = false;
+        for tid in &ids {
+            let mut matched = false;
+            for task_type in ["image_generation", "video_generation"] {
+                let resp = match self
+                    .client
+                    .get(format!("{}/v1/tasks/{}", self.base_url, tid))
+                    .bearer_auth(api_key)
+                    .header("X-ModelScope-Task-Type", task_type)
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                let status = resp.status();
+                let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+                if !status.is_success() {
+                    if status.as_u16() == 404 || status.as_u16() == 400 {
+                        continue;
+                    }
+                    return Ok(Self::failed_snapshot(format!("HTTP {}: {}", status, body)));
                 }
-                return Ok(Self::failed_snapshot(format!("HTTP {}: {}", status, body)));
-            }
-            let v: Value = match serde_json::from_str(&body) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let task_status = v
-                .get("task_status")
-                .and_then(|s| s.as_str())
-                .unwrap_or("")
-                .to_uppercase();
-            return match task_status.as_str() {
-                "SUCCEED" => {
-                    let mut urls = Vec::new();
-                    for key in ["output_images", "output_videos", "outputs"] {
-                        if let Some(arr) = v.get(key).and_then(|x| x.as_array()) {
-                            for it in arr {
-                                if let Some(u) = it.get("url").and_then(|x| x.as_str()) {
-                                    urls.push(u.to_string());
-                                } else if let Some(u) = it.as_str() {
-                                    urls.push(u.to_string());
+                let v: Value = match serde_json::from_str(&body) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let task_status = v
+                    .get("task_status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_uppercase();
+                matched = true;
+                match task_status.as_str() {
+                    "SUCCEED" => {
+                        for key in ["output_images", "output_videos", "outputs"] {
+                            if let Some(arr) = v.get(key).and_then(|x| x.as_array()) {
+                                for it in arr {
+                                    if let Some(u) = it.get("url").and_then(|x| x.as_str()) {
+                                        all_urls.push(u.to_string());
+                                    } else if let Some(u) = it.as_str() {
+                                        all_urls.push(u.to_string());
+                                    }
                                 }
                             }
                         }
                     }
-                    if urls.is_empty() {
-                        return Ok(Self::failed_snapshot("succeed 但无输出 URL".to_string()));
+                    "FAILED" => {
+                        if any_failed.is_none() {
+                            any_failed = Some(
+                                v.get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("生成失败")
+                                    .to_string(),
+                            );
+                        }
                     }
-                    Ok(TaskSnapshot {
-                        phase: TaskPhase::Succeeded,
-                        progress: 100,
-                        message: None,
-                        remote_urls: urls,
-                    })
+                    _ => any_running = true,
                 }
-                "FAILED" => Ok(Self::failed_snapshot(
-                    v.get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("生成失败")
-                        .to_string(),
-                )),
-                _ => Ok(TaskSnapshot {
-                    phase: TaskPhase::Running,
-                    progress: 0,
-                    message: Some(task_status),
-                    remote_urls: vec![],
-                }),
-            };
+                break;
+            }
+            if !matched {
+                any_running = true;
+            }
         }
-        Ok(Self::failed_snapshot("任务查询失败（task-type 均不匹配）".to_string()))
+        if let Some(msg) = any_failed {
+            return Ok(Self::failed_snapshot(msg));
+        }
+        if any_running {
+            return Ok(TaskSnapshot {
+                phase: TaskPhase::Running,
+                progress: 0,
+                message: None,
+                remote_urls: vec![],
+            });
+        }
+        if all_urls.is_empty() {
+            return Ok(Self::failed_snapshot("succeed 但无输出 URL".to_string()));
+        }
+        Ok(TaskSnapshot {
+            phase: TaskPhase::Succeeded,
+            progress: 100,
+            message: None,
+            remote_urls: all_urls,
+        })
     }
 
     async fn test_connectivity(&self, api_key: &str) -> Result<String, String> {

@@ -4,11 +4,11 @@
 // 高级参数区保留自由键值对（供熟悉接口的用户补充字段）。
 // 厂商配置整体以 JSON 存后端 SQLite；保存后同步 registry 动态注册表。
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { deleteCustomProvider, listCustomProviders, saveCustomProvider } from "../api";
 import { PROTOCOL_COLORS, refreshCustomProviders, uid } from "../models/registry";
-import type { CustomModelConfig, CustomProviderConfig, ProtocolType } from "../types";
+import type { CustomModelConfig, CustomParamModule, CustomProviderConfig, ProtocolType } from "../types";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -28,42 +28,32 @@ const PROTOCOL_CAPS: Record<ProtocolType, string[]> = {
   "openai-compatible": ["t2i"],
 };
 
-/** 常用参数具名字段：中文标签 → 协议接口字段名 的映射表。
- *  用户只填中文标签的输入框，接口字段名由这里决定，无需知道 API 细节。 */
-interface ParamSpec {
+/** 常用参数预设（按协议）：下拉一键添加，字段名/标签/类型/默认值预填，可再改。 */
+interface ParamPreset {
   key: string;
-  label: string; // i18n key：customProvider.field.<label>
-  type: "number" | "text" | "select";
-  min?: number;
-  max?: number;
-  step?: number;
-  options?: { value: string; label: string }[];
+  labelKey: string;
+  kind: "number" | "text";
+  def: string;
 }
 
-const PARAM_SPECS: Record<ProtocolType, ParamSpec[]> = {
+const PARAM_PRESETS: Record<ProtocolType, ParamPreset[]> = {
   modelscope: [
-    { key: "steps", label: "steps", type: "number", min: 1, max: 100 },
-    { key: "guidance", label: "guidance", type: "number", min: 1, max: 20, step: 0.1 },
-    { key: "seed", label: "seed", type: "number" },
-    { key: "negative_prompt", label: "negativePrompt", type: "text" },
+    { key: "steps", labelKey: "customProvider.preset.steps", kind: "number", def: "30" },
+    { key: "guidance", labelKey: "customProvider.preset.guidance", kind: "number", def: "7.5" },
+    { key: "seed", labelKey: "customProvider.preset.seed", kind: "number", def: "" },
+    { key: "negative_prompt", labelKey: "customProvider.preset.negativePrompt", kind: "text", def: "" },
   ],
   huggingface: [
-    { key: "num_inference_steps", label: "steps", type: "number", min: 1, max: 100 },
-    { key: "guidance_scale", label: "guidance", type: "number", min: 1, max: 20, step: 0.1 },
-    { key: "seed", label: "seed", type: "number" },
-    { key: "negative_prompt", label: "negativePrompt", type: "text" },
+    { key: "num_inference_steps", labelKey: "customProvider.preset.steps", kind: "number", def: "30" },
+    { key: "guidance_scale", labelKey: "customProvider.preset.guidance", kind: "number", def: "7.5" },
+    { key: "seed", labelKey: "customProvider.preset.seed", kind: "number", def: "" },
+    { key: "negative_prompt", labelKey: "customProvider.preset.negativePrompt", kind: "text", def: "" },
   ],
   "openai-compatible": [
-    { key: "quality", label: "quality", type: "select", options: [{ value: "standard", label: "standard" }, { value: "hd", label: "hd" }] },
-    { key: "style", label: "style", type: "text" },
+    { key: "quality", labelKey: "customProvider.preset.quality", kind: "text", def: "standard" },
+    { key: "style", labelKey: "customProvider.preset.style", kind: "text", def: "" },
   ],
 };
-
-interface KvRow {
-  id: number;
-  key: string;
-  value: string;
-}
 
 interface FormState {
   id: string | null;
@@ -81,6 +71,53 @@ const EMPTY_MODEL: CustomModelConfig = {
   params: {},
 };
 
+/** 参数模块定义（勾选后出现在生成弹层 popover）。 */
+const MODULE_DEFS: { type: CustomParamModule["type"]; labelKey: string }[] = [
+  { type: "ratio", labelKey: "customProvider.module.ratio" },
+  { type: "quality", labelKey: "customProvider.module.quality" },
+  { type: "duration", labelKey: "customProvider.module.duration" },
+  { type: "batch", labelKey: "customProvider.module.batch" },
+  { type: "size", labelKey: "customProvider.module.size" },
+];
+
+/** 生图常用预置值（勾选模块时预填，用户可改）。 */
+const DEFAULT_RATIOS = ["1:1", "3:4", "4:3", "16:9", "9:16"];
+const DEFAULT_IMAGE_QUALITIES = ["1K", "2K", "4K"];
+const DEFAULT_VIDEO_QUALITIES = ["480P", "720P", "1080P"];
+const DEFAULT_DURATIONS = ["5", "10"];
+
+/** 预置模块模板：一键填充常用组合。 */
+const MODULE_TEMPLATES: Record<string, CustomParamModule[]> = {
+  tplImageBasic: [
+    { type: "ratio", options: [...DEFAULT_RATIOS] },
+    { type: "batch" },
+  ],
+  tplImageStandard: [
+    { type: "ratio", options: [...DEFAULT_RATIOS] },
+    { type: "quality", options: [...DEFAULT_IMAGE_QUALITIES] },
+    { type: "batch" },
+    { type: "size" },
+  ],
+  tplVideoStandard: [
+    { type: "ratio", options: [...DEFAULT_RATIOS] },
+    { type: "quality", options: [...DEFAULT_VIDEO_QUALITIES] },
+    { type: "duration", options: [...DEFAULT_DURATIONS] },
+  ],
+};
+
+/** 勾选模块时的默认选项：ratio 优先沿用 size_presets；quality 按图像/视频预置档位。 */
+const defaultModule = (
+  type: CustomParamModule["type"],
+  presets: string[],
+  isVid: boolean,
+): CustomParamModule => {
+  if (type === "ratio") return { type, options: presets.length > 0 ? presets : [...DEFAULT_RATIOS] };
+  if (type === "quality") return { type, options: isVid ? [...DEFAULT_VIDEO_QUALITIES] : [...DEFAULT_IMAGE_QUALITIES] };
+  if (type === "duration") return { type, options: [...DEFAULT_DURATIONS] };
+  if (type === "size") return { type: "size" };
+  return { type: "batch" };
+};
+
 const EMPTY_FORM: FormState = {
   id: null,
   name: "",
@@ -94,10 +131,8 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
   const [providers, setProviders] = useState<CustomProviderConfig[]>([]);
   const [form, setForm] = useState<FormState>({ ...EMPTY_FORM });
   const [modelIdx, setModelIdx] = useState<number | null>(null); // 正在编辑的模型下标
-  const [labeledDraft, setLabeledDraft] = useState<Record<string, string>>({});
-  const [kvDraft, setKvDraft] = useState<KvRow[]>([]);
+  const [modulesDraft, setModulesDraft] = useState<CustomParamModule[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const kvSeq = useRef(0);
 
   const load = async () => {
     try {
@@ -144,54 +179,48 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
       models: f.models.map((m, idx) => (idx === i ? { ...m, ...delta } : m)),
     }));
 
-  // 进入模型编辑时，从已有 params 装载具名/高级两套草稿
+  // 进入模型编辑时，从已有 param_modules 装载模块草稿
   useEffect(() => {
     if (modelIdx == null) return;
     const m = form.models[modelIdx];
     if (!m) return;
-    const specKeys = new Set(PARAM_SPECS[form.protocol].map((s) => s.key));
-    const labeled: Record<string, string> = {};
-    const kv: KvRow[] = [];
-    for (const [k, v] of Object.entries(m.params)) {
-      const s = v == null ? "" : String(v);
-      if (specKeys.has(k)) labeled[k] = s;
-      else kv.push({ id: ++kvSeq.current, key: k, value: s });
-    }
-    setLabeledDraft(labeled);
-    setKvDraft(kv);
+    setModulesDraft(m.param_modules ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelIdx]);
-
-  const setLabeled = (key: string, value: string) =>
-    setLabeledDraft((d) => ({ ...d, [key]: value }));
-
-  const updateKv = (next: KvRow[]) => setKvDraft(next);
 
   const confirmModel = () => {
     if (modelIdx == null) return;
     const m = form.models[modelIdx];
     if (!m || !m.repo_id.trim() || !m.name.trim()) return;
-    // 具名字段（数字留空/非法则不写入）
+    // 自由参数模块（param）的默认值 → params（请求透传的字段默认值）。
     const params: Record<string, string | number | null> = {};
-    for (const spec of PARAM_SPECS[form.protocol]) {
-      const v = labeledDraft[spec.key]?.trim();
-      if (!v) continue;
-      if (spec.type === "number") {
-        const n = Number(v);
-        if (Number.isFinite(n)) params[spec.key] = n;
-      } else {
-        params[spec.key] = v;
-      }
+    for (const mod of modulesDraft) {
+      if (mod.type !== "param") continue;
+      const k = mod.key.trim();
+      if (!k) continue;
+      const d = mod.def ?? "";
+      if (d === "") continue;
+      params[k] = mod.kind === "number" && Number.isFinite(Number(d)) ? Number(d) : d;
     }
-    // 高级键值对（键和值都非空才写入）
-    for (const r of kvDraft) {
-      const k = r.key.trim();
-      const v = r.value.trim();
-      if (!k || !v) continue;
-      params[k] = Number.isFinite(Number(v)) ? Number(v) : v;
-    }
-    patchModel(modelIdx, { params });
+    patchModel(modelIdx, { params, param_modules: modulesDraft });
     setModelIdx(null);
+  };
+
+  /** 常用参数预设一键添加（同 key 已存在则覆盖）。 */
+  const addPreset = (key: string) => {
+    const preset = PARAM_PRESETS[form.protocol].find((p) => p.key === key);
+    if (!preset) return;
+    const mod: CustomParamModule = {
+      type: "param",
+      key: preset.key,
+      label: t(preset.labelKey),
+      kind: preset.kind,
+      def: preset.def,
+    };
+    setModulesDraft((d) => {
+      const i = d.findIndex((x) => x.type === "param" && x.key === preset.key);
+      return i >= 0 ? d.map((x, idx) => (idx === i ? mod : x)) : [...d, mod];
+    });
   };
 
   const removeModel = (i: number) =>
@@ -243,9 +272,9 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
   };
 
   const modelForm = modelIdx != null ? form.models[modelIdx] : null;
+  const isVidModel = modelForm?.capabilities.some((c) => c === "t2v" || c === "i2v") ?? false;
   const modelFormValid =
     modelForm != null && !!modelForm.repo_id.trim() && !!modelForm.name.trim();
-  const specs = PARAM_SPECS[form.protocol];
 
   const cmField = "flex flex-col gap-1.5";
   const cmFieldLabel = "text-[11px] font-semibold text-text-3";
@@ -410,88 +439,156 @@ export function CustomProviderModal({ open, onClose }: CustomProviderModalProps)
                 </div>
               </div>
 
-              <label className={cmField}>
-                <span className={cmFieldLabel}>{t("customProvider.sizePresets")}</span>
-                <input className={cmInput} value={modelForm.size_presets.join(", ")} onChange={(e) => patchModel(modelIdx!, { size_presets: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) })} placeholder={t("customProvider.sizePh")} />
-              </label>
-
-              {/* 常用参数：中文标签具名表单（标签→接口字段名由 PARAM_SPECS 映射） */}
+              {/* 参数模块：勾选 popover 分区 + 选项 + 预置模板（尺寸预设已并入比例模块选项） */}
               <div className={cmField}>
-                <span className={cmFieldLabel}>{t("customProvider.params")}</span>
-                <div className="flex flex-col gap-2">
-                  {specs.map((spec) => (
-                    <label className="flex items-center gap-2.5" key={spec.key}>
-                      <span className="shrink-0 flex-[0_0_96px] text-[11px] font-semibold text-text-3">{t(`customProvider.field.${spec.label}`)}</span>
-                      {spec.type === "select" ? (
-                        <select
-                          className={cmSelect}
-                          value={labeledDraft[spec.key] ?? ""}
-                          onChange={(e) => setLabeled(spec.key, e.target.value)}
-                        >
-                          <option value="">{t("customProvider.fieldNone")}</option>
-                          {spec.options?.map((o) => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          className={cmSelect}
-                          type={spec.type === "number" ? "number" : "text"}
-                          min={spec.min}
-                          max={spec.max}
-                          step={spec.step}
-                          value={labeledDraft[spec.key] ?? ""}
-                          placeholder={spec.type === "number" ? "30" : ""}
-                          onChange={(e) => setLabeled(spec.key, e.target.value)}
-                        />
-                      )}
-                    </label>
-                  ))}
+                <div className="flex items-center justify-between gap-2">
+                  <span className={cmFieldLabel}>{t("customProvider.paramModules")}</span>
+                  <div className="flex flex-wrap gap-1">
+                    <button type="button" className="h-6 cursor-pointer rounded-md border border-border-2 bg-chip px-2 text-[10px] font-semibold text-text-2 transition-colors hover:border-[rgba(59,130,246,.40)] hover:text-primary" onClick={() => setModulesDraft(MODULE_TEMPLATES.tplImageBasic)}>{t("customProvider.tplImageBasic")}</button>
+                    <button type="button" className="h-6 cursor-pointer rounded-md border border-border-2 bg-chip px-2 text-[10px] font-semibold text-text-2 transition-colors hover:border-[rgba(59,130,246,.40)] hover:text-primary" onClick={() => setModulesDraft(MODULE_TEMPLATES.tplImageStandard)}>{t("customProvider.tplImageStandard")}</button>
+                    <button type="button" className="h-6 cursor-pointer rounded-md border border-border-2 bg-chip px-2 text-[10px] font-semibold text-text-2 transition-colors hover:border-[rgba(59,130,246,.40)] hover:text-primary" onClick={() => setModulesDraft(MODULE_TEMPLATES.tplVideoStandard)}>{t("customProvider.tplVideoStandard")}</button>
+                    <button type="button" className="h-6 cursor-pointer rounded-md border border-border-2 bg-chip px-2 text-[10px] font-semibold text-text-2 transition-colors hover:border-[rgba(239,68,68,.40)] hover:text-destructive" onClick={() => setModulesDraft([])}>{t("customProvider.tplNone")}</button>
+                  </div>
+                </div>
+                <p className="m-0 text-[10px] text-muted-foreground">{t("customProvider.paramModulesHint")}</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {MODULE_DEFS.map((def) => {
+                    const mod = modulesDraft.find((m) => m.type === def.type);
+                    return (
+                      <div key={def.type} className="rounded-md border border-border-2 bg-chip/60 p-2">
+                        <label className="flex cursor-pointer items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            className="size-3 cursor-pointer accent-[var(--accent)]"
+                            checked={!!mod}
+                            onChange={(e) =>
+                              setModulesDraft((d) =>
+                                e.target.checked
+                                  ? [...d, defaultModule(def.type, modelForm.size_presets, isVidModel)]
+                                  : d.filter((m) => m.type !== def.type),
+                              )
+                            }
+                          />
+                          <span className="text-[11px] font-semibold text-text-2">{t(def.labelKey)}</span>
+                        </label>
+                        {mod && mod.type !== "batch" && mod.type !== "size" && mod.type !== "param" && (
+                          <input
+                            className={cn(cmInput, "mt-1.5 px-2.5 py-1.5 font-mono text-[11px]")}
+                            value={mod.options.join(", ")}
+                            placeholder={t("customProvider.moduleOptionsPh")}
+                            onChange={(e) =>
+                              setModulesDraft((d) =>
+                                d.map((m) =>
+                                  m.type === mod.type
+                                    ? { ...m, options: e.target.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean) }
+                                    : m,
+                                ),
+                              )
+                            }
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* 高级参数：自由键值对（熟悉接口的用户补充字段） */}
+              {/* 自定义参数模块：运行时在 popover 里调整的自由参数（steps/guidance/seed 等） */}
               <div className={cmField}>
-                <span className={cmFieldLabel}>{t("customProvider.advanced")}</span>
-                <p className="m-0 mb-1.5 text-[10px] text-muted-foreground">{t("customProvider.advancedHint")}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <span className={cmFieldLabel}>{t("customProvider.paramModulesFree")}</span>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      className={cn(cmSelect, "px-2 py-1 text-[10px]")}
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) addPreset(e.target.value);
+                      }}
+                    >
+                      <option value="">{t("customProvider.presetAdd")}</option>
+                      {PARAM_PRESETS[form.protocol].map((p) => (
+                        <option key={p.key} value={p.key}>{t(p.labelKey)}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="cursor-pointer rounded-md border border-dashed border-border-3 bg-transparent px-2.5 py-1 text-[10px] font-semibold text-muted-foreground transition-all duration-150 hover:border-[rgba(59,130,246,.40)] hover:text-primary"
+                      onClick={() =>
+                        setModulesDraft((d) => [
+                          ...d,
+                          { type: "param", key: "", label: "", kind: "number", def: "" },
+                        ])
+                      }
+                    >
+                      ＋ {t("customProvider.addParam")}
+                    </button>
+                  </div>
+                </div>
+                <p className="m-0 text-[10px] text-muted-foreground">{t("customProvider.paramModulesFreeHint")}</p>
                 <div className="flex flex-col gap-1.5">
-                  {kvDraft.map((row) => (
-                    <div className="flex gap-1.5" key={row.id}>
-                      <input
-                        className={cn(cmInput, "font-mono flex-[0_0_45%] px-2.5 py-1.5 text-[11px]")}
-                        value={row.key}
-                        placeholder={t("customProvider.kvKeyPh")}
-                        onChange={(e) =>
-                          updateKv(kvDraft.map((r) => (r.id === row.id ? { ...r, key: e.target.value } : r)))
-                        }
-                      />
-                      <input
-                        className={cn(cmInput, "font-mono flex-1 px-2.5 py-1.5 text-[11px]")}
-                        value={row.value}
-                        placeholder={t("customProvider.kvValPh")}
-                        onChange={(e) =>
-                          updateKv(kvDraft.map((r) => (r.id === row.id ? { ...r, value: e.target.value } : r)))
-                        }
-                      />
-                      <button
-                        type="button"
-                        className="grid size-[26px] shrink-0 cursor-pointer place-items-center rounded-md border border-border-2 bg-chip text-[13px] leading-none text-muted-foreground transition-all duration-150 hover:border-[rgba(239,68,68,.40)] hover:text-destructive"
-                        title={t("customProvider.kvDel")}
-                        onClick={() => updateKv(kvDraft.filter((r) => r.id !== row.id))}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    className="self-start cursor-pointer rounded-md border border-dashed border-border-3 bg-transparent px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-all duration-150 hover:border-[rgba(59,130,246,.40)] hover:text-primary"
-                    onClick={() =>
-                      updateKv([...kvDraft, { id: ++kvSeq.current, key: "", value: "" }])
-                    }
-                  >
-                    ＋ {t("customProvider.addParam")}
-                  </button>
+                  {modulesDraft
+                    .filter((m) => m.type === "param")
+                    .map((mod, i) => {
+                      const idx = modulesDraft.findIndex((x) => x === mod);
+                      return (
+                        <div className="flex flex-wrap items-center gap-1.5" key={`${mod.key}_${i}`}>
+                          <input
+                            className={cn(cmInput, "font-mono w-[30%] px-2.5 py-1.5 text-[11px]")}
+                            value={mod.key}
+                            placeholder={t("customProvider.pmKeyPh")}
+                            onChange={(e) =>
+                              setModulesDraft((d) =>
+                                d.map((x, j) => (j === idx ? { ...x, key: e.target.value } : x)),
+                              )
+                            }
+                          />
+                          <input
+                            className={cn(cmInput, "w-[26%] px-2.5 py-1.5 text-[11px]")}
+                            value={mod.label}
+                            placeholder={t("customProvider.pmLabelPh")}
+                            onChange={(e) =>
+                              setModulesDraft((d) =>
+                                d.map((x, j) => (j === idx ? { ...x, label: e.target.value } : x)),
+                              )
+                            }
+                          />
+                          <select
+                            className={cn(cmSelect, "w-[18%] px-2 py-1.5 text-[11px]")}
+                            value={mod.kind}
+                            onChange={(e) =>
+                              setModulesDraft((d) =>
+                                d.map((x, j) =>
+                                  j === idx ? { ...x, kind: e.target.value as "number" | "text" } : x,
+                                ),
+                              )
+                            }
+                          >
+                            <option value="number">{t("customProvider.pmKindNumber")}</option>
+                            <option value="text">{t("customProvider.pmKindText")}</option>
+                          </select>
+                          <input
+                            className={cn(cmInput, "flex-1 min-w-[60px] px-2.5 py-1.5 text-[11px]")}
+                            value={mod.def ?? ""}
+                            placeholder={t("customProvider.pmDefPh")}
+                            onChange={(e) =>
+                              setModulesDraft((d) =>
+                                d.map((x, j) => (j === idx ? { ...x, def: e.target.value } : x)),
+                              )
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="grid size-[26px] shrink-0 cursor-pointer place-items-center rounded-md border border-border-2 bg-chip text-[13px] leading-none text-muted-foreground transition-all duration-150 hover:border-[rgba(239,68,68,.40)] hover:text-destructive"
+                            title={t("customProvider.kvDel")}
+                            onClick={() =>
+                              setModulesDraft((d) => d.filter((x) => x !== mod))
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
                 </div>
               </div>
             </div>
