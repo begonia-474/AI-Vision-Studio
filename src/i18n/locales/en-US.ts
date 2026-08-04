@@ -111,6 +111,9 @@ export const enUS: ZhDict = {
     badgeUnset: "○ Not set",
     capImage: "Image",
     capVideo: "Video",
+    workspaceId: "WorkspaceId (Business Space, optional)",
+    workspacePh: "ws-xxxx",
+    workspaceHint: "Business-space dedicated domain (migration recommended): https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com. Find it in the console \"Business Space Details\" page; leave empty to use the legacy dashscope.aliyuncs.com domain.",
   },
   settings: {
     title: "Settings",
@@ -186,6 +189,7 @@ export const enUS: ZhDict = {
     available: "Available models",
     none: "No models found",
     supportsI2i: " · supports i2i",
+    supportsEdit: " · supports image edit",
     supportsI2v: " · supports i2v",
     notWired: "· not wired",
   },
@@ -293,8 +297,8 @@ export const enUS: ZhDict = {
       authHelp: "API Key (Bearer) recommended; legacy models accept JWT.",
     },
     wanxiang: {
-      name: "Tongyi Wanxiang",
-      authHelp: "DashScope Bearer Key + optional WorkspaceId.",
+      name: "Alibaba Cloud Bailian",
+      authHelp: "DashScope Bearer Key + optional WorkspaceId. Covers Wanxiang / Qwen-Image / Z-Image model families.",
     },
     minimax: {
       name: "MiniMax Hailuo",

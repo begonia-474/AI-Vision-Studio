@@ -139,7 +139,9 @@ export function ModelDropdown({ open, onOpenChange, trigger, studio, current, on
                     const i2iLabel =
                       studio === "image"
                         ? m.capabilities.includes("i2i")
-                          ? t("model.supportsI2i")
+                          ? m.edit
+                            ? t("model.supportsEdit")
+                            : t("model.supportsI2i")
                           : ""
                         : m.capabilities.includes("i2v")
                           ? t("model.supportsI2v")

@@ -1,14 +1,14 @@
 pub mod custom;
+pub mod dashscope;
 pub mod kling;
 pub mod minimax;
 pub mod volcark;
-pub mod wanxiang;
 
 pub use custom::{CustomProvider, PROVIDER_PREFIX};
+pub use dashscope::DashScopeProvider;
 pub use kling::KlingProvider;
 pub use minimax::MiniMaxProvider;
 pub use volcark::VolcArkProvider;
-pub use wanxiang::WanxiangProvider;
 
 use async_trait::async_trait;
 
@@ -35,7 +35,7 @@ pub fn all_providers() -> Vec<ProviderInfoDto> {
     vec![
         VolcArkProvider::info(),
         MiniMaxProvider::info(),
-        WanxiangProvider::info(),
+        DashScopeProvider::info(),
         KlingProvider::info(),
     ]
 }
@@ -50,7 +50,7 @@ pub fn get_provider(id: &str, client: reqwest::Client) -> Option<Box<dyn Generat
     match id {
         "volcark" => Some(Box::new(VolcArkProvider::new(client))),
         "minimax" => Some(Box::new(MiniMaxProvider::new(client))),
-        "wanxiang" => Some(Box::new(WanxiangProvider::new(client))),
+        "wanxiang" => Some(Box::new(DashScopeProvider::new(client))),
         "kling" => Some(Box::new(KlingProvider::new(client))),
         _ => None,
     }

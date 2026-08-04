@@ -28,6 +28,8 @@ pub fn run() {
             commands::get_api_key,
             commands::delete_api_key,
             commands::test_api_key,
+            commands::save_workspace_id,
+            commands::get_workspace_id,
             commands::generate,
             commands::list_history,
             commands::set_star,

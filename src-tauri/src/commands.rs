@@ -30,6 +30,17 @@ pub fn delete_api_key(provider_id: String) -> Result<(), String> {
     storage::delete_key(&provider_id)
 }
 
+// WorkspaceId：业务空间专属域名（https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com）
+#[tauri::command]
+pub fn save_workspace_id(provider_id: String, workspace_id: String) -> Result<(), String> {
+    storage::save_workspace(&provider_id, &workspace_id)
+}
+
+#[tauri::command]
+pub fn get_workspace_id(provider_id: String) -> Result<Option<String>, String> {
+    storage::get_workspace(&provider_id)
+}
+
 #[tauri::command]
 pub async fn test_api_key(
     provider_id: String,

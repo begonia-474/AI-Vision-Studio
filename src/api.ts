@@ -24,6 +24,13 @@ export const deleteApiKey = (providerId: string) =>
 export const testApiKey = (providerId: string) =>
   invoke<string>("test_api_key", { providerId });
 
+// WorkspaceId：业务空间专属域名（https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com）
+export const getWorkspaceId = (providerId: string) =>
+  invoke<string | null>("get_workspace_id", { providerId });
+
+export const saveWorkspaceId = (providerId: string, workspaceId: string) =>
+  invoke<void>("save_workspace_id", { providerId, workspaceId });
+
 // generate 的 Rust 形参为 req（AppHandle/State 由 Tauri 注入，前端不传）。
 export const generate = (req: GenRequest) =>
   invoke<GenerationResult>("generate", { req });

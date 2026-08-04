@@ -113,22 +113,45 @@ fn guess_extension(url: &str) -> String {
 // —— 缩略图 / 图片元数据 ——
 
 /// 把本地参考图引用归一化为 base64 data URL（厂商只能拿到公网 URL 或 data URL）：
-/// - data: / http(s):// 原样返回
-/// - 本地绝对路径 / asset:// 形式的 URL：读取文件 → base64
+/// - data: / http(s):// 公网 URL 原样返回
+/// - asset:// 或 http://asset.localhost/（Tauri convertFileSrc 的两种形态）：读取文件 → base64
+/// - 本地绝对路径：读取文件 → base64
 pub fn normalize_reference(r: &str) -> Result<String, String> {
     let lower = r.to_lowercase();
     if lower.starts_with("data:") || lower.starts_with("http://") || lower.starts_with("https://") {
+        if lower.starts_with("http://asset.localhost/") || lower.starts_with("https://asset.localhost/")
+        {
+            // http://asset.localhost/C%3A%5CUsers%5C... → 去掉 scheme+host 后百分号解码
+            let rest = r.splitn(4, '/').nth(3).unwrap_or(r);
+            return local_to_data_url(percent_decode(rest).trim_start_matches('/'));
+        }
         return Ok(r.to_string());
     }
     let path = if lower.starts_with("asset://") {
-        // asset://localhost/C%3A%5CUsers%5C... → 去掉 scheme/host 后百分号解码
-        let after_host = r.splitn(3, '/').nth(2).unwrap_or(r);
+        // asset://localhost/C%3A%5CUsers%5C... → 去掉 scheme 与 host（若存在）后百分号解码；
+        // 无 host 形态（asset://C:/...）下首段即盘符，不能当 host 剥掉。
+        let rest = r.trim_start_matches("asset://");
+        let after_host = match rest.split_once('/') {
+            Some((head, tail))
+                if !head.is_empty()
+                    && head.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+                    && !head.contains('%') =>
+            {
+                tail
+            }
+            _ => rest,
+        };
         percent_decode(after_host).trim_start_matches('/').to_string()
     } else {
         r.to_string()
     };
-    let bytes = fs::read(&path).map_err(|e| format!("读取参考图失败: {}", e))?;
-    let mime = match Path::new(&path)
+    local_to_data_url(&path)
+}
+
+/// 本地文件 → data:{mime};base64,...
+fn local_to_data_url(path: &str) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| format!("读取参考图失败: {}", e))?;
+    let mime = match Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
@@ -515,6 +538,34 @@ pub fn delete_key(provider_id: &str) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, provider_id).map_err(|e| e.to_string())?;
     let _ = entry.delete_credential();
     Ok(())
+}
+
+/// WorkspaceId（业务空间专属域名）：keyring Account 加 "-workspace" 后缀，与 API Key 隔离。
+/// 例：wanxiang → account "wanxiang-workspace"，为空串时清除。
+pub fn save_workspace(provider_id: &str, workspace_id: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &format!("{}-workspace", provider_id))
+        .map_err(|e| e.to_string())?;
+    let _ = entry.delete_credential();
+    if !workspace_id.trim().is_empty() {
+        entry.set_password(workspace_id.trim()).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn get_workspace(provider_id: &str) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &format!("{}-workspace", provider_id))
+        .map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(p) => Ok(Some(p)),
+        Err(e) => {
+            let msg = e.to_string().to_lowercase();
+            if msg.contains("no entry") || msg.contains("not found") || msg.contains("no storage") {
+                Ok(None)
+            } else {
+                Err(e.to_string())
+            }
+        }
+    }
 }
 
 #[cfg(test)]

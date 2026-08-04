@@ -109,6 +109,9 @@ export const zhCN = {
     badgeUnset: "○ 未设置",
     capImage: "图像",
     capVideo: "视频",
+    workspaceId: "WorkspaceId（业务空间，可选）",
+    workspacePh: "ws-xxxx",
+    workspaceHint: "业务空间专属域名（官方建议迁移）：https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com。在控制台「业务空间详情」页查看；留空则使用旧域名 dashscope.aliyuncs.com。",
   },
   settings: {
     title: "设置",
@@ -184,6 +187,7 @@ export const zhCN = {
     available: "可用模型",
     none: "未找到模型",
     supportsI2i: " · 支持图生图",
+    supportsEdit: " · 支持图像编辑",
     supportsI2v: " · 支持图生视频",
     notWired: "· 未接入",
   },
@@ -290,8 +294,8 @@ export const zhCN = {
       authHelp: "推荐 API Key（Bearer）；旧模型兼容 JWT。",
     },
     wanxiang: {
-      name: "通义万相",
-      authHelp: "DashScope Bearer Key + 可选 WorkspaceId。",
+      name: "阿里云百炼",
+      authHelp: "DashScope Bearer Key + 可选 WorkspaceId。含万相/千问/z-image 模型族。",
     },
     minimax: {
       name: "MiniMax 海螺",

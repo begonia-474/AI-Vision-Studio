@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { deleteApiKey, getApiKey, saveApiKey, testApiKey } from "../api";
+import { deleteApiKey, getApiKey, getWorkspaceId, saveApiKey, saveWorkspaceId, testApiKey } from "../api";
 import {
   getCustomProviderMeta,
   PROVIDER_LIST,
@@ -32,6 +32,9 @@ interface CardState {
 export function ByokModal({ open, onClose }: ByokModalProps) {
   const { t } = useTranslation();
   const [cards, setCards] = useState<Record<string, CardState>>({});
+  // WorkspaceId（仅 wanxiang）：回显明文（非机密），随弹窗打开加载
+  const [ws, setWs] = useState("");
+  const [wsMsg, setWsMsg] = useState<string | null>(null);
 
   // 打开时拉取各厂商已存 Key（仅判断是否已设置，不回显明文以减少暴露面）
   useEffect(() => {
@@ -50,6 +53,9 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
       }
       if (active) setCards(next);
     })();
+    getWorkspaceId("wanxiang")
+      .then((v) => active && setWs(v ?? ""))
+      .catch(() => active && setWs(""));
     return () => {
       active = false;
     };
@@ -85,6 +91,16 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
       patch(id, { value: "", status: "unset", message: undefined });
     } catch (e) {
       patch(id, { status: "fail", message: String(e) });
+    }
+  };
+
+  const handleSaveWs = async () => {
+    try {
+      await saveWorkspaceId("wanxiang", ws.trim());
+      setWsMsg(t("common.saved"));
+      window.setTimeout(() => setWsMsg(null), 2000);
+    } catch (e) {
+      setWsMsg(String(e));
     }
   };
 
@@ -158,6 +174,26 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
               {c.message && (
                 <div className="mt-2 text-[11px] leading-relaxed" style={{ color: c.status === "fail" ? "var(--danger)" : "var(--success)" }}>
                   {c.message}
+                </div>
+              )}
+              {p.id === "wanxiang" && (
+                <div className="mt-2.5 border-t border-border-2 pt-2.5">
+                  <div className="mb-1 text-[10px] font-semibold text-text-3">{t("byok.workspaceId")}</div>
+                  <div className="flex gap-2">
+                    <Input
+                      className="flex-1 border-border-2 bg-soft font-mono text-[13px] focus:border-[rgba(59,130,246,.50)]"
+                      placeholder={t("byok.workspacePh")}
+                      value={ws}
+                      onChange={(e) => setWs(e.target.value)}
+                    />
+                    <Button className={BTN} onClick={handleSaveWs}>
+                      {t("common.save")}
+                    </Button>
+                  </div>
+                  <div className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{t("byok.workspaceHint")}</div>
+                  {wsMsg && (
+                    <div className="mt-1 text-[11px] font-semibold text-success">{wsMsg}</div>
+                  )}
                 </div>
               )}
             </div>

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, parseSizePx, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
+import { aspectToSize, batchCap, parseSizePx, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import type { ResultItem, SessionApi } from "./sessionStore";
 import type { StudioJump } from "../types";
@@ -59,7 +59,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const [quality, setQuality] = useState(() => allModels[studio === "image" ? 0 : 1].qualities[0]);
   const [duration, setDuration] = useState(() => allModels[studio === "image" ? 0 : 1].durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
-  const [mode, setMode] = useState<"single" | "group">("single");
+  const [mode, setModeState] = useState<"single" | "group">("single");
   const [size, setSizeState] = useState<{ w: number; h: number } | null>(null);
   const [sizeLocked, setSizeLocked] = useState(false);
   const [paramValues, setParamValues] = useState<Record<string, string | number>>({});
@@ -77,7 +77,8 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   );
 
   /** 选中比例：声明 size 区的模型同步出像素尺寸并解除锁定。
-   *  volcark 查官方表（按画质档位）；自定义模型无官方表——选项为像素串直取，
+   *  volcark 查官方表（按画质档位）；wanxiang 按档位长边换算（16 倍数）；
+   *  自定义模型无官方表——选项为像素串直取，
    *  比例选项按当前 W/H 长边换算（默认 2048 系）。 */
   const applyAr = useCallback(
     (m: ModelDef, v: string, q?: string) => {
@@ -86,7 +87,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         setSizeState(null);
         return;
       }
-      if (m.providerId === "volcark") {
+      if (m.providerId === "volcark" || m.providerId === "wanxiang") {
         const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q));
         setSizeState({ w, h });
         setSizeLocked(false);
@@ -118,12 +119,12 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const setArCb = useCallback((v: string) => applyAr(model, v, quality), [applyAr, model, quality]);
 
   /** 画质切换：声明 size 区的模型按新档位换算当前比例的像素尺寸（比例不变）。
-   *  volcark 查官方表；自定义模型识别 K 档（1K/2K/3K/4K → 长边 1024×档位，保持比例），其余档位不联动。 */
+   *  volcark 查官方表；wanxiang 按档位长边换算；自定义模型识别 K 档（1K/2K/3K/4K → 长边 1024×档位，保持比例），其余档位不联动。 */
   const setQualityCb = useCallback(
     (v: string) => {
       setQuality(v);
       if (!supportsCustomSize(model)) return;
-      if (model.providerId === "volcark") {
+      if (model.providerId === "volcark" || model.providerId === "wanxiang") {
         const { w, h } = parseSizePx(aspectToSize(model.providerId, model.id, ar, v));
         setSizeState({ w, h });
         return;
@@ -143,6 +144,15 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
 
   const setSize = useCallback((w: number, h: number) => setSizeState({ w, h }), []);
 
+  /** 模式切换：组图/单图的张数上限不同（wan2.7 组图 1-12），切换时收敛当前张数。 */
+  const setMode = useCallback(
+    (v: "single" | "group") => {
+      setModeState(v);
+      setBatch((prev) => Math.min(prev, batchCap(model, v)));
+    },
+    [model],
+  );
+
   const setParamValue = useCallback(
     (key: string, v: string | number) => setParamValues((p) => ({ ...p, [key]: v })),
     [],
@@ -161,8 +171,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       setQuality(nextQ);
       applyAr(m, m.aspectRatios.includes(ar) ? ar : m.aspectRatios[0], nextQ);
       if (m.durations) setDuration((prev) => (m.durations!.includes(prev) ? prev : m.durations![0]));
-      if (studio === "image") setBatch((prev) => Math.min(prev, m.custom ? 4 : m.maxRef ?? 4));
-      setMode("single");
+      if (studio === "image") setBatch((prev) => Math.min(prev, batchCap(m, "single")));
+      // 直接置 single（batch 已按新模型收缩；setMode 的 clamp 会用旧模型上限，不适用）
+      setModeState("single");
       // 自由参数：按新模型 param 分区初始化（默认取模块 def，兼容旧 params 配置）。
       const nextParams: Record<string, string | number> = {};
       for (const s of m.sections ?? []) {
@@ -208,7 +219,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       if (j.ar && (!m || m.aspectRatios.includes(j.ar))) applyAr(m ?? model, j.ar, j.quality ?? quality);
       if (j.quality && (!m || m.qualities.includes(j.quality))) setQualityCb(j.quality);
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
-      if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m?.custom ? 4 : m?.maxRef ?? 4));
+      if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group")) : 4));
       if (j.refs) setRefs(j.refs);
     },
     [allModels, model, selectModel, applyAr, setQualityCb, quality],

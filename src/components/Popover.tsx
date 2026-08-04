@@ -9,9 +9,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { cn } from "../lib/utils";
 import {
   aspectToSize,
+  batchCap,
   defaultSections,
   parseSizePx,
-  volcarkPixelBounds,
+  pixelBounds,
   type ModelDef,
   type ParamSectionDef,
 } from "../models/registry";
@@ -61,7 +62,7 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
           options={
             section.options ??
             (section.key === "batch"
-              ? batchOptions(model)
+              ? batchOptions(model, api.mode)
               : section.key === "mode"
                 ? ["single", "group"]
                 : model.qualities)
@@ -91,10 +92,9 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
   );
 }
 
-function batchOptions(m: ModelDef): string[] {
-  // 自定义模型：maxRef 是参考图上限，与张数无关，固定 1-4；内置模型按 maxRef 收敛。
-  const cap = m.custom ? 4 : Math.min(m.maxRef ?? 4, 4);
-  return Array.from({ length: Math.max(1, cap) }, (_, i) => String(i + 1));
+function batchOptions(m: ModelDef, mode?: string): string[] {
+  const cap = batchCap(m, mode === "group" ? "group" : "single");
+  return Array.from({ length: cap }, (_, i) => String(i + 1));
 }
 
 /** "3:4" → 迷你矩形像素（最长边 16px）；非 x:y 格式（如 1024x1024）回退方形。 */
@@ -186,7 +186,7 @@ function RatioSection({
 function SizeRow({ model, api }: { model: ModelDef; api: StudioApi }) {
   const base = api.size ?? parseSizePx(aspectToSize(model.providerId, model.id, api.ar, api.quality));
   const locked = api.sizeLocked;
-  const bounds = volcarkPixelBounds(model);
+  const bounds = pixelBounds(model);
 
   const clamp = (v: number) =>
     Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.round(v / SIZE_STEP) * SIZE_STEP));
