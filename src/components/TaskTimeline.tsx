@@ -60,9 +60,24 @@ const phaseLabel = (t: (k: string) => string, phase?: string) => {
   }
 };
 
+// 同时支持比例（"9:16"）与自定义像素尺寸（"1080x1920"）两种 ar 格式；
+// 无法解析时回退正方形，避免卡片塌陷。
+const parseAspect = (ar: string): [number, number] => {
+  const [w, h] = ar.split(/[:x×]/).map(Number);
+  return w > 0 && h > 0 ? [w, h] : [1, 1];
+};
 const mediaAspect = (ar: string) => {
-  const [w, h] = ar.split(":").map(Number);
-  return w > 0 && h > 0 ? `${w} / ${h}` : "1 / 1";
+  const [w, h] = parseAspect(ar);
+  return `${w} / ${h}`;
+};
+
+// 网格列数自适应（loading / 完成共用）：
+// 竖图且 4 张及以上 → xl 4 列一行（每格窄、高度低于 45vh，纯图无卡片背景）；
+// 其余（1-3 张 / 横图）→ 2 列（每格宽、竖图被 45vh 压缩露出卡片背景）。
+const gridCols = (count: number, ar: string) => {
+  const [w, h] = parseAspect(ar);
+  const fourCols = count >= 4 && w <= h;
+  return fourCols ? "grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-4" : "grid-cols-1 gap-1 sm:grid-cols-2";
 };
 
 // 装饰性进度动画：厂商无法提供真实进度（只能等完成取结果），
@@ -270,10 +285,11 @@ export function TaskTimeline({
           <div className="group relative w-full grow pt-2 md:pt-0 lg:w-2/3">
             {g.status === "loading" && (
               <div className="flex min-w-0 flex-col gap-2" aria-busy="true">
-                <div className="grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-2">
+                {/* 占位卡与完成卡同网格同高约束（见 gridCols + xl:max-h-[45vh]），生成中网格不放大、完成后不回缩 */}
+                <div className={cn("grid min-w-0", gridCols(g.items.length, g.ar))}>
                   {g.items.map((it) => (
                     <div
-                      className="grid min-w-0 place-items-center overflow-hidden rounded-xl border border-dashed border-border-3 bg-card-shade"
+                      className="grid min-w-0 place-items-center overflow-hidden rounded-xl border border-dashed border-border-3 bg-card-shade xl:max-h-[45vh]"
                       key={it.id}
                       style={{ aspectRatio: mediaAspect(g.ar) }}
                     >
@@ -291,7 +307,7 @@ export function TaskTimeline({
             )}
             {g.status === "done" && (
               <>
-                <div className="grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-2">
+                <div className={cn("grid min-w-0", gridCols(g.items.length, g.ar))}>
                   {g.items.map((it) => (
                     <div
                       className="group/image relative min-w-0 cursor-pointer overflow-hidden rounded-xl bg-card transition-transform duration-250 ease-[cubic-bezier(.19,0,0,1)] hover:scale-[1.01] active:scale-[0.99]"

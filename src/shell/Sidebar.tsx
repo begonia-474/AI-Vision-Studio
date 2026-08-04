@@ -32,11 +32,10 @@ interface SidebarProps {
   onSwitch: (v: View) => void;
   onToggleSidebar: () => void;
   onOpenByok: () => void;
-  onOpenCustomProvider: () => void;
   onOpenSettings: () => void;
 }
 
-export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onSwitch, onToggleSidebar, onOpenByok, onOpenCustomProvider, onOpenSettings }: SidebarProps) {
+export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onSwitch, onToggleSidebar, onOpenByok, onOpenSettings }: SidebarProps) {
   const { t } = useTranslation();
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -224,7 +223,7 @@ export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onS
 
         <div className="mt-auto flex flex-col gap-1 border-t border-line-2 pt-3">
           <TooltipIf show={collapsed} label={t("sidebar.customProvider")}>
-            <button className={cn(catBtn, catBtnCollapsed)} onClick={onOpenCustomProvider}>
+            <button className={cn(catBtn, catBtnCollapsed, activeView === "providers" && catBtnActive)} onClick={() => onSwitch("providers")}>
               <IconBox className="size-[19px] shrink-0" size={19} />
               <span className={cn("min-w-0 flex-1 truncate transition-opacity duration-300 group-[.collapsed]/sb:opacity-0", catLabelCollapsed)}>{t("sidebar.customProvider")}</span>
             </button>

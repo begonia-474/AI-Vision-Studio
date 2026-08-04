@@ -36,6 +36,9 @@ export const setStar = (id: number, starred: boolean) =>
 export const deleteHistories = (ids: number[]) =>
   invoke<void>("delete_histories", { ids });
 
+// 补全历史任务缺失的缩略图（旧数据仅第一张有），返回补生成的缩略图数量。
+export const ensureThumbnails = () => invoke<number>("ensure_thumbnails");
+
 // ============ 自定义厂商（JSON 配置存储） ============
 export const listCustomProviders = () => invoke<CustomProviderRow[]>("list_custom_providers");
 

@@ -18,6 +18,7 @@
 use async_trait::async_trait;
 use base64::Engine;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::models::{GenRequest, TaskHandle, TaskPhase, TaskSnapshot};
 use crate::providers::GenerationProvider;
@@ -102,38 +103,27 @@ impl CustomProvider {
         }
 
         let loops = req.n.max(1) as usize;
-        let mut handles = Vec::with_capacity(loops);
+        let mut task_ids = Vec::with_capacity(loops);
+        // 串行逐个提交（不并发）：网关对「相同内容并发到达」的提交做幂等去重
+        // （幂等键为 model+prompt 等，不含 seed，见上：注入 seed 仍被去重），
+        // 导致 N 张图只有少量不同产物而控制台仍按 N 次计费。
+        // 串行后每次提交间隔一个网络 RTT，错开去重窗口，各自获得独立任务。
         for _ in 0..loops {
-            let client = self.client.clone();
-            let key = api_key.to_string();
-            let base_url = self.base_url.clone();
-            let ep = endpoint.to_string();
-            let body = payload.clone();
-            handles.push(tokio::spawn(async move {
-                Self::ms_create_once(client, &key, &base_url, &ep, body).await
-            }));
-        }
-
-        let mut task_ids = Vec::new();
-        for h in handles {
-            match h.await {
-                Ok(Ok(t)) => task_ids.push(t),
-                Ok(Err(msg)) => {
+            // 无显式 seed 时注入随机 seed（部分网关按完整 payload 去重时起作用）。
+            let mut body = payload.clone();
+            if body.get("seed").is_none() {
+                body["seed"] = json!((Uuid::new_v4().as_u128() % 1_000_000_000) as u64);
+            }
+            match Self::ms_create_once(self.client.clone(), api_key, &self.base_url, endpoint, body).await
+            {
+                Ok(t) => task_ids.push(t),
+                Err(msg) => {
                     return Ok(TaskHandle {
                         provider_id: self.id.clone(),
                         task_id: String::new(),
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(msg),
-                    });
-                }
-                Err(e) => {
-                    return Ok(TaskHandle {
-                        provider_id: self.id.clone(),
-                        task_id: String::new(),
-                        phase: TaskPhase::Failed,
-                        remote_urls: vec![],
-                        error: Some(format!("请求任务异常: {}", e)),
                     });
                 }
             }

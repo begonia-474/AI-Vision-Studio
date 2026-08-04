@@ -52,10 +52,11 @@ pub async fn save_remote(
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
-    let mut name = format!("{}_{}_{}", ts, safe_provider, short_id);
-    if name.len() > 32 {
-        name.truncate(32);
-    }
+    // 文件名 {ts}_{provider前12位}_{uuid}：UUID 必须完整保留——
+    // 同一秒内并行/批量下载的多张图靠它区分，截断 uuid 会同名覆盖（只剩最后一张）。
+    // provider 截断到 12 位控制总长（ts 14 + provider 12 + uuid 32 ≈ 59，远低于系统限制）。
+    let provider_short: String = safe_provider.chars().take(12).collect();
+    let name = format!("{}_{}_{}", ts, provider_short, short_id);
     let full_path = month_dir.join(format!("{}{}", name, ext));
 
     if url.to_lowercase().starts_with("data:") {
@@ -192,6 +193,72 @@ pub fn make_thumbnail(src: &str) -> Result<String, String> {
             Ok(png_dest.to_string_lossy().to_string())
         }
     }
+}
+
+/// 按命名约定推导缩略图路径：原图同目录 `{stem}.thumb.webp`（make_thumbnail 输出）。
+fn thumbnail_path_of(p: &str) -> PathBuf {
+    let path = PathBuf::from(p);
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{}.thumb.webp", stem))
+}
+
+/// 补全历史任务缺失的缩略图（旧数据仅第一张有）。
+/// 按 `{stem}.thumb.webp` 命名约定检查每张图片，缺则生成；
+/// thumbnail_path 为空的任务回填第一张缩略图。返回补生成的缩略图数量。
+pub fn ensure_thumbnails() -> Result<usize, String> {
+    let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, local_paths_json, thumbnail_path FROM tasks")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut made = 0usize;
+    let mut backfill: Vec<(i64, String)> = Vec::new();
+    for r in rows {
+        let (id, local_json, thumb) = r.map_err(|e| e.to_string())?;
+        let paths: Vec<String> = serde_json::from_str(&local_json).unwrap_or_default();
+        let mut first_thumb: Option<String> = None;
+        for p in &paths {
+            if !is_image_path(p) {
+                continue;
+            }
+            let derived = thumbnail_path_of(p);
+            if !derived.exists() {
+                if let Ok(t) = make_thumbnail(p) {
+                    made += 1;
+                    if first_thumb.is_none() {
+                        first_thumb = Some(t);
+                    }
+                }
+            } else if first_thumb.is_none() {
+                first_thumb = Some(derived.to_string_lossy().to_string());
+            }
+        }
+        if thumb.is_none() {
+            if let Some(t) = first_thumb {
+                backfill.push((id, t));
+            }
+        }
+    }
+    for (id, t) in backfill {
+        conn.execute("UPDATE tasks SET thumbnail_path=?1 WHERE id=?2", params![t, id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(made)
 }
 
 // —— HistoryDb ——

@@ -1,6 +1,6 @@
 // App = Shell（两区：侧边栏 + 功能区）
 // 顶部无独立 header：logo/程序名/折叠按钮并入侧边栏顶栏（见 Sidebar）。
-// 两个 studio 与图库常驻挂载，用 hidden 类切换以保留状态。
+// 三个 studio 与图库、自定义厂商管理页常驻挂载，用 hidden 类切换以保留状态。
 // BYOK / Settings 为独立 modal，由 sidebar 底部入口触发。
 // 图像 → 视频跳转：ImageStudio/GalleryView 触发 onImageToVideo，App 切换 tab 并向 VideoStudio 注入 jump。
 // 图库 → 图像跳转：GalleryView 触发 onImageToImage，App 切换 tab 并向 ImageStudio 注入 jump（作为参考图）。
@@ -11,20 +11,19 @@ import { Sidebar } from "./shell/Sidebar";
 import { ImageStudio } from "./studios/ImageStudio";
 import { VideoStudio } from "./studios/VideoStudio";
 import { GalleryView } from "./components/GalleryView";
+import { ProvidersPage } from "./components/ProvidersPage";
 import { ByokModal } from "./components/ByokModal";
-import { CustomProviderModal } from "./components/CustomProviderModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { useSessionStore } from "./studios/sessionStore";
 import { IMAGE_MODELS, VIDEO_MODELS, refreshCustomProviders } from "./models/registry";
 import type { StudioJump } from "./types";
 
-export type View = "image" | "video" | "gallery";
+export type View = "image" | "video" | "gallery" | "providers";
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>("image");
   const [collapsed, setCollapsed] = useState(false);
   const [byokOpen, setByokOpen] = useState(false);
-  const [customProviderOpen, setCustomProviderOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [videoJump, setVideoJump] = useState<StudioJump | null>(null);
   const [imageJump, setImageJump] = useState<StudioJump | null>(null);
@@ -84,7 +83,6 @@ export default function App() {
           onActivateStudio={activateStudio}
           onToggleSidebar={() => setCollapsed((v) => !v)}
           onOpenByok={() => setByokOpen(true)}
-          onOpenCustomProvider={() => setCustomProviderOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
@@ -98,11 +96,13 @@ export default function App() {
           <div className={cn("h-full w-full", activeView !== "gallery" && "hidden")}>
             <GalleryView onImageToVideo={handleImageToVideo} onImageToImage={handleImageToImage} onReEdit={handleReEdit} />
           </div>
+          <div className={cn("h-full w-full", activeView !== "providers" && "hidden")}>
+            <ProvidersPage onBack={() => setActiveView(lastStudio)} />
+          </div>
         </div>
       </div>
 
       <ByokModal open={byokOpen} onClose={() => setByokOpen(false)} />
-      <CustomProviderModal open={customProviderOpen} onClose={() => setCustomProviderOpen(false)} />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

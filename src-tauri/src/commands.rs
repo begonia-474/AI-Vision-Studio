@@ -155,6 +155,16 @@ pub async fn generate(
         },
     );
 
+    // 诊断日志：多张并行时确认厂商返回的 URL 是否独立（若出现重复 URL 则是服务端幂等去重）。
+    eprintln!(
+        "[gen] task={} n={} capability={} remote_urls({}) = {:?}",
+        req.task_id,
+        req.n,
+        req.capability,
+        remote_urls.len(),
+        remote_urls,
+    );
+
     let mut local_paths = Vec::new();
     for url in &remote_urls {
         let p = storage::save_remote(client.inner(), url, &provider_id)
@@ -162,6 +172,12 @@ pub async fn generate(
             .map_err(|e| format!("下载失败: {}", e))?;
         local_paths.push(p);
     }
+    eprintln!(
+        "[gen] task={} local_paths({}) = {:?}",
+        req.task_id,
+        local_paths.len(),
+        local_paths,
+    );
 
     let model = req
         .model
@@ -177,11 +193,19 @@ pub async fn generate(
     });
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
+    // 每张图都生成 256px webp 缩略图（{stem}.thumb.webp 命名约定，网格按此渲染），
+    // 避免网格直接解码全尺寸原图导致图库量大时卡顿；
+    // thumbnail_path 字段存第一张（详情/兼容旧逻辑用）。
     // 原图文件保持下载原样，不做任何重编码。
     let thumbnail_path = local_paths
         .first()
         .filter(|p| storage::is_image_path(p))
         .and_then(|p| storage::make_thumbnail(p).ok());
+    for p in local_paths.iter().skip(1) {
+        if storage::is_image_path(p) {
+            let _ = storage::make_thumbnail(p);
+        }
+    }
 
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
@@ -233,6 +257,15 @@ pub fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
         storage::delete_task(id)?;
     }
     Ok(())
+}
+
+/// 补全历史任务缺失的缩略图（旧数据仅第一张有）。
+/// CPU 密集（图像解码+编码），丢到阻塞线程池避免卡住主线程。
+#[tauri::command]
+pub async fn ensure_thumbnails() -> Result<usize, String> {
+    tokio::task::spawn_blocking(storage::ensure_thumbnails)
+        .await
+        .map_err(|e| format!("缩略图任务异常: {}", e))?
 }
 
 // —— 自定义厂商（JSON 配置存储）——

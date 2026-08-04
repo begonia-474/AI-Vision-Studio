@@ -21,6 +21,8 @@ export interface DetailSource {
   tool?: string;
   createdAt: string;
   paths: string[];
+  /** 当前展示的是 paths 中的第几张（批量任务点开第 N 张详情应显示第 N 张），缺省 0 */
+  pathIndex?: number;
   thumbnailPath?: string;
   size?: string;
   ratio?: string;
@@ -107,7 +109,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   const canNext = index < sources.length - 1;
 
   const download = async () => {
-    const p = source.paths[0] ?? source.thumbnailPath;
+    const p = source.paths[source.pathIndex ?? 0] ?? source.thumbnailPath;
     if (!p) return;
     try {
       await openPath(p, "reveal");
@@ -144,9 +146,9 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
         {/* 左：图片区 */}
         <div className="group/detail relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#f8f8f8] px-10 py-16">
           {source.image ? (
-            <img src={toAssetUrl(source.paths[0] ?? source.thumbnailPath ?? "")} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
+            <img src={toAssetUrl(source.paths[source.pathIndex ?? 0] ?? source.thumbnailPath ?? "")} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
           ) : (
-            <video src={toAssetUrl(source.paths[0] ?? "")} controls className="max-h-full max-w-full rounded-lg" />
+            <video src={toAssetUrl(source.paths[source.pathIndex ?? 0] ?? "")} controls className="max-h-full max-w-full rounded-lg" />
           )}
           {source.paths.length > 1 && (
             <span className="absolute top-4 left-4 rounded-full bg-black/55 px-2.5 py-1 text-[11px] font-bold text-white">×{source.paths.length}</span>

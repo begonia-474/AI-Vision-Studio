@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { deleteHistories, listHistory, onProgress, setStar, toAssetUrl } from "../api";
+import { deleteHistories, ensureThumbnails, listHistory, onProgress, setStar, toAssetUrl } from "../api";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
@@ -42,8 +42,19 @@ const paramsOf = (t: HistoryTask): Record<string, unknown> | null => {
 interface GalleryEntry {
   key: string;
   item: HistoryTask;
+  /** 该图在任务 local_paths 中的下标（详情面板按此显示对应张） */
+  index: number;
   thumbnail?: string;
+  /** 缩略图缺失（旧数据）时回退显示的原图 URL */
+  fallback?: string;
 }
+
+// 缩略图命名约定：{stem}.thumb.webp（后端 make_thumbnail 输出），
+// 网格按原图路径推导渲染，缺缩略图时由 <img onError> 回退原图。
+const thumbOf = (p: string): string => {
+  const i = p.lastIndexOf(".");
+  return i > 0 ? `${p.slice(0, i)}.thumb.webp` : p;
+};
 
 // 按本地日期分组：返回 "YYYY-MM-DD"
 const dayKey = (iso: string): string => {
@@ -182,6 +193,19 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
     };
   }, [refresh]);
 
+  // 旧数据补缩略图：后台生成缺失缩略图，完成后刷新列表让网格切到缩略图
+  useEffect(() => {
+    let alive = true;
+    ensureThumbnails()
+      .then((n) => {
+        if (alive && n > 0) refresh();
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [refresh]);
+
   // 点击搜索区 / 菜单区外部时收回；Escape 也收回
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -246,11 +270,19 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
         const count = Math.max(paths.length, 1);
         return Array.from({ length: count }, (_, index) => {
           const image = isImage(it);
-          const path = index === 0 && it.thumbnail_path ? it.thumbnail_path : image ? paths[index] : undefined;
+          // 第 1 张优先 thumbnail_path 字段（webp/png 兼容），其余按命名约定推导缩略图；
+          // 旧数据推导的文件不存在时由 <img onError> 回退原图（fallback）。
+          const thumb = image
+            ? index === 0 && it.thumbnail_path
+              ? it.thumbnail_path
+              : thumbOf(paths[index] ?? "")
+            : undefined;
           return {
             key: `${it.id}-${index}`,
             item: it,
-            thumbnail: path ? toAssetUrl(path) : undefined,
+            index,
+            thumbnail: thumb ? toAssetUrl(thumb) : undefined,
+            fallback: image && paths[index] ? toAssetUrl(paths[index]) : undefined,
           };
         });
       }),
@@ -421,6 +453,7 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
       tool: providerName(it),
       createdAt: it.created_at,
       paths,
+      pathIndex: entry.index,
       thumbnailPath: it.thumbnail_path ?? undefined,
       size,
       ratio: size ? (ratioOf(it) ?? undefined) : undefined,
@@ -788,10 +821,30 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
                         onClick={() => (manage ? toggleSelect(it.id) : openDetail(entry))}
                       >
                         {entry.thumbnail && img ? (
-                          <img className="block h-full w-full object-cover" src={entry.thumbnail} alt="" loading="lazy" />
+                          <img
+                            className="block h-full w-full object-cover"
+                            src={entry.thumbnail}
+                            alt=""
+                            loading="lazy"
+                            onError={(e) => {
+                              if (entry.fallback && e.currentTarget.src !== entry.fallback) {
+                                e.currentTarget.src = entry.fallback;
+                              }
+                            }}
+                          />
                         ) : entry.thumbnail && !img ? (
                           <>
-                            <img className="block h-full w-full object-cover" src={entry.thumbnail} alt="" loading="lazy" />
+                            <img
+                              className="block h-full w-full object-cover"
+                              src={entry.thumbnail}
+                              alt=""
+                              loading="lazy"
+                              onError={(e) => {
+                                if (entry.fallback && e.currentTarget.src !== entry.fallback) {
+                                  e.currentTarget.src = entry.fallback;
+                                }
+                              }}
+                            />
                             <div className="absolute inset-0 grid place-items-center bg-black/10">
                               <span className="grid size-9 place-items-center rounded-full bg-black/55 text-white">
                                 <IconPlay size={14} />

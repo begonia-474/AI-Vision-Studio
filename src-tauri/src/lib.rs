@@ -32,6 +32,7 @@ pub fn run() {
             commands::list_history,
             commands::set_star,
             commands::delete_histories,
+            commands::ensure_thumbnails,
             commands::list_custom_providers,
             commands::save_custom_provider,
             commands::delete_custom_provider,
