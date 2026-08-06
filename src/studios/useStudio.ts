@@ -19,6 +19,7 @@ export interface StudioApi {
   model: ModelDef;
   ar: string;
   quality: string;
+  format: string; // 仅图像；输出格式（png/jpeg，缺省 jpeg）
   duration: string; // 仅视频
   batch: number; // 仅图像；组图模式下为组图张数（max_images）
   mode: "single" | "group"; // 生图模式：单图固定 1 张（API 无 n），组图 = sequential auto
@@ -34,6 +35,7 @@ export interface StudioApi {
   setPrompt: (v: string) => void;
   setAr: (v: string) => void;
   setQuality: (v: string) => void;
+  setFormat: (v: string) => void;
   setDuration: (v: string) => void;
   setBatch: (n: number) => void;
   setMode: (v: "single" | "group") => void;
@@ -57,6 +59,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const [model, setModel] = useState<ModelDef>(() => allModels[studio === "image" ? 0 : 1]);
   const [ar, setAr] = useState(() => allModels[studio === "image" ? 0 : 1].aspectRatios[0]);
   const [quality, setQuality] = useState(() => allModels[studio === "image" ? 0 : 1].qualities[0]);
+  const [format, setFormat] = useState("jpeg"); // 输出格式（仅声明 formats 的模型生效）
   const [duration, setDuration] = useState(() => allModels[studio === "image" ? 0 : 1].durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
   const [mode, setModeState] = useState<"single" | "group">("single");
@@ -171,6 +174,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       setQuality(nextQ);
       applyAr(m, m.aspectRatios.includes(ar) ? ar : m.aspectRatios[0], nextQ);
       if (m.durations) setDuration((prev) => (m.durations!.includes(prev) ? prev : m.durations![0]));
+      if (m.formats) setFormat((prev) => (m.formats!.includes(prev) ? prev : "jpeg"));
       if (studio === "image") setBatch((prev) => Math.min(prev, batchCap(m, "single")));
       // 直接置 single（batch 已按新模型收缩；setMode 的 clamp 会用旧模型上限，不适用）
       setModeState("single");
@@ -235,13 +239,14 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       model: ModelDef;
       ar: string;
       quality: string;
+      format: string;
       duration: string;
       n: number;
       mode: "single" | "group";
       refs: string[];
       isVideo: boolean;
     }) => {
-      const { taskId, prompt: p, model: m, ar: ar0, quality: q, duration: d, n, mode, refs: refs0, isVideo } = params;
+      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, duration: d, n, mode, refs: refs0, isVideo } = params;
       const capability = refs0.length > 0 ? (isVideo ? "i2v" : "i2i") : isVideo ? "t2v" : "t2i";
       // 声明 size 区的模型（volcark）用自定义像素尺寸直传 size；其余仍走 aspect_ratio。
       const useCustomSize = size !== null && supportsCustomSize(m);
@@ -276,6 +281,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         ar: ar0,
         extra,
         quality: q,
+        format: m.formats ? fmt : undefined,
         duration: d,
         refs: refs0,
         phase: "submitting",
@@ -296,6 +302,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           quality: q,
           duration: isVideo ? d : undefined,
           mode: isVideo ? undefined : mode,
+          output_format: m.formats ? fmt : undefined,
           references: refs0,
           extra: customExtra,
         });
@@ -313,6 +320,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           ar: ar0,
           extra,
           quality: q,
+          format: m.formats ? fmt : undefined,
           duration: d,
           refs: refs0,
         }));
@@ -330,7 +338,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         );
       }
     },
-    [session.patchActive, t, size, supportsCustomSize, paramValues],
+    [session.patchActive, t, size, supportsCustomSize, paramValues, format],
   );
 
   const handleGenerate = useCallback(async () => {
@@ -353,13 +361,14 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       model,
       ar,
       quality,
+      format,
       duration,
       n,
       mode,
       refs,
       isVideo: studio === "video",
     });
-  }, [prompt, studio, batch, mode, refs, model, ar, quality, duration, results, session.activeId, session.renameSession, submitTask]);
+  }, [prompt, studio, batch, mode, refs, model, ar, quality, format, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
   const regenerate = useCallback(
@@ -374,6 +383,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         model: m,
         ar: task.ar,
         quality: task.quality ?? quality,
+        format: task.format ?? format,
         duration: task.duration ?? duration,
         n,
         mode,
@@ -381,7 +391,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         isVideo: studio === "video",
       });
     },
-    [results, allModels, model, mode, quality, duration, studio, submitTask],
+    [results, allModels, model, mode, quality, format, duration, studio, submitTask],
   );
 
   return {
@@ -389,6 +399,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     model,
     ar,
     quality,
+    format,
     duration,
     batch,
     mode,
@@ -404,6 +415,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     setPrompt,
     setAr: setArCb,
     setQuality: setQualityCb,
+    setFormat,
     setDuration,
     setBatch,
     setMode,

@@ -1,7 +1,7 @@
 // 模型注册表（前端侧）—— 本文件为内置模型的单一数据源
 // 与后端 provider_id 对齐：volcark / kling / wanxiang / minimax 内置；
 // custom:<uuid> 为自定义厂商（JSON 配置，协议：modelscope / huggingface / openai-compatible）。
-// ModelDropdown 与参数 popover 均读此表动态渲染。
+// ModelSelectModal 与参数 popover 均读此表动态渲染。
 
 import { useEffect, useReducer } from "react";
 import { listCustomProviders } from "../api";
@@ -18,14 +18,14 @@ export type Capability = "t2i" | "i2i" | "t2v" | "i2v" | "r2v";
 // 哩布风格：弹层内容按模型声明式渲染，不同模型呈现不同分区。
 // title 为 i18n key；options 缺省时按 key 取模型字段（quality→qualities，batch→1..min(maxRef,4)）。
 // 生图模式（mode）：单图=1 张（API 无 n 参数），组图=sequential auto + max_images（张数区）。
-export type ParamKey = "ar" | "quality" | "duration" | "batch" | "mode";
+export type ParamKey = "ar" | "quality" | "duration" | "batch" | "mode" | "format";
 
 export type ParamSectionDef =
   | {
       type: "segmented";
-      key: "quality" | "batch" | "mode";
+      key: "quality" | "batch" | "mode" | "format";
       title: string;
-      options?: string[]; // 缺省 quality→model.qualities，batch→1..min(maxRef,4)，mode→[single,group]
+      options?: string[]; // 缺省 quality→model.qualities，batch→1..min(maxRef,4)，mode→[single,group]，format→model.formats
       /** 选项为 i18n key，渲染时经 t() 转换（如生图模式的单图/组图） */
       i18n?: boolean;
     }
@@ -67,6 +67,8 @@ export interface ModelDef {
   aspectRatios: string[];
   qualities: string[]; // 图像画质 / 视频分辨率
   durations?: string[]; // 仅视频
+  /** 图像输出格式（如火山方舟 5.0 的 png/jpeg）；声明后参数弹层渲染「图片格式」分区，缺省 jpeg */
+  formats?: string[];
   maxRef?: number; // 参考图上限
   /** 组图模式（mode=group）最大张数；缺省与普通张数一致（≤4）。2.7 组图官方上限 12。 */
   maxBatch?: number;
@@ -124,12 +126,14 @@ const seedreamSectionsPro: ParamSectionDef[] = [
   { type: "segmented", key: "quality", title: "prompt.resolution" },
   { type: "ratio", key: "ar", title: "prompt.imageSize", size: true },
   { type: "segmented", key: "batch", title: "prompt.imageCount" },
+  { type: "segmented", key: "format", title: "prompt.imageFormat" },
 ];
 const seedreamSectionsMulti: ParamSectionDef[] = [
   { type: "segmented", key: "mode", title: "prompt.imageMode", options: ["single", "group"], i18n: true },
   { type: "segmented", key: "quality", title: "prompt.resolution" },
   { type: "ratio", key: "ar", title: "prompt.imageSize", size: true },
   { type: "segmented", key: "batch", title: "prompt.imageCount" },
+  { type: "segmented", key: "format", title: "prompt.imageFormat" },
 ];
 
 // 万相 2.7（wanxiang）：size 档位 1K/2K（pro 文生图另加 4K）；组图 enable_sequential；
@@ -177,8 +181,8 @@ export const IMAGE_MODELS: ModelDef[] = [
   { id: "qwen-image-edit-plus", name: "qwen-image-edit-plus", providerId: "wanxiang", studio: "image", capabilities: ["i2i"], aspectRatios: QWEN_RATIOS, qualities: QWEN_2K_QUALITIES, maxRef: 3, maxImages: 6, edit: true, blurb: "图像编辑，1-3 图参考", sections: qwenSizeSections },
   { id: "qwen-image-edit", name: "qwen-image-edit", providerId: "wanxiang", studio: "image", capabilities: ["i2i"], aspectRatios: QWEN_RATIOS, qualities: QWEN_FIXED_QUALITIES, maxRef: 1, edit: true, blurb: "轻量图像编辑，单图" },
   { id: "z-image-turbo", name: "z-image-turbo", providerId: "wanxiang", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: Z_RATIOS, qualities: ["1K", "2K"], maxRef: 1, blurb: "快 10 倍/约 1/5 价，写实人像，支持图生图", sections: zImageSections },
-  { id: "doubao-seedream-5-0-pro-260628", name: "Seedream 5.0 Pro", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","2K"], maxRef: 10, blurb: "写实电影感，超高细节", sections: seedreamSectionsPro },
-  { id: "doubao-seedream-5-0-260128", name: "Seedream 5.0 Lite", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","3K","4K"], maxRef: 14, blurb: "组图/流式/联网，性价比", sections: seedreamSectionsMulti },
+  { id: "doubao-seedream-5-0-pro-260628", name: "Seedream 5.0 Pro", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","2K"], formats: ["jpeg", "png"], maxRef: 10, blurb: "写实电影感，超高细节", sections: seedreamSectionsPro },
+  { id: "doubao-seedream-5-0-260128", name: "Seedream 5.0 Lite", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","3K","4K"], formats: ["jpeg", "png"], maxRef: 14, blurb: "组图/流式/联网，性价比", sections: seedreamSectionsMulti },
   { id: "doubao-seedream-4-5-251128", name: "Seedream 4.5", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","4K"], maxRef: 14, blurb: "多图参考，组图/流式", sections: seedreamSectionsMulti },
   { id: "doubao-seedream-4-0-250828", name: "Seedream 4.0", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","2K","4K"], maxRef: 14, blurb: "稳定通用，legacy", sections: seedreamSectionsMulti },
   { id: "wan2.6-t2i", name: "wan2.6-t2i", providerId: "wanxiang", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: ["1:1","3:4","4:3","16:9","9:16"], qualities: ["1K","2K"], maxRef: 1, blurb: "国风水墨，意境留白，对话式图生图", sections: wan26Sections },
@@ -237,7 +241,7 @@ export function batchCap(m: ModelDef, mode: "single" | "group"): number {
 
 // —— 自定义厂商动态注册表 ——
 // 配置存后端 SQLite（JSON），此处为前端内存镜像 + 变更订阅，
-// 供两个 studio 的模型列表 / ModelDropdown / BYOK 响应式更新。
+// 供两个 studio 的模型列表 / ModelSelectModal / BYOK 响应式更新。
 export const CUSTOM_PREFIX = "custom:";
 
 export const PROTOCOL_COLORS: Record<ProtocolType, string> = {

@@ -148,6 +148,7 @@ export const enUS: ZhDict = {
     imageCount: "Image Count",
     customSize: "Custom Size",
     imageMode: "Image Mode",
+    imageFormat: "Image Format",
     singleMode: "Single",
     groupMode: "Group",
     countUnit: " imgs",
@@ -182,6 +183,7 @@ export const enUS: ZhDict = {
     rename: "Double-click to rename",
   },
   model: {
+    select: "Select model",
     allProviders: "All Providers",
     allTab: "All providers",
     providerTab: "Filter by: {{name}}",
@@ -192,6 +194,16 @@ export const enUS: ZhDict = {
     supportsEdit: " · supports image edit",
     supportsI2v: " · supports i2v",
     notWired: "· not wired",
+    tag: {
+      t2i: "T2I",
+      i2i: "I2I",
+      t2v: "T2V",
+      i2v: "I2V",
+      edit: "Edit",
+      multiRef: "Multi-ref",
+      group: "Group mode",
+      ultraHD: "4K",
+    },
   },
   result: {
     startWith: "START CREATING WITH",

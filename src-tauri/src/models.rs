@@ -38,6 +38,9 @@ pub struct GenRequest {
     /// 图像生图模式：single=每张图独立请求（循环 n 次）；group=一次请求组图 auto+max_images。
     #[serde(default)]
     pub mode: Option<String>,
+    /// 图像输出格式（火山方舟 Seedream 5.0 pro/lite 支持）：png / jpeg，缺省 jpeg。
+    #[serde(default)]
+    pub output_format: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
     #[serde(default)]

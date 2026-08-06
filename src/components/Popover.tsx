@@ -65,21 +65,27 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
               ? batchOptions(model, api.mode)
               : section.key === "mode"
                 ? ["single", "group"]
-                : model.qualities)
+                : section.key === "format"
+                  ? (model.formats ?? ["jpeg", "png"])
+                  : model.qualities)
           }
           current={
             section.key === "batch"
               ? String(api.batch)
               : section.key === "mode"
                 ? api.mode
-                : api.quality
+                : section.key === "format"
+                  ? api.format
+                  : api.quality
           }
           onSelect={(v) =>
             section.key === "batch"
               ? api.setBatch(Number(v))
               : section.key === "mode"
                 ? api.setMode(v as "single" | "group")
-                : api.setQuality(v)
+                : section.key === "format"
+                  ? api.setFormat(v)
+                  : api.setQuality(v)
           }
           labelOf={(v) => (section.i18n ? t(v) : v)}
         />

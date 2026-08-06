@@ -26,6 +26,7 @@ export interface ResultItem {
   // 重新生成所需的参数快照（persist 到 localStorage，用于「重新生成」）
   modelId?: string;
   quality?: string;
+  format?: string; // 图像输出格式（png/jpeg）
   duration?: string;
   refs?: string[];
   error?: string;

@@ -292,6 +292,12 @@ impl VolcArkProvider {
         });
         // 注：官方图片 API 参数表无 negative_prompt 字段（强校验下传未文档化参数有报错风险），
         // 故此处不传；反向描述请并入 prompt。GenRequest 保留该字段供其他厂商使用。
+        // 图像格式 output_format：仅 5.0 pro/lite 支持（png/jpeg，缺省 jpeg），其余模型不传。
+        if let Some(fmt) = req.output_format.as_deref() {
+            if model.contains("5-0") && (fmt == "png" || fmt == "jpeg") {
+                payload["output_format"] = json!(fmt);
+            }
+        }
         // i2i：image[] 接受 data:image/...;base64, 或 https URL
         if req.capability == "i2i" && !req.references.is_empty() {
             payload["image"] = json!(req.references);

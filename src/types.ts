@@ -22,6 +22,8 @@ export interface GenRequest {
   duration?: string;
   /** 图像生图模式：single=每张图独立请求（循环 n 次，哩布行为）；group=一次请求组图 auto+max_images */
   mode?: "single" | "group";
+  /** 图像输出格式（火山方舟 Seedream 5.0 pro/lite）：png / jpeg，缺省 jpeg */
+  output_format?: string;
   references?: string[];
   /** 自定义厂商透传：{ params: 用户按模型配置的自由参数 } */
   extra?: Record<string, unknown>;

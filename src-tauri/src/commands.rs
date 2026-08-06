@@ -200,6 +200,7 @@ pub async fn generate(
         "aspect_ratio": req.aspect_ratio,
         "quality": req.quality,
         "duration": req.duration,
+        "output_format": req.output_format,
         "references": req.references.len(),
     });
 

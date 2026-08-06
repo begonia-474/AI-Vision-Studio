@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ModelDropdown } from "./ModelDropdown";
+import { ModelSelectModal } from "./ModelSelectModal";
 import { ParamPanel } from "./Popover";
 import { cn } from "../lib/utils";
 import { PROVIDER_LOGO } from "../lib/classes";
@@ -129,8 +129,9 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
         e.stopPropagation();
         // 输入框（textarea）与弹层（PopoverContent 带 data-scrollable）内部来源的滚轮一律不转发：
         // 长提示词在框内原生滚动；弹层内滚动（模型列表等）不滚时间线。
+        // role="dialog" 覆盖 Dialog portal：弹层经 React 合成事件冒泡到这里，必须拦截。
         // 滚动任务队列时把鼠标移到输入框外即可（krea 行为）。
-        if ((e.target as HTMLElement).closest("textarea, [data-scrollable]")) return;
+        if ((e.target as HTMLElement).closest("textarea, [data-scrollable], [role='dialog']")) return;
         onWheelOutside?.(e);
       }}
     >
@@ -200,25 +201,24 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
         <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line-soft pt-3">
         <div className="relative flex flex-wrap items-center gap-2">
           {/* 模型 */}
-          <ModelDropdown
+          <ModelSelectModal
             open={openModel}
             onOpenChange={openOne(setOpenModel)}
             studio={api.studio}
             current={api.model}
             onSelect={api.selectModel}
-            trigger={
-              <button
-                type="button"
-                className={cn(ctrlBtn, openModel && ctrlBtnActive)}
-              >
-                <span className={cn(PROVIDER_LOGO, "size-4")} style={{ background: provider.color }}>
-                  {provider.abbr}
-                </span>
-                <span className={cn(ctrlLabel, openModel && "opacity-100")}>{api.model.name}</span>
-                <IconChevron className="size-[10px] shrink-0 opacity-45 group-hover/ctrl:opacity-100" size={10} />
-              </button>
-            }
           />
+          <button
+            type="button"
+            className={cn(ctrlBtn, openModel && ctrlBtnActive)}
+            onClick={() => openOne(setOpenModel)(true)}
+          >
+            <span className={cn(PROVIDER_LOGO, "size-4")} style={{ background: provider.color }}>
+              {provider.abbr}
+            </span>
+            <span className={cn(ctrlLabel, openModel && "opacity-100")}>{api.model.name}</span>
+            <IconChevron className="size-[10px] shrink-0 opacity-45 group-hover/ctrl:opacity-100" size={10} />
+          </button>
 
           {/* 参数（哩布风格：单入口多分区面板，分区按模型 sections 声明渲染） */}
           <ParamPanel

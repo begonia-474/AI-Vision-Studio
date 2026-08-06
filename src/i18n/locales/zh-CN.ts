@@ -146,6 +146,7 @@ export const zhCN = {
     imageCount: "图片张数",
     customSize: "自定义尺寸",
     imageMode: "生图模式",
+    imageFormat: "图片格式",
     singleMode: "单图",
     groupMode: "组图",
     countUnit: "张",
@@ -180,6 +181,7 @@ export const zhCN = {
     rename: "双击重命名",
   },
   model: {
+    select: "选择模型",
     allProviders: "全部厂商",
     allTab: "全部厂商",
     providerTab: "筛选厂商：{{name}}",
@@ -190,6 +192,16 @@ export const zhCN = {
     supportsEdit: " · 支持图像编辑",
     supportsI2v: " · 支持图生视频",
     notWired: "· 未接入",
+    tag: {
+      t2i: "文生图",
+      i2i: "图生图",
+      t2v: "文生视频",
+      i2v: "图生视频",
+      edit: "指令编辑",
+      multiRef: "多参考图",
+      group: "组图模式",
+      ultraHD: "超清4K",
+    },
   },
   result: {
     startWith: "开始创作",
