@@ -20,6 +20,9 @@ pub struct GenRequest {
     /// 前端生成的任务 ID（一次提交一张任务卡），进度事件原样回传用于路由。
     #[serde(default)]
     pub task_id: String,
+    /// 所属会话 ID（前端会话存储生成）；写库后用于启动时按会话恢复时间线。
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub provider_id: String,
     pub capability: String,
     pub prompt: String,
@@ -82,6 +85,8 @@ pub struct HistoryTaskDto {
     pub remote_urls_json: Option<String>,
     pub starred: bool,
     pub thumbnail_path: Option<String>,
+    /// 所属会话 ID（旧记录为 NULL，仅出现在图库，不归属任何会话）。
+    pub session_id: Option<String>,
 }
 
 /// 生成进度事件 payload，通过 app.emit("gen-progress", ...) 推送前端。
@@ -105,6 +110,19 @@ pub enum TaskPhase {
     Failed,
 }
 
+/// 单次 HTTP 交换的调试记录，随任务写库（request_json / raw_response）。
+/// 只记 method / URL / body，绝不记录鉴权头；body 在捕获时已脱敏
+/// （超长 base64 图像块替换为长度标记），防止数据库膨胀。
+#[derive(Clone)]
+pub struct HttpRecord {
+    pub method: &'static str,
+    pub url: String,
+    /// 请求体（GET 轮询无 body 时为 None）。
+    pub request_body: Option<String>,
+    pub status: u16,
+    pub response_body: String,
+}
+
 /// 任务句柄。同步模式 task_id 可为空字符串，remote_urls 在 Submit 阶段即填入结果 URL。
 pub struct TaskHandle {
     #[allow(dead_code)]
@@ -113,6 +131,8 @@ pub struct TaskHandle {
     pub phase: TaskPhase,
     pub remote_urls: Vec<String>,
     pub error: Option<String>,
+    /// 本次 submit 阶段发出的 HTTP 交换记录。
+    pub http_log: Vec<HttpRecord>,
 }
 
 /// 轮询快照。remote_urls 仅在异步厂商 phase=Succeeded 时填入结果 URL（含 MiniMax 的二次 file 拉取）；
@@ -122,4 +142,6 @@ pub struct TaskSnapshot {
     pub progress: i32,
     pub message: Option<String>,
     pub remote_urls: Vec<String>,
+    /// 本次轮询发出的 HTTP 交换记录（终态轮询写入历史）。
+    pub http_log: Vec<HttpRecord>,
 }

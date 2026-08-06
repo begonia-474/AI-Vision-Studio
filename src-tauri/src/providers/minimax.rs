@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::models::{GenRequest, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
-use crate::providers::GenerationProvider;
+use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
+use crate::providers::{sanitize_body, GenerationProvider};
 
 /// MiniMax 海螺 适配器。
 /// 端点 baseUrl: https://api.minimaxi.com（国内）
@@ -64,27 +64,37 @@ impl GenerationProvider for MiniMaxProvider {
                 progress: 100,
                 message: None,
                 remote_urls: vec![],
+                http_log: vec![],
             });
         }
         // 异步视频：轮询任务状态。
+        let url = format!(
+            "{}/v1/query/video_generation?task_id={}",
+            BASE_URL, handle.task_id
+        );
         let resp = self
             .client
-            .get(format!(
-                "{}/v1/query/video_generation?task_id={}",
-                BASE_URL, handle.task_id
-            ))
+            .get(&url)
             .bearer_auth(api_key)
             .send()
             .await
             .map_err(|e| format!("轮询失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let mut http_log = vec![HttpRecord {
+            method: "GET",
+            url: url.clone(),
+            request_body: None,
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        }];
         if !status.is_success() {
             return Ok(TaskSnapshot {
                 phase: TaskPhase::Failed,
                 progress: 100,
                 message: Some(format!("HTTP {}: {}", status, body)),
                 remote_urls: vec![],
+                http_log,
             });
         }
         let v: serde_json::Value =
@@ -106,6 +116,7 @@ impl GenerationProvider for MiniMaxProvider {
                     progress: 100,
                     message: Some(msg.to_string()),
                     remote_urls: vec![],
+                    http_log,
                 });
             }
         }
@@ -121,12 +132,13 @@ impl GenerationProvider for MiniMaxProvider {
                     .get("file_id")
                     .and_then(|f| f.as_str())
                     .ok_or_else(|| "Success 但缺 file_id".to_string())?;
-                let url = self.fetch_file(file_id, api_key).await?;
+                let url = self.fetch_file(file_id, api_key, &mut http_log).await?;
                 Ok(TaskSnapshot {
                     phase: TaskPhase::Succeeded,
                     progress: 100,
                     message: None,
                     remote_urls: vec![url],
+                    http_log,
                 })
             }
             "failed" => Ok(TaskSnapshot {
@@ -134,12 +146,14 @@ impl GenerationProvider for MiniMaxProvider {
                 progress: 100,
                 message: Some(v.get("task_err").and_then(|e| e.as_str()).unwrap_or("生成失败").to_string()),
                 remote_urls: vec![],
+                http_log,
             }),
             _ => Ok(TaskSnapshot {
                 phase: TaskPhase::Running,
                 progress: 50,
                 message: Some(task_status),
                 remote_urls: vec![],
+                http_log,
             }),
         }
     }
@@ -197,7 +211,15 @@ impl MiniMaxProvider {
             .send()
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
-        let (urls, err) = self.parse_image_response(resp).await?;
+        let mut http_log = Vec::new();
+        let (urls, err) = self
+            .parse_image_response(
+                resp,
+                format!("{}/v1/image_generation", BASE_URL),
+                Some(payload.to_string()),
+                &mut http_log,
+            )
+            .await?;
         match urls {
             Some(u) if !u.is_empty() => Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -205,6 +227,7 @@ impl MiniMaxProvider {
                 phase: TaskPhase::Succeeded,
                 remote_urls: u,
                 error: None,
+                http_log,
             }),
             _ => Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -212,6 +235,7 @@ impl MiniMaxProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(err.unwrap_or_else(|| "响应未包含图片 URL".to_string())),
+                http_log,
             }),
         }
     }
@@ -219,9 +243,19 @@ impl MiniMaxProvider {
     async fn parse_image_response(
         &self,
         resp: reqwest::Response,
+        url: String,
+        request_body: Option<String>,
+        log: &mut Vec<HttpRecord>,
     ) -> Result<(Option<Vec<String>>, Option<String>), String> {
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        log.push(HttpRecord {
+            method: "POST",
+            url,
+            request_body,
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        });
         if !status.is_success() {
             return Ok((None, Some(format!("HTTP {}: {}", status, body))));
         }
@@ -290,9 +324,10 @@ impl MiniMaxProvider {
             }
         }
 
+        let url = format!("{}/v1/video_generation", BASE_URL);
         let resp = self
             .client
-            .post(format!("{}/v1/video_generation", BASE_URL))
+            .post(&url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -300,6 +335,13 @@ impl MiniMaxProvider {
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -307,6 +349,7 @@ impl MiniMaxProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("HTTP {}: {}", status, body)),
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -328,6 +371,7 @@ impl MiniMaxProvider {
                     phase: TaskPhase::Failed,
                     remote_urls: vec![],
                     error: Some(msg.to_string()),
+                    http_log: vec![record],
                 });
             }
         }
@@ -342,20 +386,34 @@ impl MiniMaxProvider {
             phase: TaskPhase::Submitted,
             remote_urls: vec![],
             error: None,
+            http_log: vec![record],
         })
     }
 
-    /// file_id → GET /v1/files/retrieve → file.download_url
-    async fn fetch_file(&self, file_id: &str, api_key: &str) -> Result<String, String> {
+    /// file_id → GET /v1/files/retrieve → file.download_url（HTTP 交换记入 log）。
+    async fn fetch_file(
+        &self,
+        file_id: &str,
+        api_key: &str,
+        log: &mut Vec<HttpRecord>,
+    ) -> Result<String, String> {
+        let url = format!("{}/v1/files/retrieve?file_id={}", BASE_URL, file_id);
         let resp = self
             .client
-            .get(format!("{}/v1/files/retrieve?file_id={}", BASE_URL, file_id))
+            .get(&url)
             .bearer_auth(api_key)
             .send()
             .await
             .map_err(|e| format!("拉取文件失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        log.push(HttpRecord {
+            method: "GET",
+            url: url.clone(),
+            request_body: None,
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        });
         if !status.is_success() {
             return Err(format!("HTTP {}: {}", status, body));
         }

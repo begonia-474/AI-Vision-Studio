@@ -20,8 +20,8 @@ use base64::Engine;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::{GenRequest, TaskHandle, TaskPhase, TaskSnapshot};
-use crate::providers::GenerationProvider;
+use crate::models::{GenRequest, HttpRecord, TaskHandle, TaskPhase, TaskSnapshot};
+use crate::providers::{sanitize_body, GenerationProvider};
 use crate::storage;
 
 /// 自定义厂商 id 前缀（keyring 与模型注册均以 "custom:<uuid>" 命名空间隔离）。
@@ -70,6 +70,7 @@ impl CustomProvider {
             progress: 100,
             message: Some(msg),
             remote_urls: vec![],
+            http_log: vec![],
         }
     }
 
@@ -104,6 +105,7 @@ impl CustomProvider {
 
         let loops = req.n.max(1) as usize;
         let mut task_ids = Vec::with_capacity(loops);
+        let mut http_log = Vec::new();
         // 串行逐个提交（不并发）：网关对「相同内容并发到达」的提交做幂等去重
         // （幂等键为 model+prompt 等，不含 seed，见上：注入 seed 仍被去重），
         // 导致 N 张图只有少量不同产物而控制台仍按 N 次计费。
@@ -114,7 +116,15 @@ impl CustomProvider {
             if body.get("seed").is_none() {
                 body["seed"] = json!((Uuid::new_v4().as_u128() % 1_000_000_000) as u64);
             }
-            match Self::ms_create_once(self.client.clone(), api_key, &self.base_url, endpoint, body).await
+            match Self::ms_create_once(
+                self.client.clone(),
+                api_key,
+                &self.base_url,
+                endpoint,
+                body,
+                &mut http_log,
+            )
+            .await
             {
                 Ok(t) => task_ids.push(t),
                 Err(msg) => {
@@ -124,6 +134,7 @@ impl CustomProvider {
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(msg),
+                        http_log,
                     });
                 }
             }
@@ -140,19 +151,22 @@ impl CustomProvider {
             phase: TaskPhase::Submitted,
             remote_urls: vec![],
             error: None,
+            http_log,
         })
     }
 
-    /// 单次创建魔搭异步任务 → task_id。
+    /// 单次创建魔搭异步任务 → task_id，并把本次 HTTP 交换记入 log。
     async fn ms_create_once(
         client: reqwest::Client,
         api_key: &str,
         base_url: &str,
         endpoint: &str,
         payload: serde_json::Value,
+        log: &mut Vec<HttpRecord>,
     ) -> Result<String, String> {
+        let url = format!("{}/{}", base_url, endpoint);
         let resp = client
-            .post(format!("{}/{}", base_url, endpoint))
+            .post(&url)
             .bearer_auth(api_key)
             .header("X-ModelScope-Async-Mode", "true")
             .json(&payload)
@@ -164,6 +178,13 @@ impl CustomProvider {
             .text()
             .await
             .map_err(|e| format!("读取响应失败: {}", e))?;
+        log.push(HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        });
         if !status.is_success() {
             return Err(format!("HTTP {}: {}", status, body));
         }
@@ -220,9 +241,13 @@ impl CustomProvider {
         }
 
         let mut urls = Vec::new();
+        let mut http_log = Vec::new();
         for h in handles {
             match h.await {
-                Ok(Ok(u)) => urls.push(u),
+                Ok(Ok((u, rec))) => {
+                    urls.push(u);
+                    http_log.push(rec);
+                }
                 Ok(Err(msg)) => {
                     return Ok(TaskHandle {
                         provider_id: self.id.clone(),
@@ -230,6 +255,7 @@ impl CustomProvider {
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(msg),
+                        http_log,
                     });
                 }
                 Err(e) => {
@@ -239,6 +265,7 @@ impl CustomProvider {
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(format!("请求任务异常: {}", e)),
+                        http_log,
                     });
                 }
             }
@@ -250,19 +277,21 @@ impl CustomProvider {
             phase: TaskPhase::Succeeded,
             remote_urls: urls,
             error: None,
+            http_log,
         })
     }
 
-    /// 单次 HF 推理请求 → 图像 data URL。
+    /// 单次 HF 推理请求 → 图像 data URL（附带本次 HTTP 交换记录）。
     async fn hf_generate_once(
         client: reqwest::Client,
         api_key: &str,
         base_url: &str,
         repo: &str,
         payload: serde_json::Value,
-    ) -> Result<String, String> {
+    ) -> Result<(String, HttpRecord), String> {
+        let url = format!("{}/models/{}", base_url, repo);
         let resp = client
-            .post(format!("{}/models/{}", base_url, repo))
+            .post(&url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -276,7 +305,14 @@ impl CustomProvider {
         let bytes = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
         // 图像字节 → data URL（下游 save_remote 支持 base64 data URL 落盘）
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        Ok(format!("data:image/png;base64,{}", b64))
+        let record = HttpRecord {
+            method: "POST",
+            url,
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: format!("<图像字节流，{} bytes>", bytes.len()),
+        };
+        Ok((format!("data:image/png;base64,{}", b64), record))
     }
 
     /// OpenAI 兼容：POST {base}/v1/images/generations，响应 {data:[{b64_json|url}]}（同步）。
@@ -294,9 +330,10 @@ impl CustomProvider {
         });
         Self::merge_params(&mut payload, req);
 
+        let url = format!("{}/v1/images/generations", self.base_url);
         let resp = self
             .client
-            .post(format!("{}/v1/images/generations", self.base_url))
+            .post(&url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -304,6 +341,13 @@ impl CustomProvider {
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskHandle {
                 provider_id: self.id.clone(),
@@ -311,6 +355,7 @@ impl CustomProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("HTTP {}: {}", status, body)),
+                http_log: vec![record],
             });
         }
         let v: Value =
@@ -332,6 +377,7 @@ impl CustomProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("响应缺 data[]: {}", body)),
+                http_log: vec![record],
             });
         }
         Ok(TaskHandle {
@@ -340,6 +386,7 @@ impl CustomProvider {
             phase: TaskPhase::Succeeded,
             remote_urls: urls,
             error: None,
+            http_log: vec![record],
         })
     }
 
@@ -393,6 +440,7 @@ impl GenerationProvider for CustomProvider {
                 progress: 100,
                 message: None,
                 remote_urls: handle.remote_urls.clone(),
+                http_log: vec![],
             });
         }
         if handle.phase == TaskPhase::Failed {
@@ -409,12 +457,14 @@ impl GenerationProvider for CustomProvider {
         let mut all_urls = Vec::new();
         let mut any_failed: Option<String> = None;
         let mut any_running = false;
+        let mut http_log = Vec::new();
         for tid in &ids {
             let mut matched = false;
             for task_type in ["image_generation", "video_generation"] {
+                let url = format!("{}/v1/tasks/{}", self.base_url, tid);
                 let resp = match self
                     .client
-                    .get(format!("{}/v1/tasks/{}", self.base_url, tid))
+                    .get(&url)
                     .bearer_auth(api_key)
                     .header("X-ModelScope-Task-Type", task_type)
                     .send()
@@ -429,8 +479,22 @@ impl GenerationProvider for CustomProvider {
                     if status.as_u16() == 404 || status.as_u16() == 400 {
                         continue;
                     }
+                    http_log.push(HttpRecord {
+                        method: "GET",
+                        url,
+                        request_body: None,
+                        status: status.as_u16(),
+                        response_body: sanitize_body(&body),
+                    });
                     return Ok(Self::failed_snapshot(format!("HTTP {}: {}", status, body)));
                 }
+                http_log.push(HttpRecord {
+                    method: "GET",
+                    url,
+                    request_body: None,
+                    status: status.as_u16(),
+                    response_body: sanitize_body(&body),
+                });
                 let v: Value = match serde_json::from_str(&body) {
                     Ok(v) => v,
                     Err(_) => continue,
@@ -482,6 +546,7 @@ impl GenerationProvider for CustomProvider {
                 progress: 0,
                 message: None,
                 remote_urls: vec![],
+                http_log,
             });
         }
         if all_urls.is_empty() {
@@ -492,6 +557,7 @@ impl GenerationProvider for CustomProvider {
             progress: 100,
             message: None,
             remote_urls: all_urls,
+            http_log,
         })
     }
 

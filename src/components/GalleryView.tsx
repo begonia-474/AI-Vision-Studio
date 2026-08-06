@@ -52,11 +52,17 @@ interface GalleryEntry {
   fallback?: string;
 }
 
-// 缩略图命名约定：{stem}.thumb.webp（后端 make_thumbnail 输出），
-// 网格按原图路径推导渲染，缺缩略图时由 <img onError> 回退原图。
+// 缩略图命名约定：thumbs 目录 `{stem}.thumb.webp`（后端 make_thumbnail 输出），
+// 网格按产物路径推导渲染（产物父目录 outputs → thumbs），缺缩略图时由 <img onError> 回退原图。
 const thumbOf = (p: string): string => {
   const i = p.lastIndexOf(".");
-  return i > 0 ? `${p.slice(0, i)}.thumb.webp` : p;
+  if (i <= 0) return p;
+  const sep = p.includes("/") ? "/" : "\\";
+  const dirEnd = p.lastIndexOf(sep);
+  if (dirEnd < 0) return p;
+  const stem = p.slice(dirEnd + 1, i);
+  const dir = p.slice(0, dirEnd).replace(/outputs$/i, "thumbs");
+  return `${dir}${sep}${stem}.thumb.webp`;
 };
 
 // 按本地日期分组：返回 "YYYY-MM-DD"

@@ -10,6 +10,8 @@ export interface ProviderInfo {
 export interface GenRequest {
   /** 前端生成的任务 ID，后端进度事件原样回传用于路由 */
   task_id: string;
+  /** 所属会话 ID，写库后启动时按会话恢复时间线 */
+  session_id?: string;
   provider_id: string;
   capability: string;
   prompt: string;
@@ -96,6 +98,8 @@ export interface HistoryTask {
   remote_urls_json: string | null;
   starred: boolean;
   thumbnail_path: string | null;
+  /** 所属会话 ID（旧记录为 null，仅出现在图库） */
+  session_id: string | null;
 }
 
 export interface ProgressPayload {

@@ -4,8 +4,8 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{
-    CustomProviderRow, GenRequest, GenerationResultDto, HistoryTaskDto, ProgressPayload,
-    ProviderInfoDto, TaskPhase,
+    CustomProviderRow, GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord,
+    ProgressPayload, ProviderInfoDto, TaskPhase,
 };
 use crate::providers::{all_providers, get_provider};
 use crate::storage;
@@ -74,12 +74,16 @@ pub async fn generate(
         },
     );
 
-    // 参考图归一化：上传的 data URL / 公网 URL 原样透传；
-    // 图库/结果跳转带来的本地路径或 asset:// URL 先转 base64 data URL，
-    // 厂商服务器才能拉取（厂商拿不到本机文件）。
+    // 参考图收编：data URL/本地文件/asset URL 统一复制进受管 input 目录（ComfyUI 式），
+    // 收编后的路径/URL 写入 params_json.references，重新生成时可直接复用；
+    // 公网 URL 原样保留。收编后再归一化为 data URL 提交（厂商只能拿到公网 URL 或 data URL）。
     let mut req2 = req.clone();
-    req2.references = req
+    let collected_refs = req
         .references
+        .iter()
+        .map(|r| storage::save_reference(r))
+        .collect::<Result<Vec<_>, _>>()?;
+    req2.references = collected_refs
         .iter()
         .map(|r| storage::normalize_reference(r))
         .collect::<Result<Vec<_>, _>>()?;
@@ -101,19 +105,23 @@ pub async fn generate(
 
     // 同步厂商：submit 已置 Succeeded，remote_urls 在 handle 内。
     // 异步厂商：submit 返回 Submitted + task_id，需轮询至终态，结果 URL 在 snapshot.remote_urls。
-    let remote_urls: Vec<String> = if handle.phase == TaskPhase::Succeeded {
-        handle.remote_urls.clone()
+    let remote_urls: Vec<String>;
+    let mut http_log = handle.http_log.clone();
+    let mut poll_log: Vec<HttpRecord> = Vec::new();
+    if handle.phase == TaskPhase::Succeeded {
+        remote_urls = handle.remote_urls.clone();
     } else {
         // 视频轮询间隔 5s，图像 3s；此处统一按 capability 区分。
         let is_video = req.capability == "t2v" || req.capability == "i2v";
         let interval = if is_video { 5u64 } else { 3u64 };
         let mut last_progress = 15i32;
-        let urls: Vec<String>;
         loop {
             let snap = provider.poll(&handle, &api_key).await?;
+            // 只保留最后一次轮询的交换记录（提交记录在 handle.http_log 中保留）
+            poll_log = snap.http_log.clone();
             match snap.phase {
                 TaskPhase::Succeeded => {
-                    urls = snap.remote_urls;
+                    remote_urls = snap.remote_urls;
                     break;
                 }
                 TaskPhase::Failed => {
@@ -153,8 +161,9 @@ pub async fn generate(
                 }
             }
         }
-        urls
     };
+    // 提交记录 + 终态轮询记录合并（按下标对应）
+    http_log.extend(poll_log);
 
     let _ = app.emit(
         "gen-progress",
@@ -201,7 +210,8 @@ pub async fn generate(
         "quality": req.quality,
         "duration": req.duration,
         "output_format": req.output_format,
-        "references": req.references.len(),
+        // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
+        "references": collected_refs,
     });
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
@@ -222,6 +232,35 @@ pub async fn generate(
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
 
+    // HTTP 调试记录：请求数组与响应数组按下标一一对应（一次任务可能含多次提交/轮询交换）。
+    let http_req_json = serde_json::to_string(
+        &http_log
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "method": r.method,
+                    "url": r.url,
+                    "body": r.request_body,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .ok();
+    let http_resp_json = serde_json::to_string(
+        &http_log
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "method": r.method,
+                    "url": r.url,
+                    "status": r.status,
+                    "body": r.response_body,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .ok();
+
     let history_id = storage::insert_task(storage::HistoryInsert {
         provider: provider_id.clone(),
         model: model.clone(),
@@ -232,6 +271,10 @@ pub async fn generate(
         local_paths_json: local_json,
         remote_urls_json: remote_json,
         thumbnail_path,
+        request_json: http_req_json,
+        raw_response: http_resp_json,
+        error: None,
+        session_id: req.session_id.clone(),
     })?;
 
     let _ = app.emit(

@@ -30,6 +30,38 @@ pub trait GenerationProvider: Send + Sync {
     fn default_model(&self) -> &str;
 }
 
+/// 响应体写库前脱敏：JSON 中超过阈值的字符串（base64 图像块、data URL 等）
+/// 替换为长度标记，保留结构便于阅读；非 JSON 响应超长时按字符数截断。
+/// 保证单条记录体积有界，数据库不因图像数据膨胀。
+pub fn sanitize_body(text: &str) -> String {
+    const MAX_STR: usize = 2048;
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(v) => serde_json::to_string(&truncate_json_strings(v, MAX_STR)).unwrap_or_default(),
+        Err(_) if text.chars().count() > MAX_STR * 4 => {
+            let head: String = text.chars().take(MAX_STR).collect();
+            format!("<非 JSON 响应过长，前 {} 字符: {}…>", MAX_STR, head)
+        }
+        Err(_) => text.to_string(),
+    }
+}
+
+fn truncate_json_strings(v: serde_json::Value, max: usize) -> serde_json::Value {
+    match v {
+        serde_json::Value::String(s) if s.chars().count() > max => {
+            serde_json::Value::String(format!("<省略超长文本，原 {} 字符>", s.chars().count()))
+        }
+        serde_json::Value::Array(a) => serde_json::Value::Array(
+            a.into_iter().map(|x| truncate_json_strings(x, max)).collect(),
+        ),
+        serde_json::Value::Object(o) => serde_json::Value::Object(
+            o.into_iter()
+                .map(|(k, x)| (k, truncate_json_strings(x, max)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 /// 已注册厂商的元信息列表（内置厂商；自定义厂商由前端 custom_providers 配置驱动）。
 pub fn all_providers() -> Vec<ProviderInfoDto> {
     vec![

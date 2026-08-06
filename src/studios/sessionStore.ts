@@ -1,7 +1,8 @@
 // 会话（session）存储：对话式时间线的会话管理与持久化。
 // 每个 studio 一个 useSessionStore 实例（App 层持有），工作室与侧边栏共享同一份会话状态。
-// 完成结果以 SQLite 历史为权威来源，启动时补入当前会话（去重）；
-// 会话及时间线快照持久化到 localStorage（保留失败卡/删除状态，关闭时未完成任务转为 interrupted）。
+// 会话及时间线快照持久化到 localStorage（保留失败卡/删除状态，关闭时未完成任务转为 interrupted）；
+// 完成结果以 SQLite 历史为权威来源（tasks.session_id 关联会话），启动时按会话 ID 各归各补回；
+// 会话按最近活动时间倒序（类 ChatGPT），活动 = 提交/完成/进度/删除卡片。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -40,6 +41,8 @@ export interface Session {
   id: string;
   title: string;
   createdAt: number;
+  /** 最近活动时间（提交/完成/进度/删除卡片时刷新），侧边栏按此倒序排列。 */
+  updatedAt: number;
   results: ResultItem[];
 }
 
@@ -64,10 +67,9 @@ export interface SessionApi {
 let _seq = 0;
 const uid = () => `r_${Date.now().toString(36)}_${_seq++}`;
 
-const sessionsKey = (studio: Studio) => `aivision-studio.sessions.v1.${studio}`;
-const legacyKey = (studio: Studio) => `aivision-studio.timeline.v1.${studio}`;
+const sessionsKey = (studio: Studio) => `aivision-studio.sessions.v2.${studio}`;
 
-// 历史恢复任务的前缀（不计入会话 x/y 角标）。
+// 历史恢复任务的前缀（SQLite 会话恢复的条目，不计入会话 x/y 角标）。
 const HISTORY_TASK_PREFIX = "history_";
 
 function normalizeStoredResults(raw: unknown, interruptedMessage: string): ResultItem[] {
@@ -90,17 +92,6 @@ function normalizeStoredResults(raw: unknown, interruptedMessage: string): Resul
     });
 }
 
-function loadStoredResults(studio: Studio, interruptedMessage: string): ResultItem[] {
-  try {
-    return normalizeStoredResults(
-      JSON.parse(window.localStorage.getItem(legacyKey(studio)) ?? "null"),
-      interruptedMessage,
-    );
-  } catch {
-    return [];
-  }
-}
-
 function historyParams(item: HistoryTask): Record<string, unknown> {
   if (!item.params_json) return {};
   try {
@@ -111,6 +102,9 @@ function historyParams(item: HistoryTask): Record<string, unknown> {
   }
 }
 
+/// SQLite 记录 → 会话时间线条目（taskId 带 history_ 前缀，不计入会话角标）。
+/// 完整映射重新生成所需参数：modelId=model 列，n/quality/duration/format/refs 来自 params_json
+/// （references 为收编后的路径数组；旧数据存的是数量，非数组时忽略）。
 function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
   let paths: unknown;
   try {
@@ -129,6 +123,13 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
   const extra = studio === "video" ? `${duration}s · ${quality}` : quality;
   const at = Date.parse(item.created_at) || Date.now();
   const taskId = `${HISTORY_TASK_PREFIX}${item.id}`;
+  const refs = Array.isArray(params.references) ? (params.references as unknown[]) : undefined;
+  const refList = refs
+    ? refs.filter((r): r is string => typeof r === "string" && r.length > 0)
+    : undefined;
+  const modelId = item.model;
+  const format = typeof params.output_format === "string" ? params.output_format : undefined;
+  const n = typeof params.n === "number" ? params.n : undefined;
 
   return localPaths.map((path, index) => ({
     id: `${taskId}_${index}`,
@@ -140,9 +141,20 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     path,
     prompt: item.prompt,
     model: item.model,
+    modelId,
     ar,
+    quality,
+    duration,
+    format,
+    n,
+    refs: refList,
     extra,
   }));
+}
+
+/// 会话按最近活动倒序（类 ChatGPT：新对话置顶，旧对话有新消息时上浮）。
+function sortByRecent(list: Session[]): Session[] {
+  return [...list].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
 }
 
 interface SessionState {
@@ -151,7 +163,8 @@ interface SessionState {
 }
 
 function freshSession(title: string): Session {
-  return { id: uid(), title, createdAt: Date.now(), results: [] };
+  const now = Date.now();
+  return { id: uid(), title, createdAt: now, updatedAt: now, results: [] };
 }
 
 function loadSessions(studio: Studio, defaultTitle: string, interruptedMessage: string): SessionState {
@@ -164,14 +177,20 @@ function loadSessions(studio: Studio, defaultTitle: string, interruptedMessage: 
           const rawSessions = (parsed as { sessions?: unknown }).sessions;
           const rawActive = (parsed as { activeId?: unknown }).activeId;
           if (Array.isArray(rawSessions) && rawSessions.length > 0) {
-            const sessions = rawSessions
-              .filter((s): s is Record<string, unknown> => Boolean(s && typeof s === "object"))
-              .map((s) => ({
-                id: String(s.id ?? uid()),
-                title: String(s.title ?? defaultTitle),
-                createdAt: Number(s.createdAt) || Date.now(),
-                results: normalizeStoredResults(s.results, interruptedMessage),
-              }));
+            const sessions = sortByRecent(
+              rawSessions
+                .filter((s): s is Record<string, unknown> => Boolean(s && typeof s === "object"))
+                .map((s) => {
+                  const createdAt = Number(s.createdAt) || Date.now();
+                  return {
+                    id: String(s.id ?? uid()),
+                    title: String(s.title ?? defaultTitle),
+                    createdAt,
+                    updatedAt: Number(s.updatedAt) || createdAt,
+                    results: normalizeStoredResults(s.results, interruptedMessage),
+                  };
+                }),
+            );
             return {
               sessions,
               activeId: sessions.some((s) => s.id === rawActive) ? String(rawActive) : sessions[0].id,
@@ -181,17 +200,6 @@ function loadSessions(studio: Studio, defaultTitle: string, interruptedMessage: 
       }
     } catch {
       // 存储损坏时走默认会话。
-    }
-    // 旧版单时间线数据迁移进第一个会话。
-    try {
-      const legacy = loadStoredResults(studio, interruptedMessage);
-      if (legacy.length > 0) {
-        window.localStorage.removeItem(legacyKey(studio));
-        const s: Session = { ...freshSession(defaultTitle), results: legacy };
-        return { sessions: [s], activeId: s.id };
-      }
-    } catch {
-      // 忽略迁移失败。
     }
   }
   const s = freshSession(defaultTitle);
@@ -209,7 +217,7 @@ export function useSessionStore(studio: Studio): SessionApi {
   const results = activeSession?.results ?? [];
 
   // 会话级统计（不持久化，每次启动归零）：角标 x/y，x=已完成任务数，y=本会话新提交任务数。
-  // 历史恢复的任务（taskId 前缀 history_）不计入。
+  // SQLite 会话恢复的条目（taskId 前缀 history_）不计入。
   const stats = useMemo<SessionStats>(() => {
     const taskIds = new Set<string>();
     for (const it of results) {
@@ -237,43 +245,52 @@ export function useSessionStore(studio: Studio): SessionApi {
     }
   }, [state, studio]);
 
-  // SQLite 是完成结果的权威来源，补齐当前会话的历史记录（按 taskId/path 去重）。
-  // 注意：目标会话必须是 mount 时刻的激活会话（mountActiveIdRef）——listHistory 是异步的，
-  // resolve 时用户可能已新开会话，若按当时的 activeId 补齐会把历史错误塞进新会话。
-  const mountActiveIdRef = useRef(state.activeId);
+  // SQLite 是完成结果的权威来源：启动时按 tasks.session_id 把各会话自己的记录补回对应会话
+  // （重启后 localStorage 可能丢失，库中的会话归属保证时间线仍可恢复）。
+  // 按会话 ID 各归各，不做任何"整库注入当前会话"。
   useEffect(() => {
     let mounted = true;
     listHistory()
       .then((history) => {
         if (!mounted) return;
-        const restored = history
-          .filter((item) => {
-            const isImage = item.capability === "t2i" || item.capability === "i2i";
-            return studio === "image" ? isImage : !isImage;
-          })
-          .slice()
-          .reverse()
-          .flatMap((item) => historyResults(studio, item));
-        if (restored.length === 0) return;
-
+        const bySession = new Map<string, HistoryTask[]>();
+        for (const item of history) {
+          if (!item.session_id) continue; // 旧记录无会话归属，仅图库可见
+          const arr = bySession.get(item.session_id);
+          if (arr) arr.push(item);
+          else bySession.set(item.session_id, [item]);
+        }
         setState((prev) => {
-          const target =
-            prev.sessions.find((s) => s.id === mountActiveIdRef.current) ?? prev.sessions[0];
-          if (!target) return prev;
-          const existingTaskIds = new Set(target.results.map((it) => it.taskId));
-          const existingPaths = new Set(
-            target.results.map((it) => it.path).filter((path): path is string => Boolean(path)),
-          );
-          const additions = restored.filter(
-            (item) => !existingTaskIds.has(item.taskId) && (!item.path || !existingPaths.has(item.path)),
-          );
-          if (additions.length === 0) return prev;
-          return {
-            ...prev,
-            sessions: prev.sessions.map((s) =>
-              s.id === target.id ? { ...s, results: [...additions, ...s.results] } : s,
-            ),
-          };
+          const sessions = prev.sessions.map((s) => {
+            const rows = bySession.get(s.id);
+            if (!rows || rows.length === 0) return s;
+            const existingTaskIds = new Set(s.results.map((it) => it.taskId));
+            const existingHistoryIds = new Set(
+              s.results
+                .map((it) => it.historyId)
+                .filter((id): id is number => id !== undefined),
+            );
+            const existingPaths = new Set(
+              s.results.map((it) => it.path).filter((p): p is string => Boolean(p)),
+            );
+            const restored = rows
+              .filter((item) => {
+                const isImage = item.capability === "t2i" || item.capability === "i2i";
+                return studio === "image" ? isImage : !isImage;
+              })
+              .slice()
+              .reverse()
+              .flatMap((item) => historyResults(studio, item))
+              .filter(
+                (it) =>
+                  !existingTaskIds.has(it.taskId) &&
+                  (it.historyId === undefined || !existingHistoryIds.has(it.historyId)) &&
+                  (!it.path || !existingPaths.has(it.path)),
+              );
+            if (restored.length === 0) return s;
+            return { ...s, results: [...restored, ...s.results] };
+          });
+          return { ...prev, sessions };
         });
       })
       .catch(() => {});
@@ -282,25 +299,28 @@ export function useSessionStore(studio: Studio): SessionApi {
     };
   }, [studio]);
 
-  // mount 时订阅一次进度事件；按 task_id 路由（跨会话更新，后台会话的任务同样刷新阶段）。
+  // mount 时订阅一次进度事件；按 task_id 路由（跨会话更新，后台会话的任务同样刷新阶段，
+  // 并把会话的最近活动时间上浮，类 ChatGPT 的"有动静的对话置顶"）。
   useEffect(() => {
     aliveRef.current = true;
     let un: (() => void) | undefined;
     onProgress((p) => {
       if (!aliveRef.current || !p.task_id) return;
-      setState((prev) => ({
-        ...prev,
-        sessions: prev.sessions.map((s) =>
-          s.results.some((it) => it.taskId === p.task_id)
-            ? {
-                ...s,
-                results: s.results.map((it) =>
-                  it.taskId === p.task_id ? { ...it, phase: p.phase, msg: p.message } : it,
-                ),
-              }
-            : s,
-        ),
-      }));
+      setState((prev) => {
+        let changed = false;
+        const sessions = prev.sessions.map((s) => {
+          if (!s.results.some((it) => it.taskId === p.task_id)) return s;
+          changed = true;
+          return {
+            ...s,
+            updatedAt: Date.now(),
+            results: s.results.map((it) =>
+              it.taskId === p.task_id ? { ...it, phase: p.phase, msg: p.message } : it,
+            ),
+          };
+        });
+        return changed ? { ...prev, sessions: sortByRecent(sessions) } : prev;
+      });
     }).then((u) => {
       // 竞态防护：listen 注册完成前若已卸载，立即注销，避免监听器残留
       if (!aliveRef.current) {
@@ -315,21 +335,24 @@ export function useSessionStore(studio: Studio): SessionApi {
     };
   }, []);
 
-  // 对当前会话的 results 做变换。
+  // 对当前会话的 results 做变换，并刷新其最近活动时间（提交/完成/失败/删除均算活动）。
   const patchActive = useCallback((fn: (prev: ResultItem[]) => ResultItem[]) => {
-    setState((prev) => ({
-      ...prev,
-      sessions: prev.sessions.map((s) =>
-        s.id === prev.activeId ? { ...s, results: fn(s.results) } : s,
-      ),
-    }));
+    setState((prev) => {
+      const sessions = prev.sessions.map((s) =>
+        s.id === prev.activeId
+          ? { ...s, updatedAt: Date.now(), results: fn(s.results) }
+          : s,
+      );
+      return { ...prev, sessions: sortByRecent(sessions) };
+    });
   }, []);
 
   const createSession = useCallback(() => {
     setState((prev) => {
       const n = prev.sessions.length + 1;
       const s = freshSession(`${t("sessions.defaultTitle")} ${n}`);
-      return { sessions: [...prev.sessions, s], activeId: s.id };
+      // 新会话即最近活动 → 置顶（类 ChatGPT）
+      return { sessions: sortByRecent([...prev.sessions, s]), activeId: s.id };
     });
   }, [t]);
 

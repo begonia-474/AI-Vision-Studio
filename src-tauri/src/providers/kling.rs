@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::models::{GenRequest, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
-use crate::providers::GenerationProvider;
+use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
+use crate::providers::{sanitize_body, GenerationProvider};
 
 /// 可灵 Kling 适配器（API Key 模式，新模型推荐；JWT 旧模型暂不支持）。
 /// baseUrl: https://api-beijing.klingai.com（国内）
@@ -85,9 +85,10 @@ impl GenerationProvider for KlingProvider {
             }
         }
 
+        let url = format!("{}/v1/videos/{}", BASE_URL, endpoint);
         let resp = self
             .client
-            .post(format!("{}/v1/videos/{}", BASE_URL, endpoint))
+            .post(&url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -95,6 +96,13 @@ impl GenerationProvider for KlingProvider {
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -102,6 +110,7 @@ impl GenerationProvider for KlingProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("HTTP {}: {}", status, body)),
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -120,6 +129,7 @@ impl GenerationProvider for KlingProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(msg),
+                http_log: vec![record],
             });
         }
         let task_id = v
@@ -134,6 +144,7 @@ impl GenerationProvider for KlingProvider {
             phase: TaskPhase::Submitted,
             remote_urls: vec![],
             error: None,
+            http_log: vec![record],
         })
     }
 
@@ -144,14 +155,16 @@ impl GenerationProvider for KlingProvider {
                 progress: 100,
                 message: None,
                 remote_urls: vec![],
+                http_log: vec![],
             });
         }
         // 轮询端点同提交端点族：GET /v1/videos/{endpoint}/{id}
         // task_id 前缀无法反推 endpoint，故两个端点都尝试一次（容忍 404）。
         for endpoint in ["text2video", "image2video"] {
+            let url = format!("{}/v1/videos/{}/{}", BASE_URL, endpoint, handle.task_id);
             let resp = match self
                 .client
-                .get(format!("{}/v1/videos/{}/{}", BASE_URL, endpoint, handle.task_id))
+                .get(&url)
                 .bearer_auth(api_key)
                 .send()
                 .await
@@ -164,12 +177,20 @@ impl GenerationProvider for KlingProvider {
                 continue; // 端点不匹配，换下一个
             }
             let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+            let record = HttpRecord {
+                method: "GET",
+                url: url.clone(),
+                request_body: None,
+                status: status.as_u16(),
+                response_body: sanitize_body(&body),
+            };
             if !status.is_success() {
                 return Ok(TaskSnapshot {
                     phase: TaskPhase::Failed,
                     progress: 100,
                     message: Some(format!("HTTP {}: {}", status, body)),
                     remote_urls: vec![],
+                    http_log: vec![record],
                 });
             }
             let v: serde_json::Value =
@@ -185,6 +206,7 @@ impl GenerationProvider for KlingProvider {
                     progress: 100,
                     message: Some(msg.to_string()),
                     remote_urls: vec![],
+                    http_log: vec![record],
                 });
             }
             let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
@@ -209,6 +231,7 @@ impl GenerationProvider for KlingProvider {
                             progress: 100,
                             message: Some("succeed 但缺 videos[].url".to_string()),
                             remote_urls: vec![],
+                            http_log: vec![record],
                         });
                     }
                     Ok(TaskSnapshot {
@@ -216,6 +239,7 @@ impl GenerationProvider for KlingProvider {
                         progress: 100,
                         message: None,
                         remote_urls: urls,
+                        http_log: vec![record],
                     })
                 }
                 "failed" => Ok(TaskSnapshot {
@@ -228,12 +252,14 @@ impl GenerationProvider for KlingProvider {
                             .to_string(),
                     ),
                     remote_urls: vec![],
+                    http_log: vec![record],
                 }),
                 _ => Ok(TaskSnapshot {
                     phase: TaskPhase::Running,
                     progress: 50,
                     message: Some(task_status),
                     remote_urls: vec![],
+                    http_log: vec![record],
                 }),
             };
         }
@@ -242,6 +268,7 @@ impl GenerationProvider for KlingProvider {
             progress: 100,
             message: Some("任务查询端点均 404".to_string()),
             remote_urls: vec![],
+            http_log: vec![],
         })
     }
 

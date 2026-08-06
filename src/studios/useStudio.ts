@@ -292,6 +292,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       try {
         const res = await generate({
           task_id: taskId,
+          session_id: session.activeId,
           provider_id: m.providerId,
           capability,
           prompt: p,

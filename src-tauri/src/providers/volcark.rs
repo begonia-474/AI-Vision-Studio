@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::models::{GenRequest, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
-use crate::providers::GenerationProvider;
+use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
+use crate::providers::{sanitize_body, GenerationProvider};
 
 /// 火山方舟 豆包 Seedream/Seedance 适配器（对照 docs/model-api 官方文档实查 2026.07.31）。
 /// baseUrl: https://ark.cn-beijing.volces.com/api/v3
@@ -165,27 +165,37 @@ impl GenerationProvider for VolcArkProvider {
                 progress: 100,
                 message: None,
                 remote_urls: vec![],
+                http_log: vec![],
             });
         }
         // 异步视频：GET /contents/generations/tasks/{id}
+        let url = format!(
+            "{}/contents/generations/tasks/{}",
+            BASE_URL, handle.task_id
+        );
         let resp = self
             .client
-            .get(format!(
-                "{}/contents/generations/tasks/{}",
-                BASE_URL, handle.task_id
-            ))
+            .get(&url)
             .bearer_auth(api_key)
             .send()
             .await
             .map_err(|e| format!("轮询失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "GET",
+            url: url.clone(),
+            request_body: None,
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskSnapshot {
                 phase: TaskPhase::Failed,
                 progress: 100,
                 message: Some(format!("HTTP {}: {}", status, body)),
                 remote_urls: vec![],
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -201,6 +211,7 @@ impl GenerationProvider for VolcArkProvider {
                 progress: 100,
                 message: Some(err_msg.to_string()),
                 remote_urls: vec![],
+                http_log: vec![record],
             });
         }
         let task_status = v
@@ -223,6 +234,7 @@ impl GenerationProvider for VolcArkProvider {
                         progress: 100,
                         message: Some("succeeded 但缺 content.video_url".to_string()),
                         remote_urls: vec![],
+                        http_log: vec![record],
                     });
                 }
                 Ok(TaskSnapshot {
@@ -230,6 +242,7 @@ impl GenerationProvider for VolcArkProvider {
                     progress: 100,
                     message: None,
                     remote_urls: vec![url],
+                    http_log: vec![record],
                 })
             }
             "failed" | "cancelled" | "expired" => Ok(TaskSnapshot {
@@ -237,12 +250,14 @@ impl GenerationProvider for VolcArkProvider {
                 progress: 100,
                 message: Some(task_status),
                 remote_urls: vec![],
+                http_log: vec![record],
             }),
             _ => Ok(TaskSnapshot {
                 phase: TaskPhase::Running,
                 progress: 50,
                 message: Some(task_status),
                 remote_urls: vec![],
+                http_log: vec![record],
             }),
         }
     }
@@ -319,9 +334,13 @@ impl VolcArkProvider {
         }
 
         let mut urls = Vec::new();
+        let mut http_log = Vec::new();
         for h in handles {
             match h.await {
-                Ok(Ok(mut u)) => urls.append(&mut u),
+                Ok(Ok((mut u, rec))) => {
+                    urls.append(&mut u);
+                    http_log.push(rec);
+                }
                 Ok(Err(msg)) => {
                     return Ok(TaskHandle {
                         provider_id: PROVIDER_ID.to_string(),
@@ -329,6 +348,7 @@ impl VolcArkProvider {
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(msg),
+                        http_log,
                     });
                 }
                 Err(e) => {
@@ -338,6 +358,7 @@ impl VolcArkProvider {
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(format!("请求任务异常: {}", e)),
+                        http_log,
                     });
                 }
             }
@@ -349,17 +370,20 @@ impl VolcArkProvider {
             phase: TaskPhase::Succeeded,
             remote_urls: urls,
             error: None,
+            http_log,
         })
     }
 
-    /// 单次图像生成请求：POST /images/generations → 解析 data[].url（组图场景一次返回多张）。
+    /// 单次图像生成请求：POST /images/generations → 解析 data[].url（组图场景一次返回多张），
+    /// 附带本次 HTTP 交换记录。
     async fn image_generate_once(
         client: reqwest::Client,
         api_key: String,
         payload: serde_json::Value,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<(Vec<String>, HttpRecord), String> {
+        let url = format!("{}/images/generations", BASE_URL);
         let resp = client
-            .post(format!("{}/images/generations", BASE_URL))
+            .post(&url)
             .bearer_auth(&api_key)
             .json(&payload)
             .send()
@@ -370,6 +394,13 @@ impl VolcArkProvider {
             .text()
             .await
             .map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Err(format!("HTTP {}: {}", status, body));
         }
@@ -400,7 +431,7 @@ impl VolcArkProvider {
         if urls.is_empty() {
             return Err("响应未包含图片 URL".to_string());
         }
-        Ok(urls)
+        Ok((urls, record))
     }
 
     async fn submit_video(&self, req: &GenRequest, api_key: &str) -> Result<TaskHandle, String> {
@@ -442,9 +473,10 @@ impl VolcArkProvider {
             "watermark": false
         });
 
+        let url = format!("{}/contents/generations/tasks", BASE_URL);
         let resp = self
             .client
-            .post(format!("{}/contents/generations/tasks", BASE_URL))
+            .post(&url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -452,6 +484,13 @@ impl VolcArkProvider {
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -459,6 +498,7 @@ impl VolcArkProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("HTTP {}: {}", status, body)),
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -474,6 +514,7 @@ impl VolcArkProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(err_msg.to_string()),
+                http_log: vec![record],
             });
         }
         let task_id = v
@@ -487,6 +528,7 @@ impl VolcArkProvider {
             phase: TaskPhase::Submitted,
             remote_urls: vec![],
             error: None,
+            http_log: vec![record],
         })
     }
 }

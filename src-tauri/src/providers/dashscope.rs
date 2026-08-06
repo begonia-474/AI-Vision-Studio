@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::models::{GenRequest, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
-use crate::providers::GenerationProvider;
+use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
+use crate::providers::{sanitize_body, GenerationProvider};
 use crate::storage;
 
 /// 阿里云百炼（DashScope）平台适配器：通义万相（wan2.6/2.7 图像与视频）、
@@ -223,24 +223,34 @@ impl GenerationProvider for DashScopeProvider {
                 progress: 100,
                 message: None,
                 remote_urls: vec![],
+                http_log: vec![],
             });
         }
         // 异步视频：GET /api/v1/tasks/{id}
+        let url = format!("{}/api/v1/tasks/{}", base_url(), handle.task_id);
         let resp = self
             .client
-            .get(format!("{}/api/v1/tasks/{}", base_url(), handle.task_id))
+            .get(&url)
             .bearer_auth(api_key)
             .send()
             .await
             .map_err(|e| format!("轮询失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "GET",
+            url: url.clone(),
+            request_body: None,
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskSnapshot {
                 phase: TaskPhase::Failed,
                 progress: 100,
                 message: Some(format!("HTTP {}: {}", status, body)),
                 remote_urls: vec![],
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -258,6 +268,7 @@ impl GenerationProvider for DashScopeProvider {
                             .to_string(),
                     ),
                     remote_urls: vec![],
+                    http_log: vec![record],
                 });
             }
         }
@@ -280,6 +291,7 @@ impl GenerationProvider for DashScopeProvider {
                         progress: 100,
                         message: Some("SUCCEEDED 但缺 video_url".to_string()),
                         remote_urls: vec![],
+                        http_log: vec![record],
                     });
                 }
                 Ok(TaskSnapshot {
@@ -287,6 +299,7 @@ impl GenerationProvider for DashScopeProvider {
                     progress: 100,
                     message: None,
                     remote_urls: vec![url],
+                    http_log: vec![record],
                 })
             }
             "FAILED" => Ok(TaskSnapshot {
@@ -303,6 +316,7 @@ impl GenerationProvider for DashScopeProvider {
                         .to_string(),
                 ),
                 remote_urls: vec![],
+                http_log: vec![record],
             }),
             _ => {
                 let progress = output
@@ -316,6 +330,7 @@ impl GenerationProvider for DashScopeProvider {
                     progress,
                     message: Some(task_status),
                     remote_urls: vec![],
+                    http_log: vec![record],
                 })
             }
         }
@@ -612,12 +627,13 @@ impl DashScopeProvider {
         api_key: &str,
         payload: serde_json::Value,
     ) -> Result<TaskHandle, String> {
+        let url = format!(
+            "{}/api/v1/services/aigc/multimodal-generation/generation",
+            base_url()
+        );
         let resp = self
             .client
-            .post(format!(
-                "{}/api/v1/services/aigc/multimodal-generation/generation",
-                base_url()
-            ))
+            .post(&url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -625,6 +641,13 @@ impl DashScopeProvider {
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -632,6 +655,7 @@ impl DashScopeProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("HTTP {}: {}", status, body)),
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -650,6 +674,7 @@ impl DashScopeProvider {
                     phase: TaskPhase::Failed,
                     remote_urls: vec![],
                     error: Some(msg),
+                    http_log: vec![record],
                 });
             }
         }
@@ -678,6 +703,7 @@ impl DashScopeProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("响应未包含图片 URL: {}", body)),
+                http_log: vec![record],
             });
         }
         Ok(TaskHandle {
@@ -686,6 +712,7 @@ impl DashScopeProvider {
             phase: TaskPhase::Succeeded,
             remote_urls: urls,
             error: None,
+            http_log: vec![record],
         })
     }
 
@@ -747,12 +774,13 @@ impl DashScopeProvider {
             "parameters": params
         });
 
+        let url = format!(
+            "{}/api/v1/services/aigc/video-generation/video-synthesis",
+            base_url()
+        );
         let resp = self
             .client
-            .post(format!(
-                "{}/api/v1/services/aigc/video-generation/video-synthesis",
-                base_url()
-            ))
+            .post(&url)
             .header("X-DashScope-Async", "enable") // 异步必加，否则报同步不支持
             .bearer_auth(api_key)
             .json(&payload)
@@ -761,6 +789,13 @@ impl DashScopeProvider {
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
         let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let record = HttpRecord {
+            method: "POST",
+            url: url.clone(),
+            request_body: Some(payload.to_string()),
+            status: status.as_u16(),
+            response_body: sanitize_body(&body),
+        };
         if !status.is_success() {
             return Ok(TaskHandle {
                 provider_id: PROVIDER_ID.to_string(),
@@ -768,6 +803,7 @@ impl DashScopeProvider {
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
                 error: Some(format!("HTTP {}: {}", status, body)),
+                http_log: vec![record],
             });
         }
         let v: serde_json::Value =
@@ -785,6 +821,7 @@ impl DashScopeProvider {
                     phase: TaskPhase::Failed,
                     remote_urls: vec![],
                     error: Some(msg),
+                    http_log: vec![record],
                 });
             }
         }
@@ -800,6 +837,7 @@ impl DashScopeProvider {
             phase: TaskPhase::Submitted,
             remote_urls: vec![],
             error: None,
+            http_log: vec![record],
         })
     }
 }
