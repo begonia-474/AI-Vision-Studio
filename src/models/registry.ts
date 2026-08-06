@@ -4,6 +4,7 @@
 // ModelSelectModal 与参数 popover 均读此表动态渲染。
 
 import { useEffect, useReducer } from "react";
+import type { ParseKeys, TFunction } from "i18next";
 import { listCustomProviders } from "../api";
 import type {
   CustomModelConfig,
@@ -348,9 +349,9 @@ export function providerMeta(pid: string): ProviderMeta {
 }
 
 /** 厂商显示名（内置为 i18n key，自定义为明文）。 */
-export function providerDisplayName(pid: string, t: (k: string) => string): string {
+export function providerDisplayName(pid: string, t: TFunction): string {
   const p = providerMeta(pid);
-  return p.i18nName ? t(p.name) : p.name;
+  return p.i18nName ? t(p.name as ParseKeys) : p.name;
 }
 
 export function toModelDef(p: CustomProviderConfig, m: CustomModelConfig): ModelDef {

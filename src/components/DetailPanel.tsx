@@ -10,6 +10,7 @@ import { toAssetUrl } from "../api";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { IconChevron, IconDownload, IconMore, IconStar, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { XIcon } from "lucide-react";
 
 export interface DetailSource {
@@ -67,20 +68,9 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   const [paramsOpen, setParamsOpen] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const moreRef = useRef<HTMLDivElement | null>(null);
   const copyTimer = useRef<number | undefined>(undefined);
 
   const source = sources[index];
-
-  // 更多菜单：点击外部关闭
-  useEffect(() => {
-    if (!moreOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [moreOpen]);
 
   // 左右方向键切换上一张 / 下一张；Escape 关闭
   useEffect(() => {
@@ -192,40 +182,27 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                     <IconStar size={16} filled={source.starred} />
                   </button>
                 )}
-                <div className="relative" ref={moreRef}>
-                  <button
-                    className="grid size-8 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-[#6b7280] transition-colors hover:bg-[#f3f4f6]"
-                    title={t("gallery.more")}
-                    aria-label={t("gallery.more")}
-                    onClick={() => setMoreOpen((v) => !v)}
-                  >
-                    <IconMore size={16} />
-                  </button>
-                  {moreOpen && (
-                    <div className="absolute top-9 right-0 z-50 min-w-[150px] rounded-lg border border-[#e5e7eb] bg-white p-1.5 text-[12px] shadow-[0_10px_30px_rgba(15,23,42,.12)]">
-                      <button
-                        className="flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-2 text-left text-[#374151] hover:bg-[#f3f4f6]"
-                        onClick={() => {
-                          copyPrompt(source.prompt);
-                          setMoreOpen(false);
-                        }}
-                      >
-                        {copyIcon} {t("gallery.copyPrompt")}
-                      </button>
-                      {source.onDelete && (
-                        <button
-                          className="flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-2 text-left text-[#dc2626] hover:bg-[#fef2f2]"
-                          onClick={() => {
-                            setMoreOpen(false);
-                            source.onDelete?.();
-                          }}
-                        >
-                          <IconTrash size={13} /> {t("gallery.delete")}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
+                <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      className="grid size-8 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-[#6b7280] transition-colors hover:bg-[#f3f4f6]"
+                      title={t("gallery.more")}
+                      aria-label={t("gallery.more")}
+                    >
+                      <IconMore size={16} />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => copyPrompt(source.prompt)}>
+                      {copyIcon} {t("gallery.copyPrompt")}
+                    </DropdownMenuItem>
+                    {source.onDelete && (
+                      <DropdownMenuItem variant="destructive" onClick={source.onDelete}>
+                        <IconTrash size={13} /> {t("gallery.delete")}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
 

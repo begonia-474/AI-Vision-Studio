@@ -4,22 +4,22 @@
 // 新任务追加到底部并自动贴底滚动；用户上滚查看历史时停止跟随（聊天式直觉）。
 // 多任务并行：每个任务独立状态，进度事件按 taskId 路由（见 useStudio）。
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { IconDownload, IconMore, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import type { ResultItem, ResultStatus } from "../studios/sessionStore";
-import type { ModelDef } from "../models/registry";
 
 interface TaskTimelineProps {
   results: ResultItem[];
   studio: "image" | "video";
-  model: ModelDef;
+  /** 空状态页展示的当前模型名（仅文本，不含模型对象——时间线渲染的是任务快照，
+   *  表单状态（选模型/改参数）变化时此 prop 必须稳定，保证 memo 跳过整树重渲染） */
+  emptyModelName: string;
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  /** 底部输入条预留高度（滚动容器 paddingBottom 的当前值）。用它把「距滚动区底部」换算成「距内容末尾」：
-   *  展开/折叠动画改变预留时内容末尾不移动，atBottom 不会因底部被推远/拉近而误翻转 */
-  bottomPadding?: number;
   /** 是否位于底部附近（滚动区让输入条展开/收起）。layout=true 表示该次变化由布局收缩（折叠动画让位）被动钳制产生，非用户滚动 */
   onBottomStateChange?: (atBottom: boolean, layout?: boolean) => void;
   onImageToVideo?: (src: string, prompt: string) => void;
@@ -43,7 +43,7 @@ interface TaskGroup {
   items: ResultItem[];
 }
 
-const phaseLabel = (t: (k: string) => string, phase?: string) => {
+const phaseLabel = (t: TFunction, phase?: string) => {
   switch (phase) {
     case "submitting":
       return t("prompt.phaseSubmitting");
@@ -111,12 +111,14 @@ const FC_BASE =
   "h-[112px] w-24 shrink-0 overflow-hidden rounded-2xl border border-border-4 bg-chip shadow-[0_10px_30px_var(--shadow)] transition-all duration-300 hover:z-20 hover:scale-110 hover:rotate-0";
 const FC_POS = ["-rotate-12", "-rotate-4 -ml-4", "size-24 rounded-full rotate-6 -ml-4", "rotate-12 -ml-4"];
 
-export function TaskTimeline({
+// memo：折叠/展开动画期间（仅输入条高度变化）时间线 props 不变则跳过重渲染，
+// 避免几百张卡的 JSX 每帧重建导致卡顿。语言切换由 useTranslation 的
+// useSyncExternalStore 订阅驱动，不受 memo 影响。
+export const TaskTimeline = memo(function TaskTimeline({
   results,
   studio,
-  model,
+  emptyModelName,
   scrollRef,
-  bottomPadding,
   onBottomStateChange,
   onImageToVideo,
   onDeleteTask,
@@ -165,8 +167,7 @@ export function TaskTimeline({
   // 导致重启 / 切换会话后无法自动回到底部。
   const stick = useRef(true);
   const lastScrollHeight = useRef(0);
-  const bottomPaddingRef = useRef(0);
-  bottomPaddingRef.current = bottomPadding ?? 0;
+  // ⋯ 菜单 open 状态（受控 DropdownMenu）
   const [menuTask, setMenuTask] = useState<string | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -175,7 +176,12 @@ export function TaskTimeline({
       // 参照「内容末尾」（滚动区底部减去输入条预留）而非滚动区底部：预留随折叠动画伸缩时
       // 内容末尾固定不动，atBottom 判定不会被动画推远/拉近——否则展开把底部推远，
       // 继续滚动误判「离开底部」→ 折叠，形成「像没有最底部」的循环。
-      const next = el.scrollHeight - bottomPaddingRef.current - el.scrollTop - el.clientHeight < 80;
+      // 预留高度由上层直写 DOM（style.paddingBottom），这里实时读取。
+      const pad = parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      const near = el.scrollHeight - pad - el.scrollTop - el.clientHeight;
+      // 滞回：已在底部时需上滚更远才判定离开，离开后回到底部附近即恢复跟随，
+      // 避免停在阈值边缘时值翻转、折叠动画反复触发（卡顿源）。
+      const next = near < (stick.current ? 240 : 80);
       stick.current = next;
       // 折叠动画期间滚动区 padding 随输入条收缩 → scrollHeight 变小，
       // 浏览器会把 scrollTop 被动钳制回新底部并派发 scroll 事件。
@@ -188,16 +194,6 @@ export function TaskTimeline({
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
   }, [onBottomStateChange, scrollRef]);
-
-  // ⋯ 菜单：点击外部关闭
-  useEffect(() => {
-    if (!menuTask) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-tl-menu]")) setMenuTask(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [menuTask]);
 
   // 贴底跟随 + 挂载时强制回到底部：
   // - 挂载（重启 / 切换会话 / 历史恢复）时强制滚到底，并等图片加载、布局稳定后补滚；
@@ -240,7 +236,7 @@ export function TaskTimeline({
         </div>
         <h1 className="m-0 mb-4 flex flex-col items-center gap-1 text-4xl font-extrabold tracking-tight">
           <span className="text-[30px] font-black uppercase tracking-[.05em] text-foreground/90">{t("result.startWith")}</span>
-          <span className="text-[40px] font-black uppercase tracking-tight text-primary">{model.name}</span>
+          <span className="text-[40px] font-black uppercase tracking-tight text-primary">{emptyModelName}</span>
         </h1>
         <p className="m-0 max-w-[480px] text-sm leading-relaxed text-muted-foreground">
           {studio === "video" ? t("result.descVideo") : t("result.descImage")}
@@ -342,45 +338,32 @@ export function TaskTimeline({
                         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 rounded-t-xl bg-linear-to-b from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
                         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 rounded-b-xl bg-linear-to-t from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
 
-                        {/* 右上 ⋯ 菜单 */}
+                        {/* 右上 ⋯ 菜单（Radix DropdownMenu：焦点管理/外点关闭/Esc 内建） */}
                         <div className="absolute top-0.5 right-1 z-10 opacity-0 transition-opacity duration-100 group-hover/image:opacity-100">
-                          <div className="relative" data-tl-menu>
-                            <button
-                              className="grid h-9 w-9 cursor-pointer place-items-center border-0 bg-transparent text-white [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                              title={t("gallery.more")}
-                              aria-label={t("gallery.more")}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setMenuTask((v) => (v === g.taskId ? null : g.taskId));
-                              }}
-                            >
-                              <IconMore size={18} />
-                            </button>
-                            {menuTask === g.taskId && (
-                              <div className="absolute top-9 right-0 z-30 min-w-[140px] rounded-lg border border-border-3 bg-overlay p-1.5 text-xs shadow-[0_10px_30px_var(--shadow-lg)] backdrop-blur-xl">
-                                <button
-                                  className="flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-2 text-left text-text-2 hover:bg-accent hover:text-primary"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (it.url) window.open(it.url, "_blank");
-                                    setMenuTask(null);
-                                  }}
-                                >
-                                  <IconDownload size={13} /> {t("common.open")}
-                                </button>
-                                <button
-                                  className="flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-2 text-left text-destructive hover:bg-[rgba(239,68,68,.10)]"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setMenuTask(null);
-                                    onDeleteTask(g.taskId);
-                                  }}
-                                >
-                                  <IconTrash size={13} /> {t("result.deleteTask")}
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                          <DropdownMenu open={menuTask === g.taskId} onOpenChange={(o) => setMenuTask(o ? g.taskId : null)}>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                className="grid h-9 w-9 cursor-pointer place-items-center border-0 bg-transparent text-white [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
+                                title={t("gallery.more")}
+                                aria-label={t("gallery.more")}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <IconMore size={18} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  if (it.url) window.open(it.url, "_blank");
+                                }}
+                              >
+                                <IconDownload size={13} /> {t("common.open")}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem variant="destructive" onClick={() => onDeleteTask(g.taskId)}>
+                                <IconTrash size={13} /> {t("result.deleteTask")}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
 
                         {/* 底部操作条：Vary / Edit / Video + Download（krea 风格：无底色，hover 才浮现黑底） */}
@@ -492,4 +475,4 @@ export function TaskTimeline({
       ))}
     </div>
   );
-}
+});

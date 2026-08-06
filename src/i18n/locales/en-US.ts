@@ -36,6 +36,7 @@ export const enUS: ZhDict = {
     canvasAlert: "Canvas is not available yet",
     image: "Images",
     video: "Videos",
+    all: "All",
     search: "Search prompt / model / provider...",
     batch: "Batch actions",
     selectedItems: "{{n}} items selected",

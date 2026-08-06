@@ -4,6 +4,7 @@
 // open 受控，trigger 由调用方传入（asChild 包裹）；面板内选择不自动关闭，方便连续调整。
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { cn } from "../lib/utils";
@@ -56,7 +57,7 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
   const { t } = useTranslation();
   return (
     <div>
-      <h3 className="mb-2 text-[13px] font-medium text-foreground">{t(section.title)}</h3>
+      <h3 className="mb-2 text-[13px] font-medium text-foreground">{t(section.title as ParseKeys)}</h3>
       {section.type === "segmented" && (
         <SegmentedRow
           options={
@@ -87,7 +88,7 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
                   ? api.setFormat(v)
                   : api.setQuality(v)
           }
-          labelOf={(v) => (section.i18n ? t(v) : v)}
+          labelOf={(v) => (section.i18n ? t(v as ParseKeys) : v)}
         />
       )}
       {section.type === "ratio" && <RatioSection section={section} model={model} api={api} />}

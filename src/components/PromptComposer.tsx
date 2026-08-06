@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ModelSelectModal } from "./ModelSelectModal";
 import { ParamPanel } from "./Popover";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { cn } from "../lib/utils";
 import { PROVIDER_LOGO } from "../lib/classes";
 import {
@@ -39,6 +40,7 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
   const provider = PROVIDERS[api.model.providerId] ?? providerMeta(api.model.providerId);
   const [openModel, setOpenModel] = useState(false);
   const [openParams, setOpenParams] = useState(false);
+  const [drawOpen, setDrawOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -70,8 +72,10 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
   // 折叠时关闭所有弹层：时间线上滚触发折叠后，模型/比例/画质/时长弹层
   // 若仍悬空会漂浮在输入条上方（锚点已随内容收起），一并关掉。
   useEffect(() => {
-    if (collapsed) closeOthers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (collapsed) {
+      setOpenModel(false);
+      setOpenParams(false);
+    }
   }, [collapsed]);
 
   const supportRef =
@@ -88,8 +92,10 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
 
   // 挂载 / prompt 变化（用户输入、跳转回填、会话恢复）时按内容自动撑高。
   useEffect(() => {
-    onTextareaInput();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = Math.min(ta.scrollHeight, 250) + "px";
   }, [api.prompt]);
 
   // 本地选图：用 FileReader 转 data url 作为参考图（演示用；真实链路可改为落盘路径）。
@@ -249,7 +255,7 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
               className={ctrlBtn}
               onClick={(e) => {
                 e.stopPropagation();
-                alert(t("prompt.drawAlert"));
+                setDrawOpen(true);
               }}
               title={t("prompt.drawTitle")}
             >
@@ -316,6 +322,16 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
         <span className="min-w-0 truncate text-[13px]">{api.prompt.trim() || (isVideo ? t("prompt.placeholderVideo") : t("prompt.placeholderImage"))}</span>
         <IconSparkles size={14} className="shrink-0 text-primary" />
       </button>
+
+      {/* Draw 占位提示（待接入功能，Dialog 替代原生 alert） */}
+      <Dialog open={drawOpen} onOpenChange={setDrawOpen}>
+        <DialogContent className="max-w-[360px] text-center">
+          <DialogHeader className="gap-3">
+            <DialogTitle className="text-base">{t("prompt.drawTitle")}</DialogTitle>
+            <span className="text-[13px] text-muted-foreground">{t("prompt.drawAlert")}</span>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -4,8 +4,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* 暗色变体与 theme.ts 的 data-theme 对齐 */
-@custom-variant dark (&:is([data-theme="dark"] *));
+/* 暗色变体与 theme.ts 的 data-theme 对齐（:where 零特异性，官方推荐写法） */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* 设计 token → Tailwind 工具类桥接（值引用下方 :root / [data-theme] 变量） */
 @theme inline {

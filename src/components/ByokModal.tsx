@@ -3,6 +3,7 @@
 // Key 经 keyring（Windows Credential Manager / DPAPI）加密存储；测试调用各厂商 test_connectivity。
 
 import { useEffect, useState } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { deleteApiKey, getApiKey, getWorkspaceId, saveApiKey, saveWorkspaceId, testApiKey } from "../api";
 import {
@@ -145,12 +146,12 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
                 >
                   {p.abbr}
                 </span>
-                <h3 className="m-0 flex-1 text-sm font-bold">{p.i18nName ? t(p.name) : p.name}</h3>
+                <h3 className="m-0 flex-1 text-sm font-bold">{p.i18nName ? t(p.name as ParseKeys) : p.name}</h3>
                 {badge(c.status)}
                 <Badge variant="outline" className={TAG}>{caps.join(" · ")}</Badge>
                 {!p.wired && <Badge variant="outline" className={cn(BADGE, BADGE_WARN)}>{t("common.notWired")}</Badge>}
               </div>
-              <div className="my-1 mb-3 text-[11px] leading-relaxed text-muted-foreground">{p.i18nName ? t(p.authHelp) : p.authHelp}</div>
+              <div className="my-1 mb-3 text-[11px] leading-relaxed text-muted-foreground">{p.i18nName ? t(p.authHelp as ParseKeys) : p.authHelp}</div>
               <div className="flex gap-2">
                 <Input
                   type="password"

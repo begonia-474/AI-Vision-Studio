@@ -4,6 +4,7 @@
 // 厂商配置以 JSON 存后端 SQLite；保存后同步 registry 动态注册表。
 
 import { useCallback, useEffect, useState } from "react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { deleteCustomProvider, listCustomProviders, saveCustomProvider } from "../api";
 import { PROTOCOL_COLORS, refreshCustomProviders, uid } from "../models/registry";
@@ -189,13 +190,13 @@ export function ProvidersPage({ onBack }: ProvidersPageProps) {
   }, [load]);
 
   // 进入模型编辑时，从已有 param_modules 装载模块草稿
-  useEffect(() => {
-    if (modelIdx == null) return;
-    const m = form.models[modelIdx];
-    if (!m) return;
-    setModulesDraft(m.param_modules ?? []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelIdx]);
+  // 渲染期比较模式（React 官方 "adjusting state when a prop changes"）：
+  // 仅当切换编辑目标时重置草稿，编辑中的手动改动不被覆盖。
+  const [prevEditIdx, setPrevEditIdx] = useState<number | null>(null);
+  if (modelIdx !== prevEditIdx) {
+    setPrevEditIdx(modelIdx);
+    if (modelIdx != null) setModulesDraft(form.models[modelIdx]?.param_modules ?? []);
+  }
 
   /** 未保存标记：表单内容与已保存快照不一致。 */
   const dirty = useCallback(() => {
@@ -294,7 +295,7 @@ export function ProvidersPage({ onBack }: ProvidersPageProps) {
     const mod: CustomParamModule = {
       type: "param",
       key: preset.key,
-      label: t(preset.labelKey),
+      label: t(preset.labelKey as ParseKeys),
       kind: preset.kind,
       def: preset.def,
     };
@@ -600,7 +601,7 @@ export function ProvidersPage({ onBack }: ProvidersPageProps) {
                             })
                           }
                         >
-                          {t(`gallery.capability.${c}`)}
+                          {t(`gallery.capability.${c}` as ParseKeys)}
                         </button>
                       ))}
                     </div>
@@ -638,7 +639,7 @@ export function ProvidersPage({ onBack }: ProvidersPageProps) {
                                   )
                                 }
                               />
-                              <span className="text-xs font-semibold text-text-2">{t(def.labelKey)}</span>
+                              <span className="text-xs font-semibold text-text-2">{t(def.labelKey as ParseKeys)}</span>
                             </label>
                             {mod && mod.type !== "batch" && mod.type !== "size" && mod.type !== "param" && (
                               <input
@@ -678,7 +679,7 @@ export function ProvidersPage({ onBack }: ProvidersPageProps) {
                         >
                           <option value="">{t("customProvider.presetAdd")}</option>
                           {PARAM_PRESETS[form.protocol].map((p) => (
-                            <option key={p.key} value={p.key}>{t(p.labelKey)}</option>
+                            <option key={p.key} value={p.key}>{t(p.labelKey as ParseKeys)}</option>
                           ))}
                         </select>
                         <button

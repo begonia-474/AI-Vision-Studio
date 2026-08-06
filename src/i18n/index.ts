@@ -23,6 +23,7 @@ i18n.use(initReactI18next).init({
   lng: initialLang,
   fallbackLng: "zh-CN",
   interpolation: { escapeValue: false },
+  enableSelector: "optimize",
 });
 
 i18n.on("languageChanged", (lng) => {

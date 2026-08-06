@@ -1,11 +1,13 @@
 // App = Shell（两区：侧边栏 + 功能区）
 // 顶部无独立 header：logo/程序名/折叠按钮并入侧边栏顶栏（见 Sidebar）。
-// 三个 studio 与图库、自定义厂商管理页常驻挂载，用 hidden 类切换以保留状态。
+// 图像/视频工作室常驻挂载（hidden 切换以保留会话状态）；
+// 图库/自定义厂商页为内容型视图，惰性挂载（激活才渲染）——常驻挂载会让图库
+// 在后台持续渲染 996 条真实历史 + 补缩略图任务，占用主线程拖慢所有点击。
 // BYOK / Settings 为独立 modal，由 sidebar 底部入口触发。
 // 图像 → 视频跳转：ImageStudio/GalleryView 触发 onImageToVideo，App 切换 tab 并向 VideoStudio 注入 jump。
 // 图库 → 图像跳转：GalleryView 触发 onImageToImage，App 切换 tab 并向 ImageStudio 注入 jump（作为参考图）。
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "./lib/utils";
 import { Sidebar } from "./shell/Sidebar";
 import { ImageStudio } from "./studios/ImageStudio";
@@ -49,19 +51,21 @@ export default function App() {
     refreshCustomProviders().catch(() => {});
   }, []);
 
-  const handleImageToVideo = (src: string, prompt: string) => {
+  // 跳转信号：App 持有最近一次 jump 常驻（无需清除——studio 端用 prevJump
+  // 记忆去重，同一信号不会重复应用），触发时切换视图。
+  const handleImageToVideo = useCallback((src: string, prompt: string) => {
     setVideoJump({ prompt, refs: [src] });
     setActiveView("video");
-  };
+  }, []);
 
   // 图库「作为参考图」→ 图像工作室 i2i 跳转（与图生视频同模式）。
-  const handleImageToImage = (src: string, prompt: string) => {
+  const handleImageToImage = useCallback((src: string, prompt: string) => {
     setImageJump({ prompt, refs: [src] });
     setActiveView("image");
-  };
+  }, []);
 
   // 图库「重新编辑」→ 对应工作室，回填原任务参数。
-  const handleReEdit = (j: StudioJump & { studio: "image" | "video" }) => {
+  const handleReEdit = useCallback((j: StudioJump & { studio: "image" | "video" }) => {
     const { studio, ...params } = j;
     if (studio === "video") {
       setVideoJump(params);
@@ -70,7 +74,7 @@ export default function App() {
       setImageJump(params);
       setActiveView("image");
     }
-  };
+  }, []);
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
@@ -88,17 +92,21 @@ export default function App() {
 
         <div className="relative flex-1 overflow-hidden bg-background">
           <div className={cn("h-full w-full", activeView !== "image" && "hidden")}>
-            <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} jump={imageJump} onJumpConsumed={() => setImageJump(null)} onReEdit={handleReEdit} />
+            <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} jump={imageJump} onReEdit={handleReEdit} />
           </div>
           <div className={cn("h-full w-full", activeView !== "video" && "hidden")}>
-            <VideoStudio session={videoSession} jump={videoJump} onJumpConsumed={() => setVideoJump(null)} onReEdit={handleReEdit} />
+            <VideoStudio session={videoSession} jump={videoJump} onReEdit={handleReEdit} />
           </div>
-          <div className={cn("h-full w-full", activeView !== "gallery" && "hidden")}>
-            <GalleryView onImageToVideo={handleImageToVideo} onImageToImage={handleImageToImage} onReEdit={handleReEdit} />
-          </div>
-          <div className={cn("h-full w-full", activeView !== "providers" && "hidden")}>
-            <ProvidersPage onBack={() => setActiveView(lastStudio)} />
-          </div>
+          {activeView === "gallery" && (
+            <div className="h-full w-full">
+              <GalleryView onImageToVideo={handleImageToVideo} onImageToImage={handleImageToImage} onReEdit={handleReEdit} />
+            </div>
+          )}
+          {activeView === "providers" && (
+            <div className="h-full w-full">
+              <ProvidersPage onBack={() => setActiveView(lastStudio)} />
+            </div>
+          )}
         </div>
       </div>
 

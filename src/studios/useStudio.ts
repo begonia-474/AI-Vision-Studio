@@ -269,11 +269,11 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       }
 
       const ids = Array.from({ length: n }, () => uid());
-      const now = Date.now();
+      const submittedAt = Date.now();
       const placeholders: ResultItem[] = ids.map((id) => ({
         id,
         taskId,
-        at: now,
+        at: submittedAt,
         status: "loading",
         prompt: p,
         model: m.name,
@@ -310,7 +310,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           id: ids[i] ?? uid(),
           taskId,
           historyId: res.history_id,
-          at: 0, // 占位 → done 替换时由下方映射从旧条目带过来
+          at: submittedAt, // 占位卡创建时刻即任务提交时间，直接沿用
           status: "done",
           url: toAssetUrl(lp),
           path: lp,
@@ -326,10 +326,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         }));
         session.patchActive((prev) => {
           const map = new Map(done.map((d) => [d.id, d]));
-          return prev.map((it) => {
-            const d = map.get(it.id);
-            return d ? { ...d, at: it.at } : it;
-          });
+          return prev.map((it) => map.get(it.id) ?? it);
         });
       } catch (e) {
         const msg = typeof e === "string" ? e : (e as Error)?.message ?? t("common.generationFailed");

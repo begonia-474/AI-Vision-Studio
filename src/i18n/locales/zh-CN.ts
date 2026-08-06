@@ -8,7 +8,7 @@ export const zhCN = {
     saved: "已保存",
     open: "打开",
     delete: "删除",
-    failed: "failed",
+    failed: "失败",
     generationFailed: "生成失败",
     notWired: "后端未接入",
     dark: "暗色",
@@ -34,6 +34,7 @@ export const zhCN = {
     canvasAlert: "画布功能尚未接入，敬请期待",
     image: "图片",
     video: "视频",
+    all: "全部",
     search: "搜索提示词 / 模型 / 厂商...",
     batch: "批量操作",
     selectedItems: "已选择 {{n}} 项内容",
@@ -211,7 +212,8 @@ export const zhCN = {
     regenerate: "重新生成",
     deleteTask: "删除该任务",
     cardGroup: "生成结果",
-  },  customProvider: {
+  },
+  customProvider: {
     title: "自定义厂商",
     desc: "适用于「协议统一、模型众多」的平台型服务：选定协议类型与 Base URL，再按模型 ID 添加模型并自行配置每个模型的参数。",
     manage: "管理自定义厂商",
@@ -318,6 +320,8 @@ export const zhCN = {
     zh: "中文",
     en: "English",
   },
-};
+} as const;
 
-export type ZhDict = typeof zhCN;
+/** 与 zhCN 结构相同但值放宽为 string（供其他语言文件标注使用） */
+type DeepString<T> = { [K in keyof T]: T[K] extends object ? DeepString<T[K]> : string };
+export type ZhDict = DeepString<typeof zhCN>;

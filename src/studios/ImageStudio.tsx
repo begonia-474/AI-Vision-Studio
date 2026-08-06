@@ -4,7 +4,7 @@
 // 接收来自图库的「作为参考图」跳转（jump），通过 effect 注入参考图 + prompt。
 // 点击任务队列完成结果卡打开作品详情（DetailPanel，与图库共用）。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toAssetUrl } from "../api";
 import { IconChevron } from "../lib/icons";
@@ -12,18 +12,17 @@ import { PromptComposer } from "../components/PromptComposer";
 import { TaskTimeline } from "../components/TaskTimeline";
 import { DetailPanel, type DetailSource } from "../components/DetailPanel";
 import { useStudio } from "./useStudio";
-import type { SessionApi } from "./sessionStore";
+import type { ResultItem, SessionApi } from "./sessionStore";
 import type { StudioJump } from "../types";
 
 interface ImageStudioProps {
   session: SessionApi;
   onImageToVideo?: (src: string, prompt: string) => void;
   jump: StudioJump | null;
-  onJumpConsumed: () => void;
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
 }
 
-export function ImageStudio({ session, onImageToVideo, jump, onJumpConsumed, onReEdit }: ImageStudioProps) {
+export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageStudioProps) {
   const api = useStudio("image", session);
   const streamRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -32,20 +31,25 @@ export function ImageStudio({ session, onImageToVideo, jump, onJumpConsumed, onR
   const [detailIdx, setDetailIdx] = useState<number | null>(null);
   const { t } = useTranslation();
 
-  // 底部预留：输入条本体 + bottom-4 偏移(16) + 与任务时间线一致的间距(pb-6 = 24)。
-  // 折叠时贴合胶囊条（~52 + 40 ≈ 92），不残留死空间；展开时内容末尾始终停在输入条上方 24px。
-  const bottomPadding = Math.max(composerH + 40, 92);
-
   // 输入条高度变化：滚动区底部让位，长提示词展开时不被遮住（即梦/krea 行为）。
-  const handleComposerHeight = useCallback((h: number) => setComposerH(h), []);
+  // 预留高度直写滚动容器 DOM（不经过 React 状态/重渲染）——折叠/展开动画期间
+  // ResizeObserver 每帧回调，若走 setState 会每帧重建整个时间线树导致卡顿。
+  // setComposerH 仅用于「回到底部」按钮的垂直定位。
+  const handleComposerHeight = useCallback((h: number) => {
+    setComposerH(h);
+    const el = streamRef.current;
+    if (el) el.style.paddingBottom = `${Math.max(h + 40, 92)}px`;
+  }, []);
 
-  useEffect(() => {
-    if (jump) {
-      api.applyJump(jump);
-      onJumpConsumed();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jump]);
+  // 渲染期消费跳转信号（React 官方 "adjusting state when a prop changes" 模式）：
+  // 记录上一次的 jump，prop 变化时立即回填表单，不经 effect 编排数据流。
+  // 注意：applyJump 内部均为本地 setState，无外部副作用，方可在此执行；
+  // App 侧无需清除 jump——prevJump 记忆保证同一信号不会重复应用。
+  const [prevJump, setPrevJump] = useState<StudioJump | null>(null);
+  if (jump !== prevJump) {
+    setPrevJump(jump);
+    if (jump) api.applyJump(jump);
+  }
 
   // 详情数据源：当前会话的完成结果（删除整任务；跳转与重新编辑走会话参数快照）。
   const detailSources = useMemo<DetailSource[]>(
@@ -102,28 +106,37 @@ export function ImageStudio({ session, onImageToVideo, jump, onJumpConsumed, onR
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, []);
 
+  // 打开详情 / 重新编辑：稳定引用，配合 TaskTimeline memo 在折叠动画期间跳过时间线重渲染。
+  const openDetail = useCallback(
+    (item: ResultItem) => {
+      const idx = detailSources.findIndex((s) => s.key === item.id);
+      if (idx >= 0) setDetailIdx(idx);
+    },
+    [detailSources],
+  );
+  const reEdit = useCallback(
+    (item: ResultItem) => {
+      const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
+      onReEdit?.({ studio: "image", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs });
+    },
+    [api.results, onReEdit],
+  );
+
   return (
     <div className="relative flex h-full w-full flex-col items-center justify-center bg-background p-4">
-      <div className="m-0 flex-1 w-full overflow-y-auto px-2" ref={streamRef} style={{ paddingBottom: bottomPadding }}>
+      <div className="m-0 flex-1 w-full overflow-y-auto px-2" ref={streamRef}>
         <TaskTimeline
           key={session.activeId}
           results={api.results}
           studio="image"
-          model={api.model}
+          emptyModelName={api.model.name}
           scrollRef={streamRef}
-          bottomPadding={bottomPadding}
           onBottomStateChange={handleBottomChange}
           onImageToVideo={onImageToVideo}
           onDeleteTask={api.removeTask}
           onRegenerate={api.regenerate}
-          onOpenDetail={(item) => {
-            const idx = detailSources.findIndex((s) => s.key === item.id);
-            if (idx >= 0) setDetailIdx(idx);
-          }}
-          onReEdit={(item) => {
-            const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
-            onReEdit?.({ studio: "image", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs });
-          }}
+          onOpenDetail={openDetail}
+          onReEdit={reEdit}
         />
       </div>
       {!atBottom && (

@@ -4,6 +4,7 @@
 // 点击卡片立即完成选择并关闭（无 footer 确认按钮，与哩布一致）。
 
 import { useEffect, useMemo, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { IconCheck, IconSearch } from "../lib/icons";
@@ -32,7 +33,7 @@ const TAG =
   "rounded-r-full rounded-l-none whitespace-nowrap bg-[rgba(59,130,246,.10)] py-1 pl-[6px] pr-2 text-[11px] font-medium text-primary";
 
 /** 能力标签（≤3 个，对齐哩布）：能力 → 多参考图 → 超清4K → 组图模式。 */
-function modelTags(m: ModelDef, t: (k: string) => string): string[] {
+function modelTags(m: ModelDef, t: TFunction): string[] {
   const tags: string[] = [];
   if (m.studio === "video") {
     if (m.capabilities.includes("t2v")) tags.push(t("model.tag.t2v"));

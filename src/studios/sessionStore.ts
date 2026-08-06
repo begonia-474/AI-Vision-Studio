@@ -238,6 +238,9 @@ export function useSessionStore(studio: Studio): SessionApi {
   }, [state, studio]);
 
   // SQLite 是完成结果的权威来源，补齐当前会话的历史记录（按 taskId/path 去重）。
+  // 注意：目标会话必须是 mount 时刻的激活会话（mountActiveIdRef）——listHistory 是异步的，
+  // resolve 时用户可能已新开会话，若按当时的 activeId 补齐会把历史错误塞进新会话。
+  const mountActiveIdRef = useRef(state.activeId);
   useEffect(() => {
     let mounted = true;
     listHistory()
@@ -254,7 +257,8 @@ export function useSessionStore(studio: Studio): SessionApi {
         if (restored.length === 0) return;
 
         setState((prev) => {
-          const target = prev.sessions.find((s) => s.id === prev.activeId) ?? prev.sessions[0];
+          const target =
+            prev.sessions.find((s) => s.id === mountActiveIdRef.current) ?? prev.sessions[0];
           if (!target) return prev;
           const existingTaskIds = new Set(target.results.map((it) => it.taskId));
           const existingPaths = new Set(

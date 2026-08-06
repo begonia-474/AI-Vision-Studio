@@ -5,6 +5,7 @@
 // 画布尚未接入，点击弹窗提示；收藏/删除仍作用于原任务。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { deleteHistories, ensureThumbnails, listHistory, onProgress, setStar, toAssetUrl } from "../api";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -12,6 +13,8 @@ import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
 import { IconChevron, IconDownload, IconLibrary, IconPlay, IconSearch, IconStar, IconTrash, IconUpload } from "../lib/icons";
 import { cn } from "../lib/utils";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { DetailPanel, type DetailSource } from "./DetailPanel";
 
 type TypeFilter = "all" | "image" | "video";
@@ -67,7 +70,7 @@ const dayNumber = (key: string): number => {
   return Date.UTC(year, month - 1, day);
 };
 
-const dateLabel = (t: (k: string, options?: Record<string, unknown>) => string, key: string): string => {
+const dateLabel = (t: TFunction, key: string): string => {
   const now = new Date();
   const daysAgo = Math.round((dayNumber(dayKey(now.toISOString())) - dayNumber(key)) / 86400000);
   if (daysAgo === 0) return t("gallery.today");
@@ -129,8 +132,12 @@ function CheckMark({ on }: { on: boolean }) {
   );
 }
 
+// 下拉菜单浅色样式（图库为浅色视图；主题令牌迁移后再统一）
 const MENU =
-  "absolute top-7 left-0 z-50 rounded-lg border border-[#e5e7eb] bg-white text-[12px] shadow-[0_10px_30px_rgba(15,23,42,.12)]";
+  "rounded-lg border border-[#e5e7eb] bg-white text-[12px] shadow-[0_10px_30px_rgba(15,23,42,.12)]";
+const MENU_ITEM = "justify-between text-[#374151] focus:bg-[#f3f4f6] focus:text-[#374151]";
+const MENU_LABEL = "px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]";
+const MENU_SEP = "mx-3 my-1.5 h-px bg-[#f0f1f3]";
 
 export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: GalleryViewProps) {
   const { t } = useTranslation();
@@ -149,10 +156,10 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
   const [detailIdx, setDetailIdx] = useState<number | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<"filter" | "time" | "sort" | null>(null);
+  const [canvasOpen, setCanvasOpen] = useState(false);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const aliveRef = useRef(true);
   const searchRef = useRef<HTMLDivElement | null>(null);
-  const row2Ref = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
@@ -206,12 +213,11 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
     };
   }, [refresh]);
 
-  // 点击搜索区 / 菜单区外部时收回；Escape 也收回
+  // 点击搜索区外部时收回；Escape 收回搜索/菜单并关闭详情
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const node = e.target as Node;
       if (searchRef.current && !searchRef.current.contains(node)) setSearchOpen(false);
-      if (row2Ref.current && !row2Ref.current.contains(node)) setOpenMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -542,7 +548,7 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
             </button>
             <button
               className="h-9 cursor-pointer rounded-[9px] border-0 bg-transparent px-3 text-[13px] text-[#4b5563] transition-colors hover:bg-[#eceef1] hover:text-[#111827]"
-              onClick={() => window.alert(t("gallery.canvasAlert"))}
+              onClick={() => setCanvasOpen(true)}
             >
               {t("gallery.canvas")}
             </button>
@@ -609,7 +615,7 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
           )}
         </div>
 
-        <div ref={row2Ref} className="mx-auto flex w-full max-w-[1280px] min-h-[46px] items-center gap-6 px-2 pb-2 text-[12px] text-[#374151]">
+        <div className="mx-auto flex w-full max-w-[1280px] min-h-[46px] items-center gap-6 px-2 pb-2 text-[12px] text-[#374151]">
           <div className="flex shrink-0 items-center gap-6" role="tablist">
             {(["image", "video"] as TypeFilter[]).map((k) => (
               <button
@@ -628,85 +634,77 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
           </div>
 
           <div className="relative shrink-0">
-            <button
-              className={cn(
-                "flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]",
-                (starredOnly || type === "all" || resSel.size > 0 || ratioSel.size > 0) && "font-medium text-[#111827]",
-              )}
-              onClick={() => setOpenMenu((v) => (v === "filter" ? null : "filter"))}
-            >
-              {t("gallery.filter")} <IconChevron size={11} />
-            </button>
-            {openMenu === "filter" && (
-              <div className={cn(MENU, "min-w-[216px] py-2")}>
-                <div className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]">{t("gallery.fGroupAction")}</div>
+            <DropdownMenu open={openMenu === "filter"} onOpenChange={(o) => setOpenMenu(o ? "filter" : null)}>
+              <DropdownMenuTrigger asChild>
                 <button
-                  className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 bg-transparent px-3 py-[7px] text-left text-[#374151] transition-colors hover:bg-[#f3f4f6]"
-                  onClick={() => setStarredOnly((v) => !v)}
+                  className={cn(
+                    "flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]",
+                    (starredOnly || type === "all" || resSel.size > 0 || ratioSel.size > 0) && "font-medium text-[#111827]",
+                  )}
                 >
+                  {t("gallery.filter")} <IconChevron size={11} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className={cn(MENU, "min-w-[216px] py-2")}>
+                <div className={MENU_LABEL}>{t("gallery.fGroupAction")}</div>
+                <DropdownMenuItem className={MENU_ITEM} onSelect={(e) => e.preventDefault()} onClick={() => setStarredOnly((v) => !v)}>
                   <span>{t("gallery.starredOnly")}</span>
                   <CheckMark on={starredOnly} />
-                </button>
-                <div className="mx-3 my-1.5 h-px bg-[#f0f1f3]" />
-                <div className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]">{t("gallery.fGroupType")}</div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className={MENU_SEP} />
+                <div className={MENU_LABEL}>{t("gallery.fGroupType")}</div>
                 {(["image", "video"] as TypeFilter[]).map((k) => (
-                  <button
+                  <DropdownMenuItem
                     key={k}
-                    className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 bg-transparent px-3 py-[7px] text-left text-[#374151] transition-colors hover:bg-[#f3f4f6]"
+                    className={MENU_ITEM}
+                    onSelect={(e) => e.preventDefault()}
                     onClick={() => setType(type === k ? "all" : k)}
                   >
                     <span>{t(`gallery.${k}`)}</span>
                     <CheckMark on={type === k} />
-                  </button>
+                  </DropdownMenuItem>
                 ))}
                 {resOptions.length > 0 && (
                   <>
-                    <div className="mx-3 my-1.5 h-px bg-[#f0f1f3]" />
-                    <div className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]">{t("gallery.fGroupRes")}</div>
+                    <DropdownMenuSeparator className={MENU_SEP} />
+                    <div className={MENU_LABEL}>{t("gallery.fGroupRes")}</div>
                     {resOptions.map((r) => (
-                      <button
-                        key={r}
-                        className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 bg-transparent px-3 py-[7px] text-left text-[#374151] transition-colors hover:bg-[#f3f4f6]"
-                        onClick={() => toggleFilterSet("res", r)}
-                      >
+                      <DropdownMenuItem key={r} className={MENU_ITEM} onSelect={(e) => e.preventDefault()} onClick={() => toggleFilterSet("res", r)}>
                         <span>{r}</span>
                         <CheckMark on={resSel.has(r)} />
-                      </button>
+                      </DropdownMenuItem>
                     ))}
                   </>
                 )}
                 {ratioOptions.length > 0 && (
                   <>
-                    <div className="mx-3 my-1.5 h-px bg-[#f0f1f3]" />
-                    <div className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]">{t("gallery.fGroupRatio")}</div>
+                    <DropdownMenuSeparator className={MENU_SEP} />
+                    <div className={MENU_LABEL}>{t("gallery.fGroupRatio")}</div>
                     {ratioOptions.map((r) => (
-                      <button
-                        key={r}
-                        className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 bg-transparent px-3 py-[7px] text-left text-[#374151] transition-colors hover:bg-[#f3f4f6]"
-                        onClick={() => toggleFilterSet("ratio", r)}
-                      >
+                      <DropdownMenuItem key={r} className={MENU_ITEM} onSelect={(e) => e.preventDefault()} onClick={() => toggleFilterSet("ratio", r)}>
                         <span>{r}</span>
                         <CheckMark on={ratioSel.has(r)} />
-                      </button>
+                      </DropdownMenuItem>
                     ))}
                   </>
                 )}
-              </div>
-            )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
 
           <div className="relative shrink-0">
-            <button
-              className={cn(
-                "flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]",
-                (range.start || range.end) && "font-medium text-[#111827]",
-              )}
-              onClick={() => setOpenMenu((v) => (v === "time" ? null : "time"))}
-            >
-              {t("gallery.time")} <IconChevron size={11} />
-            </button>
-            {openMenu === "time" && (
-              <div className={cn(MENU, "min-w-[264px] p-2")}>
+            <DropdownMenu open={openMenu === "time"} onOpenChange={(o) => setOpenMenu(o ? "time" : null)}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className={cn(
+                    "flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]",
+                    (range.start || range.end) && "font-medium text-[#111827]",
+                  )}
+                >
+                  {t("gallery.time")} <IconChevron size={11} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className={cn(MENU, "min-w-[264px] p-2")}>
                 <div className="flex items-center gap-1.5 rounded-md bg-[#f3f4f6] px-2.5 py-2">
                   <input
                     type="date"
@@ -730,47 +728,36 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
                   { label: t("gallery.last30Days"), active: activePreset(range, 30), apply: () => setRange(presetRange(30)) },
                   { label: t("gallery.last3Months"), active: activePreset(range, 90), apply: () => setRange(presetRange(90)) },
                 ] as const).map((o) => (
-                  <button
-                    key={o.label}
-                    className="mt-1 flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 bg-transparent px-2.5 py-2 text-left text-[#374151] transition-colors hover:bg-[#f3f4f6]"
-                    onClick={() => {
-                      o.apply();
-                      setOpenMenu(null);
-                    }}
-                  >
+                  <DropdownMenuItem key={o.label} className={cn(MENU_ITEM, "mt-1 justify-between")} onClick={o.apply}>
                     <span>{o.label}</span>
                     {o.active && <CheckMark on />}
-                  </button>
+                  </DropdownMenuItem>
                 ))}
-              </div>
-            )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
 
           <div className="relative shrink-0">
-            <button
-              className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]"
-              onClick={() => setOpenMenu((v) => (v === "sort" ? null : "sort"))}
-            >
-              {t("gallery.sort")} <IconChevron size={11} />
-            </button>
-            {openMenu === "sort" && (
-              <div className={cn(MENU, "min-w-[180px] py-1.5")}>
-                <div className="px-3 pt-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]">{t("gallery.order")}</div>
+            <DropdownMenu open={openMenu === "sort"} onOpenChange={(o) => setOpenMenu(o ? "sort" : null)}>
+              <DropdownMenuTrigger asChild>
+                <button className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]">
+                  {t("gallery.sort")} <IconChevron size={11} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className={cn(MENU, "min-w-[180px] py-1.5")}>
+                <div className={MENU_LABEL}>{t("gallery.order")}</div>
                 {(["newest", "oldest"] as SortOrder[]).map((k) => (
-                  <button
+                  <DropdownMenuItem
                     key={k}
-                    className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border-0 bg-transparent px-3 py-[7px] text-left text-[#374151] transition-colors hover:bg-[#f3f4f6]"
-                    onClick={() => {
-                      setSortOrder(k);
-                      setOpenMenu(null);
-                    }}
+                    className={cn(MENU_ITEM, "justify-between")}
+                    onClick={() => setSortOrder(k)}
                   >
                     <span className={cn(sortOrder === k && "font-medium text-[#111827]")}>{t(`gallery.${k}`)}</span>
                     {sortOrder === k && <CheckMark on />}
-                  </button>
+                  </DropdownMenuItem>
                 ))}
-              </div>
-            )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </header>
@@ -919,6 +906,16 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
           onNavigate={goDetail}
         />
       )}
+
+      {/* 画布占位提示（待接入功能，Dialog 替代原生 alert） */}
+      <Dialog open={canvasOpen} onOpenChange={setCanvasOpen}>
+        <DialogContent className="max-w-[360px] text-center">
+          <DialogHeader className="gap-3">
+            <DialogTitle className="text-base">{t("gallery.canvas")}</DialogTitle>
+            <span className="text-[13px] text-muted-foreground">{t("gallery.canvasAlert")}</span>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
