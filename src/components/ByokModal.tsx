@@ -1,15 +1,12 @@
 // BYOK 厂商 Key 管理 Modal
-// 内置四厂卡片 + 自定义厂商（魔搭/HF/OpenAI 兼容）卡片，同一 keyring 命名空间。
+// 内置厂商卡片（volcark/wanxiang/kling/minimax/modelscope），同一 keyring 命名空间。
 // Key 经 keyring（Windows Credential Manager / DPAPI）加密存储；测试调用各厂商 test_connectivity。
 
 import { useEffect, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { deleteApiKey, getApiKey, getWorkspaceId, saveApiKey, saveWorkspaceId, testApiKey } from "../api";
-import {
-  getCustomProviderMeta,
-  PROVIDER_LIST,
-} from "../models/registry";
+import { PROVIDER_LIST } from "../models/registry";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -42,7 +39,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
     if (!open) return;
     let active = true;
     (async () => {
-      const ids = [...PROVIDER_LIST.map((p) => p.id), ...Object.keys(getCustomProviderMeta())];
+      const ids = PROVIDER_LIST.map((p) => p.id);
       const next: Record<string, CardState> = {};
       for (const id of ids) {
         try {
@@ -126,7 +123,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
         <DialogTitle>{t("byok.title")}</DialogTitle>
         <DialogDescription className={MDESC}>{t("byok.desc")}</DialogDescription>
 
-        {[...PROVIDER_LIST, ...Object.values(getCustomProviderMeta())].map((p) => {
+        {PROVIDER_LIST.map((p) => {
           const c = cards[p.id] ?? { value: "", status: "unset" as Status };
           const caps = p.capabilities
             .map((cap) =>

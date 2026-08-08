@@ -4,8 +4,8 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{
-    CustomProviderRow, GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord,
-    ProgressPayload, ProviderInfoDto, TaskPhase,
+    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord,
+    ProgressPayload, ProviderInfoDto, TaskPhase, UserModelRow,
 };
 use crate::providers::{all_providers, get_provider};
 use crate::storage;
@@ -203,7 +203,7 @@ pub async fn generate(
         .model
         .clone()
         .unwrap_or_else(|| provider.default_model().to_string());
-    let params_obj = serde_json::json!({
+    let mut params_obj = serde_json::json!({
         "size": req.size,
         "n": req.n,
         "aspect_ratio": req.aspect_ratio,
@@ -213,6 +213,16 @@ pub async fn generate(
         // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
         "references": collected_refs,
     });
+    // LoRA 快照（魔搭 loras 参数：单 LoRA dict {repo: weight} 或字符串）：
+    // 随历史落库，重新编辑/图库跳转时回填弹层。
+    if let Some(l) = req
+        .extra
+        .as_ref()
+        .and_then(|e| e.get("params"))
+        .and_then(|p| p.get("loras"))
+    {
+        params_obj["loras"] = l.clone();
+    }
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
     // 每张图都生成 256px webp 缩略图（{stem}.thumb.webp 命名约定，网格按此渲染），
@@ -323,19 +333,32 @@ pub async fn ensure_thumbnails() -> Result<usize, String> {
         .map_err(|e| format!("缩略图任务异常: {}", e))?
 }
 
-// —— 自定义厂商（JSON 配置存储）——
+// —— 用户自添加模型（内置厂商）——
 
 #[tauri::command]
-pub fn list_custom_providers() -> Result<Vec<CustomProviderRow>, String> {
-    storage::list_custom_providers()
+pub fn list_user_models() -> Result<Vec<UserModelRow>, String> {
+    storage::list_user_models()
 }
 
 #[tauri::command]
-pub fn save_custom_provider(id: String, config_json: String) -> Result<(), String> {
-    storage::save_custom_provider(&id, &config_json)
+pub fn save_user_model(
+    provider_id: String,
+    model_id: String,
+    name: String,
+    template_model_id: String,
+    params_json: Option<String>,
+) -> Result<(), String> {
+    storage::save_user_model(
+        &provider_id,
+        &model_id,
+        &name,
+        &template_model_id,
+        params_json.as_deref(),
+    )
 }
 
 #[tauri::command]
-pub fn delete_custom_provider(id: String) -> Result<(), String> {
-    storage::delete_custom_provider(&id)
+pub fn delete_user_model(id: i64) -> Result<(), String> {
+    storage::delete_user_model(id)
 }
+

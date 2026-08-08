@@ -1,11 +1,11 @@
 // Sidebar —— 侧栏
 // 顶栏：logo + 程序名 + 折叠按钮（原 Header 并入）；
 // 中部：Image / Video Studio / Gallery 三个入口 + 当前工作室的会话列表（类 ChatGPT/豆包，仅展开态显示）；
-// 底部：自定义厂商 / BYOK / Settings 入口。collapsed 时仅显示图标，悬停经 Radix Tooltip 显示入口名（展开态无悬停信息）。
+// 底部：Settings 入口。collapsed 时仅显示图标，悬停经 Radix Tooltip 显示入口名（展开态无悬停信息）。
 
 import { useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
-import { IconBox, IconImage, IconKey, IconLibrary, IconSettings, IconSidebar, IconVideo } from "../lib/icons";
+import { IconImage, IconKey, IconLibrary, IconSettings, IconSidebar, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import type { View } from "../App";
@@ -222,12 +222,6 @@ export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onS
         </div>
 
         <div className="mt-auto flex flex-col gap-1 border-t border-line-2 pt-3">
-          <TooltipIf show={collapsed} label={t("sidebar.customProvider")}>
-            <button className={cn(catBtn, catBtnCollapsed, activeView === "providers" && catBtnActive)} onClick={() => onSwitch("providers")}>
-              <IconBox className="size-[19px] shrink-0" size={19} />
-              <span className={cn("min-w-0 flex-1 truncate transition-opacity duration-300 group-[.collapsed]/sb:opacity-0", catLabelCollapsed)}>{t("sidebar.customProvider")}</span>
-            </button>
-          </TooltipIf>
           <TooltipIf show={collapsed} label={t("sidebar.byok")}>
             <button className={cn(catBtn, catBtnCollapsed)} onClick={onOpenByok}>
               <IconKey className="size-[19px] shrink-0" size={19} />

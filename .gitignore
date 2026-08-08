@@ -32,3 +32,4 @@ docs/*
 #agents相关
 .agents/*
 AGENTS.md
+.codegraph

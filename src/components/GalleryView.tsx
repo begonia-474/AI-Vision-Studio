@@ -11,6 +11,7 @@ import { deleteHistories, ensureThumbnails, listHistory, onProgress, setStar, to
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
+import { parseLoras } from "../studios/sessionStore";
 import { IconChevron, IconDownload, IconLibrary, IconPlay, IconSearch, IconStar, IconTrash, IconUpload } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -504,6 +505,7 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
       duration: typeof params?.duration === "string" ? params.duration : undefined,
       n: typeof params?.n === "number" ? params.n : undefined,
       refs,
+      loras: parseLoras(params?.loras),
     };
   };
 

@@ -18,6 +18,8 @@ import {
   type ParamSectionDef,
 } from "../models/registry";
 import type { StudioApi } from "../studios/useStudio";
+import type { LoraEntry } from "../types";
+import { IconTrash } from "../lib/icons";
 
 const SIZE_MIN = 512;
 const SIZE_MAX = 4096; // 单边输入上限；合规性以官方总像素区间（volcarkPixelBounds）为准
@@ -94,6 +96,7 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
       {section.type === "ratio" && <RatioSection section={section} model={model} api={api} />}
       {section.type === "size" && <SizeRow model={model} api={api} />}
       {section.type === "param" && <ParamRow section={section} api={api} />}
+      {section.type === "loras" && <LorasSection api={api} />}
       {section.type === "duration" && <DurationSection model={model} api={api} />}
     </div>
   );
@@ -299,7 +302,6 @@ function ParamRow({
   const v = api.paramValues[section.key] ?? section.def ?? "";
   return (
     <div className="flex h-9 items-center gap-2 rounded-lg bg-soft px-2.5">
-      <span className="w-[88px] shrink-0 truncate text-xs font-semibold text-text-2">{section.title}</span>
       <input
         className="min-w-0 flex-1 border-0 bg-transparent py-1 text-xs font-medium text-foreground outline-none"
         type={section.kind === "number" ? "number" : "text"}
@@ -307,6 +309,94 @@ function ParamRow({
         onChange={(e) => api.setParamValue(section.key, e.target.value)}
       />
     </div>
+  );
+}
+
+// —— LoRA 列表（魔搭 loras 字段）：一行一个 repo-id + 权重，最多 6 行，可增删。
+// 1 个 → 提交字符串 repo-id；多个 → 提交 {repo: weight}。权重不做任何限制，用户自定义。 ——
+function LorasSection({ api }: { api: StudioApi }) {
+  const { t } = useTranslation();
+  const loras = api.loras;
+  const full = loras.length >= 6;
+
+  const set = (i: number, patch: Partial<LoraEntry>) =>
+    api.setLoras(loras.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+
+  const add = () => {
+    if (full) return;
+    api.setLoras([...loras, { repo: "", weight: "1" }]);
+  };
+
+  const remove = (i: number) => api.setLoras(loras.filter((_, j) => j !== i));
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {loras.length === 0 && (
+        <button
+          type="button"
+          onClick={add}
+          className="flex h-8 cursor-pointer items-center justify-center gap-1 rounded-lg border border-dashed border-border-2 text-xs font-medium text-text-2 transition-colors hover:bg-hover hover:text-foreground"
+        >
+          <PlusIcon />
+          {t("prompt.lorasAdd")}
+        </button>
+      )}
+      {loras.map((l, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <input
+            className="h-9 min-w-0 flex-1 rounded-lg bg-soft px-2.5 text-xs font-medium text-foreground outline-none placeholder:text-faint"
+            placeholder={t("prompt.lorasRepo")}
+            value={l.repo}
+            onChange={(e) => set(i, { repo: e.target.value })}
+          />
+          <div className="flex h-9 w-[76px] shrink-0 items-center gap-0.5 rounded-lg bg-soft px-2">
+            <input
+              className="min-w-0 flex-1 border-0 bg-transparent py-1 text-center text-xs font-semibold text-foreground outline-none"
+              type="text"
+              inputMode="decimal"
+              value={l.weight}
+              onChange={(e) => set(i, { weight: e.target.value.replace(/[^\d.]/g, "") })}
+            />
+          </div>
+          <button
+            type="button"
+            aria-label={t("prompt.lorasRemove")}
+            onClick={() => remove(i)}
+            className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-md bg-soft text-faint transition-colors hover:bg-hover hover:text-foreground"
+          >
+            <IconTrash size={13} />
+          </button>
+        </div>
+      ))}
+      {!full && (
+        <button
+          type="button"
+          onClick={add}
+          className="flex cursor-pointer items-center gap-0.5 text-[11px] font-medium text-accent hover:underline"
+        >
+          <PlusIcon size={10} />
+          {t("prompt.lorasAdd")}
+        </button>
+      )}
+      <p className="text-[11px] leading-relaxed text-faint">{t("prompt.lorasHint")}</p>
+    </div>
+  );
+}
+
+function PlusIcon({ size = 12, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      className={className}
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
   );
 }
 

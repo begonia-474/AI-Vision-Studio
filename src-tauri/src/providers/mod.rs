@@ -1,13 +1,13 @@
-pub mod custom;
 pub mod dashscope;
 pub mod kling;
 pub mod minimax;
+pub mod modelscope;
 pub mod volcark;
 
-pub use custom::{CustomProvider, PROVIDER_PREFIX};
 pub use dashscope::DashScopeProvider;
 pub use kling::KlingProvider;
 pub use minimax::MiniMaxProvider;
+pub use modelscope::ModelScopeProvider;
 pub use volcark::VolcArkProvider;
 
 use async_trait::async_trait;
@@ -62,28 +62,25 @@ fn truncate_json_strings(v: serde_json::Value, max: usize) -> serde_json::Value 
     }
 }
 
-/// 已注册厂商的元信息列表（内置厂商；自定义厂商由前端 custom_providers 配置驱动）。
+/// 已注册厂商的元信息列表（全部为内置厂商）。
 pub fn all_providers() -> Vec<ProviderInfoDto> {
     vec![
         VolcArkProvider::info(),
         MiniMaxProvider::info(),
         DashScopeProvider::info(),
         KlingProvider::info(),
+        ModelScopeProvider::info(),
     ]
 }
 
 /// 按 id 取一个 provider 实例。未命中返回 None。
-/// 内置厂商走静态适配器；"custom:" 前缀从 SQLite 加载 JSON 配置构建协议适配器。
 pub fn get_provider(id: &str, client: reqwest::Client) -> Option<Box<dyn GenerationProvider>> {
-    if let Some(rest) = id.strip_prefix(PROVIDER_PREFIX) {
-        return CustomProvider::try_load(rest, client)
-            .map(|p| Box::new(p) as Box<dyn GenerationProvider>);
-    }
     match id {
         "volcark" => Some(Box::new(VolcArkProvider::new(client))),
         "minimax" => Some(Box::new(MiniMaxProvider::new(client))),
         "wanxiang" => Some(Box::new(DashScopeProvider::new(client))),
         "kling" => Some(Box::new(KlingProvider::new(client))),
+        "modelscope" => Some(Box::new(ModelScopeProvider::new(client))),
         _ => None,
     }
 }

@@ -89,7 +89,7 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
             },
             onReEdit: () => {
               setDetailIdx(null);
-              onReEdit?.({ studio: "video", prompt: r.prompt, modelId: r.modelId, ar: r.ar, quality: r.quality, duration: r.duration, n, refs: r.refs });
+              onReEdit?.({ studio: "video", prompt: r.prompt, modelId: r.modelId, ar: r.ar, quality: r.quality, duration: r.duration, n, refs: r.refs, loras: r.loras });
             },
           };
         }),
@@ -107,7 +107,7 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
   const reEdit = useCallback(
     (item: ResultItem) => {
       const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
-      onReEdit?.({ studio: "video", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs });
+      onReEdit?.({ studio: "video", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs, loras: item.loras });
     },
     [api.results, onReEdit],
   );

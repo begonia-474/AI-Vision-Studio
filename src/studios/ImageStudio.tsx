@@ -83,7 +83,7 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
             },
             onReEdit: () => {
               setDetailIdx(null);
-              onReEdit?.({ studio: "image", prompt: r.prompt, modelId: r.modelId, ar: r.ar, quality: r.quality, duration: r.duration, n, refs: r.refs });
+              onReEdit?.({ studio: "image", prompt: r.prompt, modelId: r.modelId, ar: r.ar, quality: r.quality, duration: r.duration, n, refs: r.refs, loras: r.loras });
             },
           };
         }),
@@ -117,7 +117,7 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
   const reEdit = useCallback(
     (item: ResultItem) => {
       const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
-      onReEdit?.({ studio: "image", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs });
+      onReEdit?.({ studio: "image", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs, loras: item.loras });
     },
     [api.results, onReEdit],
   );

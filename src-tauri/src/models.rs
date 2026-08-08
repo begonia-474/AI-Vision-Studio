@@ -60,13 +60,15 @@ pub struct GenerationResultDto {
     pub remote_urls: Vec<String>,
 }
 
-/// 自定义厂商配置行：完整配置以 JSON 存于 config_json（前端为 schema 所有者），
-/// 结构：{ id, name, protocol: "modelscope"|"huggingface"|"openai-compatible",
-///        base_url, models: [{ repo_id, name, capabilities, size_presets, params }] }。
+/// 用户为内置厂商自添加的模型行。
 #[derive(Serialize, Deserialize, Clone)]
-pub struct CustomProviderRow {
-    pub id: String,
-    pub config_json: String,
+pub struct UserModelRow {
+    pub id: i64,
+    pub provider_id: String,
+    pub model_id: String,
+    pub name: String,
+    pub template_model_id: String,
+    pub params_json: Option<String>,
     pub created_at: String,
 }
 

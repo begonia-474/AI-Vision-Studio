@@ -35,9 +35,9 @@ pub fn run() {
             commands::set_star,
             commands::delete_histories,
             commands::ensure_thumbnails,
-            commands::list_custom_providers,
-            commands::save_custom_provider,
-            commands::delete_custom_provider,
+            commands::list_user_models,
+            commands::save_user_model,
+            commands::delete_user_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

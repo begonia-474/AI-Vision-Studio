@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listHistory, onProgress, toAssetUrl } from "../api";
-import type { HistoryTask } from "../types";
+import type { HistoryTask, LoraEntry } from "../types";
 
 export type Studio = "image" | "video";
 export type ResultStatus = "loading" | "done" | "error";
@@ -30,6 +30,7 @@ export interface ResultItem {
   format?: string; // 图像输出格式（png/jpeg）
   duration?: string;
   refs?: string[];
+  loras?: LoraEntry[]; // 重新生成参数快照：LoRA 列表（自定义魔搭厂商）
   error?: string;
   // loading 期间实时阶段（由 gen-progress 事件按 taskId 写入；进度数值不展示，
   // 卡片上用装饰性动画代替，避免后端跳变式进度显得卡顿）
@@ -102,6 +103,21 @@ function historyParams(item: HistoryTask): Record<string, unknown> {
   }
 }
 
+/// 历史 params_json.loras（提交格式：字符串或 {repo: weight}）→ 弹层行（LoraEntry[]）。
+/// 字符串（旧数据/单 LoRA 字符串形式）→ 单行 weight "1"；dict → 每项一行，权重转字符串。
+export function parseLoras(raw: unknown): LoraEntry[] | undefined {
+  if (typeof raw === "string") {
+    return raw.trim() ? [{ repo: raw.trim(), weight: "1" }] : undefined;
+  }
+  if (raw && typeof raw === "object") {
+    const entries = Object.entries(raw as Record<string, unknown>)
+      .filter(([repo]) => typeof repo === "string" && repo.trim() !== "")
+      .map(([repo, w]) => ({ repo: repo.trim(), weight: String(w ?? 1) }));
+    return entries.length > 0 ? entries : undefined;
+  }
+  return undefined;
+}
+
 /// SQLite 记录 → 会话时间线条目（taskId 带 history_ 前缀，不计入会话角标）。
 /// 完整映射重新生成所需参数：modelId=model 列，n/quality/duration/format/refs 来自 params_json
 /// （references 为收编后的路径数组；旧数据存的是数量，非数组时忽略）。
@@ -148,6 +164,7 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     format,
     n,
     refs: refList,
+    loras: parseLoras(params.loras),
     extra,
   }));
 }
@@ -315,7 +332,13 @@ export function useSessionStore(studio: Studio): SessionApi {
             ...s,
             updatedAt: Date.now(),
             results: s.results.map((it) =>
-              it.taskId === p.task_id ? { ...it, phase: p.phase, msg: p.message } : it,
+              it.taskId === p.task_id
+                ? p.phase === "failed"
+                  ? // failed 事件即终态：置 error 并带具体失败原因（invoke catch 之外的第二通道，
+                    // 避免卡片停留在 loading 分支只显示"生成失败"文案）。
+                    { ...it, status: "error" as const, phase: p.phase, msg: p.message, error: p.message || it.error }
+                  : { ...it, phase: p.phase, msg: p.message }
+                : it,
             ),
           };
         });

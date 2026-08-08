@@ -6,10 +6,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, batchCap, parseSizePx, type ModelDef, modelsForStudio, useCustomProviders } from "../models/registry";
+import { aspectToSize, batchCap, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import type { ResultItem, SessionApi } from "./sessionStore";
-import type { StudioJump } from "../types";
+import type { LoraEntry, StudioJump } from "../types";
 
 let _seq = 0;
 const uid = () => `r_${Date.now().toString(36)}_${_seq++}`;
@@ -26,6 +26,7 @@ export interface StudioApi {
   size: { w: number; h: number } | null; // 自定义像素尺寸（仅声明 size 区的模型，选中比例时同步）
   sizeLocked: boolean; // W/H 锁定比例联动
   paramValues: Record<string, string | number>; // 自定义厂商自由参数（popover 运行时值，提交时覆盖 params 默认）
+  loras: LoraEntry[]; // LoRA 列表（魔搭 loras 字段；1 个→字符串，多个→{repo: weight}）
   prompt: string;
   refs: string[];
   results: ResultItem[]; // 当前会话的结果
@@ -42,6 +43,7 @@ export interface StudioApi {
   setSize: (w: number, h: number) => void;
   setSizeLocked: (v: boolean) => void;
   setParamValue: (key: string, v: string | number) => void;
+  setLoras: (v: LoraEntry[]) => void;
   selectModel: (m: ModelDef) => void;
   addRef: (url: string) => void;
   removeRef: (i: number) => void;
@@ -54,8 +56,8 @@ export interface StudioApi {
 
 export function useStudio(studio: "image" | "video", session: SessionApi): StudioApi {
   const { t } = useTranslation();
-  const customProviders = useCustomProviders();
-  const allModels = useMemo(() => modelsForStudio(studio), [studio, customProviders]);
+  const userModels = useUserModels();
+  const allModels = useMemo(() => modelsForStudio(studio), [studio, userModels]);
   const [model, setModel] = useState<ModelDef>(() => allModels[studio === "image" ? 0 : 1]);
   const [ar, setAr] = useState(() => allModels[studio === "image" ? 0 : 1].aspectRatios[0]);
   const [quality, setQuality] = useState(() => allModels[studio === "image" ? 0 : 1].qualities[0]);
@@ -66,6 +68,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const [size, setSizeState] = useState<{ w: number; h: number } | null>(null);
   const [sizeLocked, setSizeLocked] = useState(false);
   const [paramValues, setParamValues] = useState<Record<string, string | number>>({});
+  const [loras, setLoras] = useState<LoraEntry[]>([]);
   const [prompt, setPrompt] = useState("");
   const [refs, setRefs] = useState<string[]>([]);
 
@@ -90,7 +93,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         setSizeState(null);
         return;
       }
-      if (m.providerId === "volcark" || m.providerId === "wanxiang") {
+      if (m.providerId === "volcark" || m.providerId === "wanxiang" || m.providerId === "modelscope") {
         const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q));
         setSizeState({ w, h });
         setSizeLocked(false);
@@ -127,7 +130,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     (v: string) => {
       setQuality(v);
       if (!supportsCustomSize(model)) return;
-      if (model.providerId === "volcark" || model.providerId === "wanxiang") {
+      if (model.providerId === "volcark" || model.providerId === "wanxiang" || model.providerId === "modelscope") {
         const { w, h } = parseSizePx(aspectToSize(model.providerId, model.id, ar, v));
         setSizeState({ w, h });
         return;
@@ -187,6 +190,8 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         }
       }
       setParamValues(nextParams);
+      // LoRA 列表按模型独立，切换时清空（popover 里重新添加）。
+      setLoras([]);
     },
     [applyAr, ar, quality, studio],
   );
@@ -225,6 +230,8 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
       if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group")) : 4));
       if (j.refs) setRefs(j.refs);
+      // LoRA：selectModel 已清空（模型切换重置），跳转快照在此恢复。
+      if (j.loras) setLoras(j.loras);
     },
     [allModels, model, selectModel, applyAr, setQualityCb, quality],
   );
@@ -244,9 +251,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       n: number;
       mode: "single" | "group";
       refs: string[];
+      loras: LoraEntry[];
       isVideo: boolean;
     }) => {
-      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, duration: d, n, mode, refs: refs0, isVideo } = params;
+      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, duration: d, n, mode, refs: refs0, loras: loras0, isVideo } = params;
       const capability = refs0.length > 0 ? (isVideo ? "i2v" : "i2i") : isVideo ? "t2v" : "t2i";
       // 声明 size 区的模型（volcark）用自定义像素尺寸直传 size；其余仍走 aspect_ratio。
       const useCustomSize = size !== null && supportsCustomSize(m);
@@ -255,15 +263,42 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       // 自定义厂商：透传用户按模型配置的自由参数（协议原生字段名，如
       // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））。
       // popover 里调整过的参数（paramValues）覆盖配置默认值；数值参数转 number，空值跳过。
-      let customExtra: { params: Record<string, string | number | null> } | undefined;
+      let customExtra: { params: Record<string, unknown> } | undefined;
       if (m.custom) {
-        const merged: Record<string, string | number | null> = { ...m.custom.params };
+        const merged: Record<string, unknown> = { ...m.custom.params };
         for (const s of m.sections ?? []) {
           if (s.type === "param" && paramValues[s.key] !== undefined) {
             const raw = paramValues[s.key];
             if (raw === "") continue;
             merged[s.key] = s.kind === "number" ? Number(raw) : raw;
           }
+        }
+        // LoRA：魔搭 loras 字段。实测网关规则：
+        // - 单 LoRA：dict 形式 {repo: weight} 权重透传（任意数值生效）；字符串形式不带权重，
+        //   调权重无效（网关按默认权重处理）→ 单 LoRA 也发 dict 保留用户权重。
+        // - 多 LoRA：权重和必须恰为 1.0（大于/小于整体被忽略），只认 2 位小数 →
+        //   提交时等比归一（w/sum）四舍五入到 2 位，最后一项补余数保证和恰为 1.00。
+        // 空 repo 行忽略。Rust merge_params 原样并入请求顶层。
+        const lorasClean = loras0.filter((l) => l.repo.trim() !== "");
+        if (lorasClean.length === 1) {
+          const w = Number(lorasClean[0].weight);
+          const wv = Number.isFinite(w) && w > 0 ? w : 1;
+          merged["loras"] = { [lorasClean[0].repo.trim()]: wv };
+        } else if (lorasClean.length > 1) {
+          const raw = lorasClean.map((l) => Math.max(0, Number(l.weight) || 0));
+          const sum = raw.reduce((a, b) => a + b, 0);
+          let normed: number[];
+          if (sum <= 0) {
+            // 全 0/空权重：均分 1/n（末项补余数）。
+            const base = Math.round((1 / raw.length) * 100) / 100;
+            normed = raw.map(() => base);
+            normed[raw.length - 1] = Math.round((1 - base * (raw.length - 1)) * 100) / 100;
+          } else {
+            normed = raw.map((w) => Math.round((w / sum) * 100) / 100);
+            normed[raw.length - 1] =
+              Math.round((1 - normed.slice(0, -1).reduce((a, b) => a + b, 0)) * 100) / 100;
+          }
+          merged["loras"] = Object.fromEntries(lorasClean.map((l, i) => [l.repo.trim(), normed[i]]));
         }
         customExtra = { params: merged };
       }
@@ -284,6 +319,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         format: m.formats ? fmt : undefined,
         duration: d,
         refs: refs0,
+        loras: loras0,
         phase: "submitting",
       }));
       // 对话式队列：新任务追加到时间线底部，而非头部。
@@ -324,6 +360,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           format: m.formats ? fmt : undefined,
           duration: d,
           refs: refs0,
+          loras: loras0,
         }));
         session.patchActive((prev) => {
           const map = new Map(done.map((d) => [d.id, d]));
@@ -336,7 +373,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         );
       }
     },
-    [session.patchActive, t, size, supportsCustomSize, paramValues, format],
+    [session.patchActive, t, size, supportsCustomSize, paramValues, format, loras],
   );
 
   const handleGenerate = useCallback(async () => {
@@ -364,9 +401,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       n,
       mode,
       refs,
+      loras,
       isVideo: studio === "video",
     });
-  }, [prompt, studio, batch, mode, refs, model, ar, quality, format, duration, results, session.activeId, session.renameSession, submitTask]);
+  }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
   const regenerate = useCallback(
@@ -386,6 +424,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         n,
         mode,
         refs: task.refs ?? [],
+        loras: task.loras ?? [],
         isVideo: studio === "video",
       });
     },
@@ -404,6 +443,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     size,
     sizeLocked,
     paramValues,
+    loras,
     prompt,
     refs,
     results,
@@ -420,6 +460,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     setSize,
     setSizeLocked,
     setParamValue,
+    setLoras,
     selectModel,
     addRef,
     removeRef,

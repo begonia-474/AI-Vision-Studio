@@ -1,9 +1,9 @@
 // App = Shell（两区：侧边栏 + 功能区）
 // 顶部无独立 header：logo/程序名/折叠按钮并入侧边栏顶栏（见 Sidebar）。
 // 图像/视频工作室常驻挂载（hidden 切换以保留会话状态）；
-// 图库/自定义厂商页为内容型视图，惰性挂载（激活才渲染）——常驻挂载会让图库
+// 图库为内容型视图，惰性挂载（激活才渲染）——常驻挂载会让图库
 // 在后台持续渲染 996 条真实历史 + 补缩略图任务，占用主线程拖慢所有点击。
-// BYOK / Settings 为独立 modal，由 sidebar 底部入口触发。
+// Settings 为独立 modal，由 sidebar 底部入口触发。
 // 图像 → 视频跳转：ImageStudio/GalleryView 触发 onImageToVideo，App 切换 tab 并向 VideoStudio 注入 jump。
 // 图库 → 图像跳转：GalleryView 触发 onImageToImage，App 切换 tab 并向 ImageStudio 注入 jump（作为参考图）。
 
@@ -13,14 +13,13 @@ import { Sidebar } from "./shell/Sidebar";
 import { ImageStudio } from "./studios/ImageStudio";
 import { VideoStudio } from "./studios/VideoStudio";
 import { GalleryView } from "./components/GalleryView";
-import { ProvidersPage } from "./components/ProvidersPage";
 import { ByokModal } from "./components/ByokModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { useSessionStore } from "./studios/sessionStore";
-import { IMAGE_MODELS, VIDEO_MODELS, refreshCustomProviders } from "./models/registry";
+import { IMAGE_MODELS, VIDEO_MODELS, refreshUserModels } from "./models/registry";
 import type { StudioJump } from "./types";
 
-export type View = "image" | "video" | "gallery" | "providers";
+export type View = "image" | "video" | "gallery";
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>("image");
@@ -46,9 +45,9 @@ export default function App() {
   // 侧边栏点击会话 / 新建会话时，跳回该会话所属工作室。
   const activateStudio = () => setActiveView(effectiveStudio);
 
-  // 启动加载自定义厂商（JSON 配置）→ 注册表 emitter 通知两个 studio 刷新列表
+  // 启动加载用户自添加模型 → 注册表 emitter 通知两个 studio 刷新列表
   useEffect(() => {
-    refreshCustomProviders().catch(() => {});
+    void refreshUserModels();
   }, []);
 
   // 跳转信号：App 持有最近一次 jump 常驻（无需清除——studio 端用 prevJump
@@ -100,11 +99,6 @@ export default function App() {
           {activeView === "gallery" && (
             <div className="h-full w-full">
               <GalleryView onImageToVideo={handleImageToVideo} onImageToImage={handleImageToImage} onReEdit={handleReEdit} />
-            </div>
-          )}
-          {activeView === "providers" && (
-            <div className="h-full w-full">
-              <ProvidersPage onBack={() => setActiveView(lastStudio)} />
             </div>
           )}
         </div>

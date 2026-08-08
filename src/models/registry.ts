@@ -1,16 +1,12 @@
 // 模型注册表（前端侧）—— 本文件为内置模型的单一数据源
-// 与后端 provider_id 对齐：volcark / kling / wanxiang / minimax 内置；
-// custom:<uuid> 为自定义厂商（JSON 配置，协议：modelscope / huggingface / openai-compatible）。
-// ModelSelectModal 与参数 popover 均读此表动态渲染。
+// 与后端 provider_id 对齐：volcark / kling / wanxiang / minimax / modelscope 内置。
+// 用户自添加模型：以任意内置模型为模板（继承其尺寸机制/参数分区/默认参数），
+// 仅替换 model id 与显示名，可覆盖模板的默认参数。ModelSelectModal 与参数 popover 均读此表动态渲染。
 
 import { useEffect, useReducer } from "react";
 import type { ParseKeys, TFunction } from "i18next";
-import { listCustomProviders } from "../api";
-import type {
-  CustomModelConfig,
-  CustomProviderConfig,
-  ProtocolType,
-} from "../types";
+import { deleteUserModel, listUserModels } from "../api";
+import type { CustomModelConfig, UserModelRow } from "../types";
 
 export type Studio = "image" | "video";
 export type Capability = "t2i" | "i2i" | "t2v" | "i2v" | "r2v";
@@ -39,6 +35,7 @@ export type ParamSectionDef =
       size?: boolean;
     }
   | { type: "size"; key: "size"; title: string } // 独立 W/H 自定义尺寸分区（自定义厂商提交 size="WxH"）
+  | { type: "loras"; key: "loras"; title: string } // LoRA 列表（repo-id + 权重行，提交时 1 个→字符串，多个→{repo: weight}）
   | {
       type: "param";
       key: string; // 接口字段名（自定义厂商自由参数，运行时调整）
@@ -110,6 +107,12 @@ export const PROVIDERS: Record<string, ProviderMeta> = {
     id: "minimax", name: "providers.minimax.name", abbr: "MX", color: "#ec4899", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.minimax.authHelp",
+    i18nName: true,
+  },
+  modelscope: {
+    id: "modelscope", name: "providers.modelscope.name", abbr: "MS", color: "#4f46e5", wired: true,
+    capabilities: ["t2i", "i2i", "t2v", "i2v"],
+    authHelp: "providers.modelscope.authHelp",
     i18nName: true,
   },
 };
@@ -192,6 +195,69 @@ export const IMAGE_MODELS: ModelDef[] = [
   { id: "image-01-live", name: "image-01-live", providerId: "minimax", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: ["1:1","3:4","4:3","16:9","9:16"], qualities: ["1K"], maxRef: 1, blurb: "星云超现实，梦幻氛围" },
 ];
 
+// ============ 魔搭（ModelScope）内置模型 ============
+// repo_id 即模型 ID（提交 model 字段，均已按魔搭 API 验证存在）。
+// 尺寸：比例网格（1:1/2:3/3:4...），选中比例按模型上限换算像素（长边=上限，短边按比例取 16 倍数），
+// 比例网格下带 W/H 自定义输入（提交 size="WxH"）。
+// sections：比例尺寸 + 张数（无 n 参数，N 张=并行 N 任务）+ LoRA + 自由参数。
+// 自由参数为魔搭 API 原生字段：steps/guidance/seed/negative_prompt（弹层可调，默认随请求下发）。
+const MS_RATIOS = ["1:1", "2:3", "3:4", "4:3", "3:2", "9:16", "16:9"];
+
+/// 魔搭模型分辨率上限（长边 px）：FLUX 家族 1024；Qwen-Image（2512 前）1664；其余 2048。
+const msMax = (modelId: string): number => {
+  if (modelId.startsWith("black-forest-labs")) return 1024;
+  if (modelId === "Qwen/Qwen-Image") return 1664;
+  return 2048;
+};
+
+const msSections = (steps: number, guidance: number): ParamSectionDef[] => [
+  { type: "ratio", key: "ar", title: "prompt.aspectRatio", size: true },
+  { type: "segmented", key: "batch", title: "prompt.imageCount" },
+  { type: "loras", key: "loras", title: "prompt.loras" },
+  { type: "param", key: "steps", title: "prompt.paramSteps", kind: "number", def: String(steps) },
+  { type: "param", key: "guidance", title: "prompt.paramGuidance", kind: "number", def: String(guidance) },
+  { type: "param", key: "seed", title: "prompt.paramSeed", kind: "number", def: "" },
+  { type: "param", key: "negative_prompt", title: "prompt.paramNegativePrompt", kind: "text", def: "" },
+];
+
+const msModel = (
+  repoId: string,
+  name: string,
+  steps: number,
+  guidance: number,
+  blurb: string,
+): ModelDef => ({
+  id: repoId,
+  name,
+  providerId: "modelscope",
+  studio: "image",
+  capabilities: ["t2i", "i2i"],
+  aspectRatios: [...MS_RATIOS],
+  qualities: ["默认"],
+  maxRef: 1,
+  maxImages: 4, // 魔搭无 n 参数：N 张 = 并行 N 任务（后端实现），张数区 1-4
+  blurb,
+  custom: {
+    repo_id: repoId,
+    name,
+    capabilities: ["t2i", "i2i"],
+    size_presets: [...MS_RATIOS],
+    params: { steps, guidance },
+  },
+  sections: msSections(steps, guidance),
+});
+
+const MODELSCOPE_MODELS: ModelDef[] = [
+  msModel("krea/Krea-2-Turbo", "Krea-2-Turbo", 8, 1, "Krea 2 Turbo，写实需配 LoRA"),
+  msModel("Qwen/Qwen-Image", "Qwen-Image", 30, 3.5, "通义文生图"),
+  msModel("Qwen/Qwen-Image-2512", "Qwen-Image-2512", 30, 3.5, "通义文生图 2512 版，人像更真实"),
+  msModel("Tongyi-MAI/Z-Image-Turbo", "Z-Image-Turbo", 9, 0, "Z-Image 快速版（8 步蒸馏）"),
+  msModel("black-forest-labs/FLUX.2-dev", "FLUX.2-dev", 30, 3.5, "FLUX.2 dev 32B"),
+  msModel("black-forest-labs/FLUX.2-klein-9B", "FLUX.2-klein-9B", 4, 1, "FLUX.2 klein 9B（4 步）"),
+  msModel("HiDream-ai/HiDream-O1-Image", "HiDream-O1-Image", 50, 5, "HiDream O1 8B"),
+  msModel("MAILAND/majicflus_v1", "majicflus_v1", 25, 3.5, "麦橘超然，写实人像"),
+];
+
 // ============ 视频模型 ============
 export const VIDEO_MODELS: ModelDef[] = [
   { id: "doubao-seedance-2-0-260128", name: "Seedance 2.0", providerId: "volcark", studio: "video", capabilities: ["t2v", "i2v"], aspectRatios: ["16:9","9:16","1:1","4:3","3:4","21:9"], qualities: ["480P","720P","1080P","4K"], durations: ["5","10"], maxRef: 2, blurb: "多模态参考/有声/4k，编辑延长" },
@@ -240,33 +306,6 @@ export function batchCap(m: ModelDef, mode: "single" | "group"): number {
   return Math.max(1, m.maxImages ?? Math.min(m.maxRef ?? 4, 4));
 }
 
-// —— 自定义厂商动态注册表 ——
-// 配置存后端 SQLite（JSON），此处为前端内存镜像 + 变更订阅，
-// 供两个 studio 的模型列表 / ModelSelectModal / BYOK 响应式更新。
-export const CUSTOM_PREFIX = "custom:";
-
-export const PROTOCOL_COLORS: Record<ProtocolType, string> = {
-  modelscope: "#4f46e5",
-  huggingface: "#f59e0b",
-  "openai-compatible": "#10b981",
-};
-
-let customProviders: CustomProviderConfig[] = [];
-let customModels: ModelDef[] = [];
-let customMeta: Record<string, ProviderMeta> = {};
-const listeners = new Set<() => void>();
-
-export function subscribeCustomProviders(fn: () => void): () => void {
-  listeners.add(fn);
-  return () => {
-    listeners.delete(fn);
-  };
-}
-
-function notify() {
-  listeners.forEach((fn) => fn());
-}
-
 /** 前端兜底 id 生成（crypto.randomUUID 在非安全上下文不可用，必须兜底）。 */
 export function uid(): string {
   try {
@@ -276,66 +315,95 @@ export function uid(): string {
   }
 }
 
-/** 从后端拉取自定义厂商并同步注册表（新增/删除后调用）。 */
-export async function refreshCustomProviders(): Promise<CustomProviderConfig[]> {
-  const rows = await listCustomProviders();
-  const configs = rows
-    .map((r) => {
-      try {
-        return JSON.parse(r.config_json) as CustomProviderConfig;
-      } catch {
-        return null;
-      }
-    })
-    .filter((c): c is CustomProviderConfig => c !== null);
-  setCustomProviders(configs);
-  return configs;
+// —— 用户自添加模型（动态注册表）——
+// 配置存后端 SQLite（user_models），此处为前端内存镜像 + 变更订阅，
+// 供两个 studio 的模型列表 / ModelSelectModal 响应式更新。
+
+let userModels: ModelDef[] = [];
+let userModelRows: UserModelRow[] = [];
+const listeners = new Set<() => void>();
+
+export function subscribeUserModels(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
 }
 
-export function setCustomProviders(configs: CustomProviderConfig[]) {
-  customProviders = configs;
-  customMeta = {};
-  customModels = [];
-  for (const p of configs) {
-    const pid = `${CUSTOM_PREFIX}${p.id}`;
-    const caps = Array.from(
-      new Set(p.models.flatMap((m) => m.capabilities)),
-    ) as Capability[];
-    customMeta[pid] = {
-      id: pid,
-      name: p.name,
-      abbr: p.name.slice(0, 2).toUpperCase(),
-      color: PROTOCOL_COLORS[p.protocol] ?? "#64748b",
-      wired: true,
-      capabilities: caps,
-      authHelp: p.base_url,
-      i18nName: false,
-    };
-    customModels.push(...p.models.map((m) => toModelDef(p, m)));
+function notifyUserModels() {
+  listeners.forEach((fn) => fn());
+}
+
+/** 模板模型查找：全部内置模型（图像/视频/魔搭）。 */
+const allBuiltinModels = (): ModelDef[] => [...IMAGE_MODELS, ...VIDEO_MODELS, ...MODELSCOPE_MODELS];
+
+/** 用户模型行 → ModelDef：克隆模板（尺寸机制/sections/参数结构），
+ *  替换 id/name/custom.repo_id，params_json 覆盖模板默认参数（含 sections param def）。 */
+function toUserModelDef(row: UserModelRow): ModelDef | null {
+  const tmpl = allBuiltinModels().find((m) => m.id === row.template_model_id);
+  if (!tmpl) return null;
+  let params: Record<string, string | number | null> = {};
+  if (row.params_json) {
+    try {
+      const p = JSON.parse(row.params_json) as Record<string, unknown>;
+      params = Object.fromEntries(
+        Object.entries(p).filter(([, v]) => v !== null && v !== undefined && v !== ""),
+      ) as Record<string, string | number | null>;
+    } catch {
+      params = {};
+    }
   }
-  notify();
+  const custom = tmpl.custom
+    ? {
+        ...tmpl.custom,
+        repo_id: row.model_id,
+        name: row.name,
+        params: { ...tmpl.custom.params, ...params },
+      }
+    : undefined;
+  const sections = tmpl.sections?.map((s) =>
+    s.type === "param" && params[s.key] !== undefined
+      ? { ...s, def: String(params[s.key]) }
+      : s,
+  );
+  return {
+    ...tmpl,
+    id: row.model_id,
+    name: row.name,
+    providerId: row.provider_id,
+    custom,
+    sections,
+    blurb: `${row.name}（自定义）`,
+  };
 }
 
-export function getCustomProviders(): CustomProviderConfig[] {
-  return customProviders;
+/** 启动/增删后调用：拉取用户模型并同步注册表。 */
+export async function refreshUserModels(): Promise<void> {
+  const rows = await listUserModels().catch(() => []);
+  userModelRows = rows;
+  userModels = rows.map(toUserModelDef).filter((m): m is ModelDef => m !== null);
+  notifyUserModels();
 }
 
-export function getCustomProviderMeta(): Record<string, ProviderMeta> {
-  return customMeta;
+/** 按模型 id 删除用户模型（定位 DB 行后删除并刷新）。 */
+export async function removeUserModel(modelId: string): Promise<void> {
+  const row = userModelRows.find((r) => r.model_id === modelId);
+  if (!row) return;
+  await deleteUserModel(row.id);
+  await refreshUserModels();
 }
 
-/** 订阅自定义厂商变更；列表变化时触发重渲染。 */
-export function useCustomProviders(): CustomProviderConfig[] {
+/** 订阅用户模型变更；列表变化时触发重渲染。 */
+export function useUserModels(): ModelDef[] {
   const [, force] = useReducer((x: number) => x + 1, 0);
-  useEffect(() => subscribeCustomProviders(force), []);
-  return customProviders;
+  useEffect(() => subscribeUserModels(force), []);
+  return userModels;
 }
 
-/** 内置 + 自定义厂商元信息统一查找。 */
+/** 厂商元信息查找（全部为内置厂商）。 */
 export function providerMeta(pid: string): ProviderMeta {
   return (
-    PROVIDERS[pid] ??
-    customMeta[pid] ?? {
+    PROVIDERS[pid] ?? {
       id: pid,
       name: pid,
       abbr: pid.slice(0, 2).toUpperCase(),
@@ -348,67 +416,16 @@ export function providerMeta(pid: string): ProviderMeta {
   );
 }
 
-/** 厂商显示名（内置为 i18n key，自定义为明文）。 */
+/** 厂商显示名（内置为 i18n key）。 */
 export function providerDisplayName(pid: string, t: TFunction): string {
   const p = providerMeta(pid);
   return p.i18nName ? t(p.name as ParseKeys) : p.name;
 }
 
-export function toModelDef(p: CustomProviderConfig, m: CustomModelConfig): ModelDef {
-  const caps = m.capabilities.filter((x): x is Capability =>
-    x === "t2i" || x === "i2i" || x === "t2v" || x === "i2v",
-  );
-  const isVid = caps.includes("t2v") || caps.includes("i2v");
-
-  // 参数模块 → 模型字段 + sections（popover 分区按用户勾选渲染）。
-  // 无模块时 sections 缺省，由 defaultSections 按 studio 推导。
-  let ar = m.size_presets.length > 0 ? m.size_presets : ["1024x1024"];
-  let qualities = ["默认"];
-  let durations = isVid ? ["5", "10"] : undefined;
-  let sections: ParamSectionDef[] | undefined;
-  if (m.param_modules && m.param_modules.length > 0) {
-    const s: ParamSectionDef[] = [];
-    for (const mod of m.param_modules) {
-      if (mod.type === "ratio") {
-        if (mod.options.length > 0) ar = mod.options;
-        s.push({ type: "ratio", key: "ar", title: "prompt.aspectRatio", options: ar });
-      } else if (mod.type === "quality") {
-        if (mod.options.length > 0) qualities = mod.options;
-        s.push({ type: "segmented", key: "quality", title: "prompt.resolution", options: qualities });
-      } else if (mod.type === "duration") {
-        if (mod.options.length > 0) durations = mod.options;
-        s.push({ type: "duration", key: "duration", title: "prompt.videoDuration" });
-      } else if (mod.type === "size") {
-        s.push({ type: "size", key: "size", title: "prompt.customSize" });
-      } else if (mod.type === "param") {
-        s.push({ type: "param", key: mod.key, title: mod.label, kind: mod.kind, def: mod.def });
-      } else {
-        s.push({ type: "segmented", key: "batch", title: "prompt.imageCount" });
-      }
-    }
-    sections = s;
-  }
-
-  return {
-    id: m.repo_id,
-    name: m.name || m.repo_id,
-    providerId: `${CUSTOM_PREFIX}${p.id}`,
-    studio: isVid ? "video" : "image",
-    capabilities: caps,
-    aspectRatios: ar,
-    qualities,
-    durations,
-    maxRef: caps.includes("i2v") || caps.includes("i2i") ? 1 : 0,
-    blurb: `${p.name} · ${m.repo_id}`,
-    custom: m,
-    sections,
-  };
-}
-
-export function modelsForStudio(studio: Studio, custom: ModelDef[] = customModels): ModelDef[] {
-  const builtin = studio === "image" ? IMAGE_MODELS : VIDEO_MODELS;
+export function modelsForStudio(studio: Studio): ModelDef[] {
+  const builtin = studio === "image" ? [...IMAGE_MODELS, ...MODELSCOPE_MODELS] : VIDEO_MODELS;
   const caps = studio === "image" ? ["t2i", "i2i"] : ["t2v", "i2v"];
-  const extra = custom.filter((m) => m.capabilities.some((c) => caps.includes(c)));
+  const extra = userModels.filter((m) => m.capabilities.some((c) => caps.includes(c)));
   return [...builtin, ...extra];
 }
 
@@ -477,6 +494,10 @@ export function aspectToSize(providerId: string, modelId: string, ar: string, qu
     else if (q === "1K") k = 1024;
     return pxByRatio(ar, k);
   }
+  if (providerId === "modelscope") {
+    // 比例 → 像素：长边 = 模型上限（msMax），短边按比例取 16 倍数。
+    return pxByRatio(ar, msMax(modelId));
+  }
   if (providerId !== "volcark") return ar;
   const q = quality ?? "2K";
   const table = modelId.includes("5-0-pro") ? PRO_PX : COMMON_PX;
@@ -487,7 +508,11 @@ export function aspectToSize(providerId: string, modelId: string, ar: string, qu
  *  自定义厂商通用 [512², 4096²]；volcark 官方区间：pro [921600, 4624220]，5.0 lite/4.5 [3686400, 16777216]，4.0 [921600, 16777216]；
  *  wanxiang：qwen/z-image [512², 2048²]，其余 [768², 2048²]（wan2.7-image-pro 文生图 4K 放宽到 [768², 4096²]）。 */
 export function pixelBounds(model: ModelDef): { min: number; max: number } {
-  if (model.custom) return { min: 512 * 512, max: 4096 * 4096 };
+  if (model.custom) {
+    // 自定义/魔搭内置模型：最小 512²，最大按模型上限（魔搭 msMax，其余 4096²）。
+    const max = model.providerId === "modelscope" ? msMax(model.id) : 4096;
+    return { min: 512 * 512, max: max * max };
+  }
   if (model.providerId === "wanxiang") {
     const min =
       model.id.startsWith("qwen") || model.id.startsWith("z-") ? 512 * 512 : 768 * 768;

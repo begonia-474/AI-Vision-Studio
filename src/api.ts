@@ -2,12 +2,12 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  CustomProviderRow,
   GenRequest,
   GenerationResult,
   HistoryTask,
   ProgressPayload,
   ProviderInfo,
+  UserModelRow,
 } from "./types";
 
 export const listProviders = () => invoke<ProviderInfo[]>("list_providers");
@@ -46,14 +46,25 @@ export const deleteHistories = (ids: number[]) =>
 // 补全历史任务缺失的缩略图（旧数据仅第一张有），返回补生成的缩略图数量。
 export const ensureThumbnails = () => invoke<number>("ensure_thumbnails");
 
-// ============ 自定义厂商（JSON 配置存储） ============
-export const listCustomProviders = () => invoke<CustomProviderRow[]>("list_custom_providers");
+// ============ 用户自添加模型（内置厂商） ============
+export const listUserModels = () => invoke<UserModelRow[]>("list_user_models");
 
-export const saveCustomProvider = (id: string, configJson: string) =>
-  invoke<void>("save_custom_provider", { id, configJson });
+export const saveUserModel = (req: {
+  providerId: string;
+  modelId: string;
+  name: string;
+  templateModelId: string;
+  paramsJson?: string;
+}) =>
+  invoke<void>("save_user_model", {
+    providerId: req.providerId,
+    modelId: req.modelId,
+    name: req.name,
+    templateModelId: req.templateModelId,
+    paramsJson: req.paramsJson,
+  });
 
-export const deleteCustomProvider = (id: string) =>
-  invoke<void>("delete_custom_provider", { id });
+export const deleteUserModel = (id: number) => invoke<void>("delete_user_model", { id });
 
 // ============ 进度事件订阅 ============
 // 后端 commands::generate 通过 app.emit("gen-progress", ProgressPayload) 推送。

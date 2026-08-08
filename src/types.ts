@@ -31,11 +31,15 @@ export interface GenRequest {
   extra?: Record<string, unknown>;
 }
 
-export type ProtocolType = "modelscope" | "huggingface" | "openai-compatible";
+export interface GenerationResult {
+  history_id: number;
+  provider_id: string;
+  model: string;
+  local_paths: string[];
+  remote_urls: string[];
+}
 
-/** 自定义模型参数模块（生成弹层 popover 分区），由用户在配置界面勾选组装。
- *  options 为空时按协议取默认（ratio→size_presets，quality→["默认"]，duration→["5","10"]）；
- *  配置界面勾选时会预填常用值（常用比例/画质档位），可再修改。
+/** 模型参数模块（生成弹层 popover 分区）。内置魔搭模型的参数区声明。
  *  param 为自由参数（接口原生字段，如 steps/guidance/seed/negative_prompt），
  *  运行时在 popover 里调整，提交时随请求下发（覆盖 params 同 key 的默认值）。 */
 export type CustomParamModule =
@@ -44,6 +48,7 @@ export type CustomParamModule =
   | { type: "duration"; options: string[] } // 时长刻度 slider（如 5/10）
   | { type: "batch" } // 图片张数分段（1-4）
   | { type: "size" } // W/H 自定义尺寸输入 + 锁定（提交 size="WxH"）
+  | { type: "loras" } // LoRA 列表（魔搭 loras 字段：1 个 → 字符串 repo-id；多个 → {repo: weight}）
   | {
       type: "param";
       key: string; // 接口字段名（如 steps / guidance_scale）
@@ -52,6 +57,13 @@ export type CustomParamModule =
       def?: string; // 默认值（写入 params 下发）
     };
 
+/** LoRA 条目（生成弹层内编辑；repo=模型仓库 ID，weight=权重，原样下发不做限制）。 */
+export interface LoraEntry {
+  repo: string;
+  weight: string;
+}
+
+/** 内置魔搭模型的参数配置载体（ModelDef.custom）：默认参数 + 弹层分区声明。 */
 export interface CustomModelConfig {
   repo_id: string;
   name: string;
@@ -63,26 +75,16 @@ export interface CustomModelConfig {
   param_modules?: CustomParamModule[];
 }
 
-export interface CustomProviderConfig {
-  id: string;
-  name: string;
-  protocol: ProtocolType;
-  base_url: string;
-  models: CustomModelConfig[];
-}
-
-export interface CustomProviderRow {
-  id: string;
-  config_json: string;
-  created_at: string;
-}
-
-export interface GenerationResult {
-  history_id: number;
+/** 用户为内置厂商自添加的模型行（SQLite user_models）。 */
+export interface UserModelRow {
+  id: number;
   provider_id: string;
-  model: string;
-  local_paths: string[];
-  remote_urls: string[];
+  model_id: string;
+  name: string;
+  /** 模板模型 id：继承其尺寸机制/参数分区/默认参数（如内置模型 id） */
+  template_model_id: string;
+  params_json: string | null;
+  created_at: string;
 }
 
 export interface HistoryTask {
@@ -118,4 +120,6 @@ export interface StudioJump {
   duration?: string;
   n?: number;
   refs?: string[];
+  /** LoRA 列表（自定义魔搭厂商；重新编辑/跳转时回填弹层） */
+  loras?: LoraEntry[];
 }

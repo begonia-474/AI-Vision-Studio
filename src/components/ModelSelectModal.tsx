@@ -9,11 +9,13 @@ import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { IconCheck, IconSearch } from "../lib/icons";
 import { cn } from "../lib/utils";
+import { AddModelDialog } from "./AddModelDialog";
+import { removeUserModel } from "../models/registry";
 import {
   modelsForStudio,
   providerDisplayName,
   providerMeta,
-  useCustomProviders,
+  useUserModels,
   type ModelDef,
   type Studio,
 } from "../models/registry";
@@ -52,9 +54,10 @@ function modelTags(m: ModelDef, t: TFunction): string[] {
 
 export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect }: ModelSelectModalProps) {
   const { t } = useTranslation();
-  const customProviders = useCustomProviders();
-  const all = useMemo(() => modelsForStudio(studio), [studio, customProviders]);
+  const userModels = useUserModels();
+  const all = useMemo(() => modelsForStudio(studio), [studio, userModels]);
   const [search, setSearch] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
 
   // 关闭时清空搜索，下次打开回到全量列表。
   useEffect(() => {
@@ -99,6 +102,16 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
               {t("model.select")}
             </span>
             <div className="flex min-w-0 flex-1 justify-end">
+              <button
+                type="button"
+                onClick={() => setAddOpen(true)}
+                className="mr-2 flex shrink-0 cursor-pointer items-center gap-1 rounded-lg border border-border-2 bg-chip px-2.5 py-1.5 text-xs font-medium text-text-2 transition-colors hover:bg-hover hover:text-foreground"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                {t("model.addModel")}
+              </button>
               <div className="flex w-full max-w-[240px] items-center gap-2 rounded-lg border border-border-2 bg-soft px-3 py-1.5 transition-colors duration-150 focus-within:border-[rgba(59,130,246,.50)]">
                 <IconSearch size={13} style={{ color: "var(--muted)" }} />
                 <input
@@ -153,13 +166,31 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
                         {models.map((m) => {
                           const sel = current.id === m.id;
+                          const isUser = userModels.some((u) => u.id === m.id);
                           return (
                             <button
                               key={m.id}
                               type="button"
                               onClick={() => pick(m)}
-                              className={cn(CARD, sel && CARD_SEL)}
+                              className={cn("group relative", CARD, sel && CARD_SEL)}
                             >
+                              {isUser && (
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  title={t("model.addModelDelete")}
+                                  aria-label={t("model.addModelDelete")}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (window.confirm(t("model.addModelDeleteConfirm", { name: m.name }))) {
+                                      void removeUserModel(m.id).catch(() => {});
+                                    }
+                                  }}
+                                  className="absolute top-1 right-1 z-10 grid size-6 cursor-pointer place-items-center rounded-md bg-transparent text-[11px] leading-none text-faint opacity-0 transition-all hover:bg-[rgba(239,68,68,.12)] hover:text-destructive group-hover:opacity-100"
+                                >
+                                  ×
+                                </span>
+                              )}
                               <div className="grid size-[50px] shrink-0 place-items-center overflow-hidden rounded-[16px] bg-[#F9FAFC] p-2 dark:bg-[#1B1B20]">
                                 <span
                                   className={cn(
@@ -205,6 +236,7 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
             )}
           </div>
         </div>
+        <AddModelDialog open={addOpen} onClose={() => setAddOpen(false)} studio={studio} />
       </DialogContent>
     </Dialog>
   );

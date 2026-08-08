@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use rusqlite::{params, Connection};
 
-use crate::models::{CustomProviderRow, HistoryTaskDto};
+use crate::models::{HistoryTaskDto, UserModelRow};
 
 const APP_DIR_NAME: &str = "AIVisionStudio";
 const KEYRING_SERVICE: &str = "AIVisionStudio.ApiKey";
@@ -66,8 +66,7 @@ pub async fn save_remote(
     let ext = guess_extension(url);
     let ts = now.format("%Y%m%d_%H%M%S").to_string();
     let short_id = uuid::Uuid::new_v4().simple().to_string();
-    // 厂商 id 可能含 ":"（custom:<uuid>）等非法文件名字符（Windows 会当作 NTFS 数据流分隔符），
-    // 统一替换为安全字符。
+    // 厂商 id 含非法文件名字符时统一替换为安全字符（Windows 的 ":" 会当作 NTFS 数据流分隔符）。
     let safe_provider: String = provider_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
@@ -407,11 +406,16 @@ pub fn ensure_schema() -> Result<(), String> {
             raw_response TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
-        CREATE TABLE IF NOT EXISTS custom_providers (
-            id TEXT PRIMARY KEY,
-            config_json TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS user_models (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id TEXT NOT NULL,
+            model_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            template_model_id TEXT NOT NULL,
+            params_json TEXT,
             created_at TEXT NOT NULL
-        );",
+        );
+",
     )
     .map_err(|e| e.to_string())?;
     // 渐进式迁移：旧库补列（starred 收藏 / thumbnail_path 缩略图 /
@@ -569,66 +573,6 @@ pub fn set_starred(id: i64, starred: bool) -> Result<(), String> {
     Ok(())
 }
 
-// —— 自定义厂商（JSON 配置存储） ——
-// 前端是 schema 所有者：config_json 原样存取，后端不解析字段。
-
-pub fn list_custom_providers() -> Result<Vec<CustomProviderRow>, String> {
-    let conn = open_conn()?;
-    let mut stmt = conn
-        .prepare("SELECT id, config_json, created_at FROM custom_providers ORDER BY created_at ASC")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(CustomProviderRow {
-                id: row.get(0)?,
-                config_json: row.get(1)?,
-                created_at: row.get(2)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(|e| e.to_string())?);
-    }
-    Ok(out)
-}
-
-/// 取单个厂商配置（协议适配器构建时用）。未找到返回 None。
-pub fn get_custom_provider_config(id: &str) -> Result<Option<String>, String> {
-    let conn = open_conn()?;
-    let mut stmt = conn
-        .prepare("SELECT config_json FROM custom_providers WHERE id=?1")
-        .map_err(|e| e.to_string())?;
-    let mut rows = stmt
-        .query_map(params![id], |row| row.get::<_, String>(0))
-        .map_err(|e| e.to_string())?;
-    match rows.next() {
-        Some(Ok(v)) => Ok(Some(v)),
-        Some(Err(e)) => Err(e.to_string()),
-        None => Ok(None),
-    }
-}
-
-pub fn save_custom_provider(id: &str, config_json: &str) -> Result<(), String> {
-    let conn = open_conn()?;
-    let created = chrono::Local::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO custom_providers (id, config_json, created_at)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json",
-        params![id, config_json, created],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub fn delete_custom_provider(id: &str) -> Result<(), String> {
-    let conn = open_conn()?;
-    conn.execute("DELETE FROM custom_providers WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 // —— SecureKeyStore ——
 
 /// 用系统凭据管理器（Windows Credential Manager，底层 DPAPI）安全存储各厂商 API Key。
@@ -691,6 +635,63 @@ pub fn get_workspace(provider_id: &str) -> Result<Option<String>, String> {
             }
         }
     }
+}
+
+// —— 用户自添加模型 ——
+// 用户为内置厂商添加的模型：model_id（提交 model 字段）+ 模板模型 id（继承其参数分区/尺寸机制）
+// + 可选的默认参数 JSON。前端是 schema 所有者，后端不解析 params_json。
+
+pub fn list_user_models() -> Result<Vec<UserModelRow>, String> {
+    let conn = open_conn()?;
+    let mut stmt = conn
+        .prepare("SELECT id, provider_id, model_id, name, template_model_id, params_json, created_at FROM user_models ORDER BY created_at ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(UserModelRow {
+                id: row.get(0)?,
+                provider_id: row.get(1)?,
+                model_id: row.get(2)?,
+                name: row.get(3)?,
+                template_model_id: row.get(4)?,
+                params_json: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+pub fn save_user_model(
+    provider_id: &str,
+    model_id: &str,
+    name: &str,
+    template_model_id: &str,
+    params_json: Option<&str>,
+) -> Result<(), String> {
+    let conn = open_conn()?;
+    let created = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO user_models (provider_id, model_id, name, template_model_id, params_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(model_id) DO UPDATE SET
+           provider_id=excluded.provider_id, name=excluded.name,
+           template_model_id=excluded.template_model_id, params_json=excluded.params_json",
+        params![provider_id, model_id, name, template_model_id, params_json, created],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn delete_user_model(id: i64) -> Result<(), String> {
+    let conn = open_conn()?;
+    conn.execute("DELETE FROM user_models WHERE id=?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
