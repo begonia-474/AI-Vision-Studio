@@ -6,10 +6,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { ParseKeys } from "i18next";
 import { toAssetUrl } from "../api";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { IconChevron, IconDownload, IconMore, IconStar, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
+import type { LoraEntry } from "../types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { XIcon } from "lucide-react";
 
@@ -25,11 +27,18 @@ export interface DetailSource {
   /** 当前展示的是 paths 中的第几张（批量任务点开第 N 张详情应显示第 N 张），缺省 0 */
   pathIndex?: number;
   thumbnailPath?: string;
+  /** 像素尺寸 "WxH"（params_json.size；非像素厂商为比例原值，与 ratio 重复时不再展示） */
   size?: string;
   ratio?: string;
   quality?: string;
   duration?: string;
   n?: number;
+  /** 图像输出格式（params_json.output_format） */
+  format?: string;
+  /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等，params_json 剩余键） */
+  params?: Record<string, unknown>;
+  /** LoRA 列表（魔搭模型） */
+  loras?: LoraEntry[];
   starred?: boolean;
   onToggleStar?: () => void;
   onDelete?: () => void;
@@ -50,6 +59,14 @@ const dayKey = (iso: string): string => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+// 魔搭自由参数键 → i18n 标题（与 registry msSections 声明一致）；未收录键直接显示键名。
+const PARAM_TITLES: Record<string, string> = {
+  steps: "prompt.paramSteps",
+  guidance: "prompt.paramGuidance",
+  seed: "prompt.paramSeed",
+  negative_prompt: "prompt.paramNegativePrompt",
+};
+
 function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
@@ -68,6 +85,8 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   const [paramsOpen, setParamsOpen] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  // 折叠态遮罩：选中文本时透明化——白雾渐变会盖住选区高亮，产生"高亮被切断"的假分隔线
+  const [hasSelection, setHasSelection] = useState(false);
   const copyTimer = useRef<number | undefined>(undefined);
 
   const source = sources[index];
@@ -86,10 +105,52 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
 
   useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
+  // 有文本选区时标记（折叠遮罩据此透明化，避免盖住选区高亮）
+  useEffect(() => {
+    const onSelection = () =>
+      setHasSelection((window.getSelection()?.toString().length ?? 0) > 0);
+    document.addEventListener("selectionchange", onSelection);
+    return () => document.removeEventListener("selectionchange", onSelection);
+  }, []);
+
   if (!source) return null;
 
   const copyPrompt = async (prompt: string) => {
     await copyText(prompt);
+    setCopied(true);
+    window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  // 哩布式参数表：结构化字段（画质/时长/张数/格式）+ 魔搭自由参数，label/value 行式排布；
+  // 负向提示词独立展示（与提示词同级），不混入参数表。
+  const negativePrompt =
+    typeof source.params?.negative_prompt === "string" ? source.params.negative_prompt : undefined;
+  const paramRows: { label: string; value: string }[] = [];
+  if (source.quality) {
+    paramRows.push({
+      label: t(source.image ? "prompt.resolution" : "prompt.videoQuality"),
+      value: source.quality,
+    });
+  }
+  if (!source.image && source.duration) {
+    paramRows.push({ label: t("prompt.videoDuration"), value: `${source.duration}s` });
+  }
+  if (source.image && source.n != null && source.n > 1) {
+    paramRows.push({ label: t("prompt.imageCount"), value: String(source.n) });
+  }
+  if (source.image && source.format) {
+    paramRows.push({ label: t("prompt.imageFormat"), value: source.format });
+  }
+  for (const [k, v] of Object.entries(source.params ?? {})) {
+    if (k === "negative_prompt") continue;
+    paramRows.push({ label: t((PARAM_TITLES[k] ?? k) as ParseKeys), value: String(v) });
+  }
+
+  // 复制全部参数（提示词 + 参数表）
+  const copyParams = async () => {
+    const lines = [source.prompt, ...paramRows.map((r) => `${r.label}：${r.value}`)];
+    await copyText(lines.join("\n"));
     setCopied(true);
     window.clearTimeout(copyTimer.current);
     copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
@@ -216,37 +277,108 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
               <span>{t("gallery.aiGenerated")}</span>
             </div>
 
-            {/* 生成参数（可折叠） */}
+            {/* 生成参数（可折叠：折叠时底部渐隐 + 遮罩点击展开） */}
             <div className="mt-5 pb-4">
               <div className="flex items-center justify-between">
                 <span className="text-[14px] font-medium text-[#111827]">{t("gallery.params")}</span>
-                <button
-                  className="grid size-7 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-[#9ca3af] hover:bg-[#f3f4f6]"
-                  aria-label={paramsOpen ? t("gallery.collapse") : t("gallery.expand")}
-                  onClick={() => setParamsOpen((v) => !v)}
-                >
-                  <IconChevron className={cn("transition-transform duration-300", paramsOpen && "rotate-180")} size={13} />
-                </button>
-              </div>
-              {paramsOpen && (
-                <div className="mt-2 max-h-[120px] overflow-y-auto opacity-90">
-                  <div className="text-[12px] text-[#6b7280]">{t("gallery.prompt")}</div>
-                  <p className="relative mt-2 text-[14px] leading-relaxed text-[#111827] indent-[18px] line-clamp-3">
+                <div className="flex items-center gap-1">
+                  {paramRows.length > 0 && (
                     <button
-                      className="absolute top-[5px] left-0 cursor-pointer border-0 bg-transparent p-0 text-[#999] hover:text-[#2563eb]"
-                      title={t("gallery.copyPrompt")}
-                      aria-label={t("gallery.copyPrompt")}
-                      onClick={() => copyPrompt(source.prompt)}
+                      className="flex h-7 cursor-pointer items-center gap-1 rounded-md border-0 bg-transparent px-1.5 text-xs text-[#787878] hover:bg-[#f3f4f6] hover:text-[#111827]"
+                      title={t("gallery.copyParams")}
+                      aria-label={t("gallery.copyParams")}
+                      onClick={copyParams}
                     >
                       {copied ? <span className="text-[11px] text-[#2563eb]">{t("gallery.copied")}</span> : copyIcon}
                     </button>
-                    {source.prompt}
-                  </p>
+                  )}
+                  <button
+                    className="grid size-7 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-[#9ca3af] hover:bg-[#f3f4f6]"
+                    aria-label={paramsOpen ? t("gallery.collapse") : t("gallery.expand")}
+                    onClick={() => setParamsOpen((v) => !v)}
+                  >
+                    <IconChevron className={cn("transition-transform duration-300", paramsOpen && "rotate-180")} size={13} />
+                  </button>
                 </div>
-              )}
+              </div>
+              <div className={cn("relative", !paramsOpen && "max-h-[150px] overflow-hidden")}>
+                <div className="mt-2 flex flex-col gap-4">
+                  <div>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[12px] font-medium text-[#929292]">{t("gallery.prompt")}</span>
+                      <button
+                        className="grid size-5 cursor-pointer place-items-center rounded border-0 bg-transparent text-[#999] hover:text-[#2563eb]"
+                        title={t("gallery.copyPrompt")}
+                        aria-label={t("gallery.copyPrompt")}
+                        onClick={() => copyPrompt(source.prompt)}
+                      >
+                        {copied ? <span className="text-[11px] text-[#2563eb]">{t("gallery.copied")}</span> : copyIcon}
+                      </button>
+                    </div>
+                    <p className="mt-2 text-[13px] leading-[21px] break-words text-[#424242]">{source.prompt}</p>
+                  </div>
+                  {negativePrompt && (
+                    <div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[12px] font-medium text-[#929292]">{t("prompt.paramNegativePrompt")}</span>
+                        <button
+                          className="grid size-5 cursor-pointer place-items-center rounded border-0 bg-transparent text-[#999] hover:text-[#2563eb]"
+                          title={t("gallery.copyPrompt")}
+                          aria-label={t("gallery.copyPrompt")}
+                          onClick={() => copyPrompt(negativePrompt)}
+                        >
+                          {copied ? <span className="text-[11px] text-[#2563eb]">{t("gallery.copied")}</span> : copyIcon}
+                        </button>
+                      </div>
+                      <p className="mt-2 text-[13px] leading-[21px] break-words text-[#424242]">{negativePrompt}</p>
+                    </div>
+                  )}
+                  {paramRows.length > 0 && (
+                    <div className="rounded-[8px] bg-[#f8f8f8] px-3 py-4">
+                      {paramRows.map((r) => (
+                        <div key={r.label} className="mb-3 flex items-start justify-between gap-4 last:mb-0">
+                          <span className="shrink-0 text-xs text-[#424242]">{r.label}</span>
+                          <span className="min-w-0 text-right text-xs break-words whitespace-pre-wrap text-[#303030]">
+                            {r.value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {!paramsOpen && (
+                  <button
+                    className={cn(
+                      "absolute inset-x-0 bottom-0 h-16 w-full cursor-pointer border-0",
+                      !hasSelection && "bg-gradient-to-t from-white to-transparent",
+                    )}
+                    aria-label={t("gallery.expand")}
+                    onClick={() => setParamsOpen(true)}
+                  />
+                )}
+              </div>
             </div>
 
-            {/* 基础信息 */}
+            {/* 模型信息（哩布：LoRA 卡片；本项目无模型跳转，不 truncate——单列完整显示） */}
+            {source.loras && source.loras.length > 0 && (
+              <div className="pb-4">
+                <div className="pb-3 text-[12px] text-[#929292]">{t("gallery.modelInfo")}</div>
+                <div className="flex flex-col gap-2">
+                  {source.loras
+                    .filter((l) => l.repo.trim())
+                    .map((l) => (
+                      <div key={l.repo} className="flex items-center gap-2 rounded-[6px] bg-[#f8f8f8] p-1.5 pr-2">
+                        <span className="grid size-6 shrink-0 place-items-center rounded-full bg-[#000]/50 text-[10px] font-medium text-white">
+                          {l.weight}
+                        </span>
+                        <span className="min-w-0 text-[12px] break-words text-[#787878]">{l.repo}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* 基础信息（哩布：checkpoint 主模型卡片 + 尺寸） */}
             <div className="pb-4">
               <div className="pb-3 text-[12px] text-[#929292]">{t("gallery.basicInfo")}</div>
               <div className="flex flex-wrap gap-2">
@@ -260,7 +392,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                   </span>
                   <span className="text-[12px] text-[#787878]">{source.model}</span>
                 </div>
-                {source.size && <div className="flex h-[28px] items-center rounded-[6px] bg-[#f8f8f8] px-2 text-[12px] text-[#787878]">{source.size}</div>}
+                {source.size && source.size !== source.ratio && <div className="flex h-[28px] items-center rounded-[6px] bg-[#f8f8f8] px-2 text-[12px] text-[#787878]">{source.size}</div>}
                 {source.ratio && <div className="flex h-[28px] items-center rounded-[6px] bg-[#f8f8f8] px-2 text-[12px] text-[#787878]">{source.ratio}</div>}
               </div>
             </div>

@@ -58,6 +58,8 @@ pub struct GenerationResultDto {
     pub model: String,
     pub local_paths: Vec<String>,
     pub remote_urls: Vec<String>,
+    /// 写入 params_json 的完整参数快照（与库中记录同一份 JSON）
+    pub params_json: String,
 }
 
 /// 用户为内置厂商自添加的模型行。

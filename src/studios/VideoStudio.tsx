@@ -12,7 +12,7 @@ import { PromptComposer } from "../components/PromptComposer";
 import { TaskTimeline } from "../components/TaskTimeline";
 import { DetailPanel, type DetailSource } from "../components/DetailPanel";
 import { useStudio } from "./useStudio";
-import type { ResultItem, SessionApi } from "./sessionStore";
+import { jumpFromParams, type ResultItem, type SessionApi } from "./sessionStore";
 import type { StudioJump } from "../types";
 
 interface VideoStudioProps {
@@ -80,16 +80,47 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
             createdAt: new Date(r.at).toISOString(),
             paths: r.path ? [r.path] : [],
             ratio: r.ar,
+            size: r.size,
             quality: r.quality,
             duration: r.duration,
+            format: r.format,
             n,
+            params: r.params,
+            loras: r.loras,
             onDelete: () => {
               setDetailIdx(null);
               api.removeTask(r.taskId);
             },
             onReEdit: () => {
               setDetailIdx(null);
-              onReEdit?.({ studio: "video", prompt: r.prompt, modelId: r.modelId, ar: r.ar, quality: r.quality, duration: r.duration, n, refs: r.refs, loras: r.loras });
+              const n = api.results.filter((x) => x.taskId === r.taskId && x.status === "done").length;
+              let j: (StudioJump & { studio: "image" | "video" }) | undefined;
+              if (r.paramsJson) {
+                try {
+                  j = jumpFromParams(
+                    { prompt: r.prompt, model: r.modelId ?? r.model },
+                    JSON.parse(r.paramsJson) as Record<string, unknown>,
+                    false,
+                    r.refs,
+                  );
+                } catch {
+                  // paramsJson 损坏回退散装快照
+                }
+              }
+              onReEdit?.(
+                j ??
+                  {
+                    studio: "video",
+                    prompt: r.prompt,
+                    modelId: r.modelId,
+                    ar: r.ar,
+                    quality: r.quality,
+                    duration: r.duration,
+                    n,
+                    refs: r.refs,
+                    loras: r.loras,
+                  },
+              );
             },
           };
         }),
@@ -107,7 +138,33 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
   const reEdit = useCallback(
     (item: ResultItem) => {
       const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
-      onReEdit?.({ studio: "video", prompt: item.prompt, modelId: item.modelId, ar: item.ar, quality: item.quality, duration: item.duration, n, refs: item.refs, loras: item.loras });
+      let j: (StudioJump & { studio: "image" | "video" }) | undefined;
+      if (item.paramsJson) {
+        try {
+          j = jumpFromParams(
+            { prompt: item.prompt, model: item.modelId ?? item.model },
+            JSON.parse(item.paramsJson) as Record<string, unknown>,
+            false,
+            item.refs,
+          );
+        } catch {
+          // paramsJson 损坏回退散装快照
+        }
+      }
+      onReEdit?.(
+        j ??
+          {
+            studio: "video",
+            prompt: item.prompt,
+            modelId: item.modelId,
+            ar: item.ar,
+            quality: item.quality,
+            duration: item.duration,
+            n,
+            refs: item.refs,
+            loras: item.loras,
+          },
+      );
     },
     [api.results, onReEdit],
   );

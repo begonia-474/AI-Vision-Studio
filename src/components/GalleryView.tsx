@@ -11,7 +11,7 @@ import { deleteHistories, ensureThumbnails, listHistory, onProgress, setStar, to
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
-import { parseLoras } from "../studios/sessionStore";
+import { freeParams, jumpFromParams, parseLoras } from "../studios/sessionStore";
 import type { SessionApi } from "../studios/sessionStore";
 import { IconChevron, IconDownload, IconLibrary, IconPlay, IconSearch, IconStar, IconTrash, IconUpload } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -483,7 +483,10 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
       ratio: size ? (ratioOf(it) ?? undefined) : undefined,
       quality: typeof params?.quality === "string" ? params.quality : undefined,
       duration: typeof params?.duration === "string" ? params.duration : undefined,
+      format: typeof params?.output_format === "string" ? params.output_format : undefined,
       n: typeof params?.n === "number" ? params.n : undefined,
+      params: freeParams(params ?? {}),
+      loras: parseLoras(params?.loras),
       starred: it.starred,
       onToggleStar: () => toggleStar(it),
       onDelete: () => removeOne(it),
@@ -502,22 +505,13 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     };
   });
 
-  // 「重新编辑」：从历史任务还原参数快照（model 字段即 ModelDef.id）。
+  // 「重新编辑」：从数据库 params_json 还原参数快照（model 字段即 ModelDef.id）。
+  // 与时间线入口共用 jumpFromParams，保证图库/时间线回填同源。
   const buildReEdit = (it: HistoryTask): StudioJump & { studio: "image" | "video" } => {
-    const params = paramsOf(it);
+    const params = paramsOf(it) ?? {};
     const first = localPaths(it)[0];
     const refs = it.capability === "i2i" && first ? [toAssetUrl(first)] : undefined;
-    return {
-      studio: isImage(it) ? "image" : "video",
-      prompt: it.prompt,
-      modelId: it.model,
-      ar: typeof params?.aspect_ratio === "string" ? params.aspect_ratio : undefined,
-      quality: typeof params?.quality === "string" ? params.quality : undefined,
-      duration: typeof params?.duration === "string" ? params.duration : undefined,
-      n: typeof params?.n === "number" ? params.n : undefined,
-      refs,
-      loras: parseLoras(params?.loras),
-    };
+    return jumpFromParams({ prompt: it.prompt, model: it.model }, params, isImage(it), refs);
   };
 
   // ===== 框选（仅管理模式）=====

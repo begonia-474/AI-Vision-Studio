@@ -40,7 +40,6 @@ interface TaskGroup {
   prompt: string;
   model: string;
   ar: string;
-  extra: string;
   phase?: string;
   items: ResultItem[];
 }
@@ -130,7 +129,6 @@ export const TaskTimeline = memo(function TaskTimeline({
           prompt: it.prompt,
           model: it.model,
           ar: it.ar,
-          extra: it.extra,
           phase: it.phase,
           items: [],
         };
@@ -168,7 +166,10 @@ export const TaskTimeline = memo(function TaskTimeline({
       const near = el.scrollHeight - pad - el.scrollTop - el.clientHeight;
       // 滞回：已在底部时需上滚更远才判定离开，离开后回到底部附近即恢复跟随，
       // 避免停在阈值边缘时值翻转、折叠动画反复触发（卡顿源）。
-      const next = near < (stick.current ? 240 : 80);
+      // 容差 = 输入条预留 padding + 40：用户滚到内容末尾（near≈pad）即视为贴底；
+      // 固定 240px 会把「上滚停在最后两个任务之间」误判为贴底（loading 卡矮时距底 <240px），
+      // 导致生成中任务的进度事件把已上滚的用户拉回底部。
+      const next = near < (stick.current ? pad + 40 : 80);
       stick.current = next;
       // 折叠动画期间滚动区 padding 随输入条收缩 → scrollHeight 变小，
       // 浏览器会把 scrollTop 被动钳制回新底部并派发 scroll 事件。
@@ -185,10 +186,20 @@ export const TaskTimeline = memo(function TaskTimeline({
   // 贴底跟随 + 挂载时强制回到底部：
   // - 挂载（重启 / 切换会话 / 历史恢复）时强制滚到底，并等图片加载、布局稳定后补滚；
   // - 后续结果变化仅在用户位于底部附近时跟随；
-  // - 所有补滚回调都在执行时校验 stick：用户已上滚则放弃，避免"突然跳回底部"。
+  // - 布局签名过滤：进度事件（phase/msg 更新）不改变卡片布局，跳过跟随——
+  //   生成中任务每 3-5s 收到 gen-progress，results 引用变化会重跑本 effect，
+  //   用户上滚停住（容差内 stick 残留 true）时会被进度事件拉回底部（"过几秒突然跳底"）。
+  // - 延迟补滚（图片加载/300ms 布局稳定）前实时校验贴底：图片可能加载数秒，
+  //   期间用户已上滚——仅查 stick 会把已离开底部的用户拉回。
+  const lastLayoutKey = useRef("");
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    const key = results
+      .map((r) => `${r.id}:${r.status}:${r.url ?? ""}:${r.taskId}:${r.prompt}:${r.ar}:${r.at}`)
+      .join("~");
+    if (key === lastLayoutKey.current) return;
+    lastLayoutKey.current = key;
     const scroll = () => {
       if (!stick.current) return;
       el.scrollTop = el.scrollHeight;
@@ -196,13 +207,18 @@ export const TaskTimeline = memo(function TaskTimeline({
     if (!stick.current) return;
     scroll();
     const raf = requestAnimationFrame(scroll);
+    const nearBottom = () => {
+      if (!stick.current) return false;
+      const pad = parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      return el.scrollHeight - pad - el.scrollTop - el.clientHeight < 80;
+    };
     const onLoad = () => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (nearBottom()) el.scrollTop = el.scrollHeight;
     };
     const imgs = Array.from(el.querySelectorAll("img"));
     imgs.forEach((img) => img.addEventListener("load", onLoad, { once: true }));
     const t = window.setTimeout(() => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (nearBottom()) el.scrollTop = el.scrollHeight;
     }, 300);
     return () => {
       cancelAnimationFrame(raf);
@@ -267,7 +283,6 @@ export const TaskTimeline = memo(function TaskTimeline({
                 <div className="ml-1 flex flex-wrap justify-end gap-1.5">
                   <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-xs font-medium text-text-3">{g.model}</span>
                   <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-[11px] font-medium text-text-3">{g.ar}</span>
-                  <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-[11px] font-medium text-text-3">{g.extra}</span>
                   <span className="px-1 text-[11px] text-faint-2">
                     {new Date(g.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
                   </span>

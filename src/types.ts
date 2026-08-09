@@ -37,6 +37,8 @@ export interface GenerationResult {
   model: string;
   local_paths: string[];
   remote_urls: string[];
+  /** 写入数据库 params_json 的完整参数快照（重新编辑时按此拼接回填） */
+  params_json: string;
 }
 
 /** 模型参数模块（生成弹层 popover 分区）。内置魔搭模型的参数区声明。
@@ -119,6 +121,12 @@ export interface StudioJump {
   quality?: string;
   duration?: string;
   n?: number;
+  /** 图像输出格式（png/jpeg，仅图像） */
+  format?: string;
+  /** 提交时实际像素尺寸 "WxH"（size 区模型回填，优先于 ar 换算） */
+  size?: string;
+  /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等） */
+  params?: Record<string, string | number>;
   refs?: string[];
   /** LoRA 列表（自定义魔搭厂商；重新编辑/跳转时回填弹层） */
   loras?: LoraEntry[];

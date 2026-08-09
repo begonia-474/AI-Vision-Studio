@@ -224,16 +224,28 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     (j: StudioJump) => {
       const m = allModels.find((x) => x.id === j.modelId);
       if (m) selectModel(m);
+      const target = m ?? model;
       setPrompt(j.prompt);
-      if (j.ar && (!m || m.aspectRatios.includes(j.ar))) applyAr(m ?? model, j.ar, j.quality ?? quality);
+      if (j.ar && (!m || m.aspectRatios.includes(j.ar))) applyAr(target, j.ar, j.quality ?? quality);
       if (j.quality && (!m || m.qualities.includes(j.quality))) setQualityCb(j.quality);
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
       if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group")) : 4));
+      // 自定义像素尺寸（size 区模型）：原任务手动 W/H 优先于 ar 换算
+      if (j.size && supportsCustomSize(target)) {
+        const px = parseSizePx(j.size);
+        if (px) {
+          setSizeState(px);
+          setSizeLocked(false);
+        }
+      }
+      if (j.format && target.formats?.includes(j.format)) setFormat(j.format);
+      // 魔搭自由参数快照：selectModel 已重置为模型默认，此处覆盖回原任务值
+      if (j.params) setParamValues(j.params);
       if (j.refs) setRefs(j.refs);
       // LoRA：selectModel 已清空（模型切换重置），跳转快照在此恢复。
       if (j.loras) setLoras(j.loras);
     },
-    [allModels, model, selectModel, applyAr, setQualityCb, quality],
+    [allModels, model, selectModel, applyAr, setQualityCb, quality, supportsCustomSize],
   );
 
   // 一次提交 = 一个任务（taskId），与占位卡一一对应；无并发守卫，
@@ -305,6 +317,11 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
 
       const ids = Array.from({ length: n }, () => uid());
       const submittedAt = Date.now();
+      // 魔搭自由参数快照（loras 由 loras 字段承接，此处排除避免双份）
+      const paramSnapshot =
+        customExtra && Object.keys(customExtra.params).some((k) => k !== "loras")
+          ? Object.fromEntries(Object.entries(customExtra.params).filter(([k]) => k !== "loras"))
+          : undefined;
       // 任务所属会话在提交时刻捕获：完成/失败回写必须落在它上面——
       // 若中途切换会话，patchActive 会把结果写进新激活会话，原会话占位卡永远停留在 loading。
       const sessionId = session.activeId;
@@ -317,6 +334,8 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         model: m.name,
         modelId: m.id,
         ar: ar0,
+        size: sizeField,
+        params: paramSnapshot,
         extra,
         quality: q,
         format: m.formats ? fmt : undefined,
@@ -358,6 +377,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           model: res.model,
           modelId: m.id,
           ar: ar0,
+          size: sizeField,
+          params: paramSnapshot,
+          paramsJson: res.params_json,
           extra,
           quality: q,
           format: m.formats ? fmt : undefined,

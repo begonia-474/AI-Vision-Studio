@@ -213,15 +213,18 @@ pub async fn generate(
         // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
         "references": collected_refs,
     });
-    // LoRA 快照（魔搭 loras 参数：单 LoRA dict {repo: weight} 或字符串）：
-    // 随历史落库，重新编辑/图库跳转时回填弹层。
-    if let Some(l) = req
+    // 魔搭自由参数快照（steps/guidance/seed/negative_prompt/loras 等）原样并入
+    // params_json：详情页/图库按 params_json 消费完整参数，重新编辑时回填弹层。
+    // （前端 extra.params 只含自定义/魔搭模型声明的参数，不会与上方结构化字段冲突。）
+    if let Some(map) = req
         .extra
         .as_ref()
         .and_then(|e| e.get("params"))
-        .and_then(|p| p.get("loras"))
+        .and_then(|p| p.as_object())
     {
-        params_obj["loras"] = l.clone();
+        for (k, v) in map {
+            params_obj[k] = v.clone();
+        }
     }
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
@@ -303,6 +306,9 @@ pub async fn generate(
         model,
         local_paths,
         remote_urls,
+        // 写入库的完整参数快照原样返回：重新编辑时前端按这份数据库 JSON 拼接回填，
+        // 与图库入口（list_history 的 params_json）同源，不做第二套快照字段。
+        params_json: params_obj.to_string(),
     })
 }
 

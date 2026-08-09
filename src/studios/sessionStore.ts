@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { listHistory, onProgress, toAssetUrl } from "../api";
-import type { HistoryTask, LoraEntry } from "../types";
+import type { HistoryTask, LoraEntry, StudioJump } from "../types";
 
 export type Studio = "image" | "video";
 export type ResultStatus = "loading" | "done" | "error";
@@ -24,6 +24,12 @@ export interface ResultItem {
   model: string;
   ar: string;
   extra: string; // 图像：quality；视频：duration + " · " + quality
+  /** 提交时实际发送的尺寸：像素模型为 "WxH"（volcark/wanxiang/魔搭），非像素厂商为比例原值占位 */
+  size?: string;
+  /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt；不含 loras——已由 loras 字段承接） */
+  params?: Record<string, unknown>;
+  /** 数据库 params_json 原样（生成响应返回 / 历史恢复携带）；重新编辑按此拼接回填 */
+  paramsJson?: string;
   // 重新生成所需的参数快照（persist 到 localStorage，用于「重新生成」）
   modelId?: string;
   quality?: string;
@@ -109,6 +115,60 @@ function historyParams(item: HistoryTask): Record<string, unknown> {
   }
 }
 
+/// 已结构化消费的 params_json 键（size/n/aspect_ratio/quality/duration/output_format/
+/// references/loras 分别落入 ResultItem 对应字段），剩余键（魔搭自由参数 steps/
+/// guidance/seed/negative_prompt 等）原样返回，供详情页展示。
+const STRUCTURED_PARAM_KEYS = new Set([
+  "size",
+  "n",
+  "aspect_ratio",
+  "quality",
+  "duration",
+  "output_format",
+  "references",
+  "loras",
+]);
+
+export function freeParams(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+  const rest = Object.fromEntries(Object.entries(raw).filter(([k]) => !STRUCTURED_PARAM_KEYS.has(k)));
+  return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+/// 自由参数快照 → 重新编辑回填值（只保留字符串/数字，供 StudioJump.params / paramValues）。
+export function jumpParams(raw: Record<string, unknown> | undefined): Record<string, string | number> | undefined {
+  if (!raw) return undefined;
+  const f = Object.fromEntries(
+    Object.entries(raw).filter(
+      (e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number",
+    ),
+  );
+  return Object.keys(f).length > 0 ? f : undefined;
+}
+
+/// 数据库 params_json → 重新编辑跳转（图库 / 时间线共用同一数据源同一拼装，
+/// 保证回填与库中记录一致；model/prompt 来自 tasks 行，参数来自 params_json）。
+export function jumpFromParams(
+  task: { prompt: string; model: string },
+  params: Record<string, unknown>,
+  image: boolean,
+  refs?: string[],
+): StudioJump & { studio: "image" | "video" } {
+  return {
+    studio: image ? "image" : "video",
+    prompt: task.prompt,
+    modelId: task.model,
+    ar: typeof params.aspect_ratio === "string" ? params.aspect_ratio : undefined,
+    quality: typeof params.quality === "string" ? params.quality : undefined,
+    duration: typeof params.duration === "string" ? params.duration : undefined,
+    n: typeof params.n === "number" ? params.n : undefined,
+    format: typeof params.output_format === "string" ? params.output_format : undefined,
+    size: typeof params.size === "string" ? params.size : undefined,
+    params: jumpParams(freeParams(params)),
+    refs,
+    loras: parseLoras(params.loras),
+  };
+}
+
 /// 历史 params_json.loras（提交格式：字符串或 {repo: weight}）→ 弹层行（LoraEntry[]）。
 /// 字符串（旧数据/单 LoRA 字符串形式）→ 单行 weight "1"；dict → 每项一行，权重转字符串。
 export function parseLoras(raw: unknown): LoraEntry[] | undefined {
@@ -141,8 +201,11 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
   const params = historyParams(item);
   const ar = String(params.aspect_ratio ?? params.size ?? "1:1");
   const quality = String(params.quality ?? "default");
-  const duration = String(params.duration ?? "5");
+  // duration 仅视频模型有（图像提交时后端写 null）；不要给图像任务兜底 "5"，
+  // 否则详情页/重新编辑会拿到不存在的视频参数。
+  const duration = studio === "video" ? String(params.duration ?? "5") : undefined;
   const extra = studio === "video" ? `${duration}s · ${quality}` : quality;
+  const size = typeof params.size === "string" ? params.size : undefined;
   const at = Date.parse(item.created_at) || Date.now();
   const taskId = `${HISTORY_TASK_PREFIX}${item.id}`;
   const refs = Array.isArray(params.references) ? (params.references as unknown[]) : undefined;
@@ -165,12 +228,15 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     model: item.model,
     modelId,
     ar,
+    size,
     quality,
     duration,
     format,
     n,
     refs: refList,
     loras: parseLoras(params.loras),
+    params: freeParams(params),
+    paramsJson: item.params_json ?? undefined,
     extra,
   }));
 }
