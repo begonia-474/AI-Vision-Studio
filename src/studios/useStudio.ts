@@ -305,6 +305,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
 
       const ids = Array.from({ length: n }, () => uid());
       const submittedAt = Date.now();
+      // 任务所属会话在提交时刻捕获：完成/失败回写必须落在它上面——
+      // 若中途切换会话，patchActive 会把结果写进新激活会话，原会话占位卡永远停留在 loading。
+      const sessionId = session.activeId;
       const placeholders: ResultItem[] = ids.map((id) => ({
         id,
         taskId,
@@ -323,7 +326,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         phase: "submitting",
       }));
       // 对话式队列：新任务追加到时间线底部，而非头部。
-      session.patchActive((prev) => [...prev, ...placeholders]);
+      session.patchSession(sessionId, (prev) => [...prev, ...placeholders]);
 
       try {
         const res = await generate({
@@ -362,18 +365,32 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           refs: refs0,
           loras: loras0,
         }));
-        session.patchActive((prev) => {
+        // 厂商实际返回张数可能少于请求（wan2.7 组图"实际张数由模型决定 ≤n"、
+        // 并行请求部分失败等）：未匹配的占位卡直接移除，时间线只展示实际产物
+        // （与数据库/图库一致），否则多余占位卡永远停留在 loading 动画。
+        // 完全没产出的极端情况（理论上后端会先报错）按失败标记，不留 loading。
+        if (done.length === 0) {
+          session.patchSession(sessionId, (prev) =>
+            prev.map((it) =>
+              ids.includes(it.id) ? { ...it, status: "error", error: t("common.generationFailed") } : it,
+            ),
+          );
+          return;
+        }
+        session.patchSession(sessionId, (prev) => {
           const map = new Map(done.map((d) => [d.id, d]));
-          return prev.map((it) => map.get(it.id) ?? it);
+          return prev
+            .filter((it) => !ids.includes(it.id) || map.has(it.id))
+            .map((it) => map.get(it.id) ?? it);
         });
       } catch (e) {
         const msg = typeof e === "string" ? e : (e as Error)?.message ?? t("common.generationFailed");
-        session.patchActive((prev) =>
+        session.patchSession(sessionId, (prev) =>
           prev.map((it) => (ids.includes(it.id) ? { ...it, status: "error", error: msg } : it)),
         );
       }
     },
-    [session.patchActive, t, size, supportsCustomSize, paramValues, format, loras],
+    [session.patchSession, t, size, supportsCustomSize, paramValues, format, loras],
   );
 
   const handleGenerate = useCallback(async () => {

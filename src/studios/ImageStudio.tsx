@@ -133,6 +133,12 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
           scrollRef={streamRef}
           onBottomStateChange={handleBottomChange}
           onImageToVideo={onImageToVideo}
+          onImageToImage={(src, prompt) => {
+            api.applyJump({ prompt, refs: [toAssetUrl(src)] });
+            // 回填后滚回底部让输入条展开，提示词/参考图立即可见可改
+            const el = streamRef.current;
+            if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+          }}
           onDeleteTask={api.removeTask}
           onRegenerate={api.regenerate}
           onOpenDetail={openDetail}

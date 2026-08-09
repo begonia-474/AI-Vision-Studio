@@ -593,8 +593,13 @@ pub fn get_key(provider_id: &str) -> Result<Option<String>, String> {
         Ok(p) => Ok(Some(p)),
         Err(e) => {
             let msg = e.to_string().to_lowercase();
-            // 跨版本兼容：NoEntry / NoStorageAccess 等都视为"未设置"
-            if msg.contains("no entry") || msg.contains("not found") || msg.contains("no storage") {
+            // 跨版本/跨平台兼容：NoEntry / NoStorageAccess / Windows Credential Manager 的
+            // "No matching credential found" 等一律视为"未设置"。
+            if msg.contains("no entry")
+                || msg.contains("not found")
+                || msg.contains("no storage")
+                || msg.contains("matching credential")
+            {
                 Ok(None)
             } else {
                 Err(e.to_string())
@@ -628,7 +633,11 @@ pub fn get_workspace(provider_id: &str) -> Result<Option<String>, String> {
         Ok(p) => Ok(Some(p)),
         Err(e) => {
             let msg = e.to_string().to_lowercase();
-            if msg.contains("no entry") || msg.contains("not found") || msg.contains("no storage") {
+            if msg.contains("no entry")
+                || msg.contains("not found")
+                || msg.contains("no storage")
+                || msg.contains("matching credential")
+            {
                 Ok(None)
             } else {
                 Err(e.to_string())

@@ -59,6 +59,12 @@ export interface SessionApi {
   results: ResultItem[]; // 当前会话的结果
   stats: SessionStats;
   patchActive: (fn: (prev: ResultItem[]) => ResultItem[]) => void;
+  /** 对指定会话的 results 做变换（任务生命周期回写用：提交发生在会话 A、完成时激活会话
+   *  可能已是 B，patchActive 会把结果写错会话——必须按提交时捕获的会话 id 定位） */
+  patchSession: (id: string, fn: (prev: ResultItem[]) => ResultItem[]) => void;
+  /** 从全部会话移除指定 historyId 的结果卡（图库删除产物后同步时间线；
+   *  卡片可能位于任意会话——历史按 session_id 归属恢复，用户可能已切换会话） */
+  removeByHistoryId: (historyId: number) => void;
   createSession: () => void;
   switchSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
@@ -370,6 +376,34 @@ export function useSessionStore(studio: Studio): SessionApi {
     });
   }, []);
 
+  // 对指定会话的 results 做变换（任务生命周期回写：提交/完成/失败必须落在任务所属会话，
+  // 而非 patch 时刻的激活会话——用户中途切走会话时结果才不会写错地方）。
+  const patchSession = useCallback((id: string, fn: (prev: ResultItem[]) => ResultItem[]) => {
+    setState((prev) => {
+      const sessions = prev.sessions.map((s) =>
+        s.id === id
+          ? { ...s, updatedAt: Date.now(), results: fn(s.results) }
+          : s,
+      );
+      return { ...prev, sessions: sortByRecent(sessions) };
+    });
+  }, []);
+
+  // 从全部会话移除指定 historyId 的结果卡（图库删除产物后同步时间线；不刷新会话
+  // 最近活动时间——非本会话主动操作，避免删除导致会话置顶跳动）。
+  const removeByHistoryId = useCallback((historyId: number) => {
+    setState((prev) => {
+      let changed = false;
+      const sessions = prev.sessions.map((s) => {
+        const results = s.results.filter((it) => it.historyId !== historyId);
+        if (results.length === s.results.length) return s;
+        changed = true;
+        return { ...s, results };
+      });
+      return changed ? { ...prev, sessions } : prev;
+    });
+  }, []);
+
   const createSession = useCallback(() => {
     setState((prev) => {
       const n = prev.sessions.length + 1;
@@ -410,6 +444,8 @@ export function useSessionStore(studio: Studio): SessionApi {
     results,
     stats,
     patchActive,
+    patchSession,
+    removeByHistoryId,
     createSession,
     switchSession,
     renameSession,

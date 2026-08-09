@@ -98,7 +98,13 @@ export default function App() {
           </div>
           {activeView === "gallery" && (
             <div className="h-full w-full">
-              <GalleryView onImageToVideo={handleImageToVideo} onImageToImage={handleImageToImage} onReEdit={handleReEdit} />
+              <GalleryView
+                imageSession={imageSession}
+                videoSession={videoSession}
+                onImageToVideo={handleImageToVideo}
+                onImageToImage={handleImageToImage}
+                onReEdit={handleReEdit}
+              />
             </div>
           )}
         </div>

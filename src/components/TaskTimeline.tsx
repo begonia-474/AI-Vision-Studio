@@ -1,16 +1,16 @@
 // 对话式任务时间线
 // 每条任务 = 一条"消息"：用户气泡（prompt + 参数 chips + 提交时间）+ 生成区
-//   loading → 假进度百分比 + 阶段文案；error → 红条错误；done → 结果图网格（批量 n 图）。
+//   loading → 生成中动画（点阵画布 + 阶段文案）；error → 红条错误；done → 结果图网格（批量 n 图）。
 // 新任务追加到底部并自动贴底滚动；用户上滚查看历史时停止跟随（聊天式直觉）。
 // 多任务并行：每个任务独立状态，进度事件按 taskId 路由（见 useStudio）。
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { IconDownload, IconMore, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
+import { IconDownload, IconImage, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { ImageGeneration, ImageGenerationLabel } from "./ImageGeneration";
 import type { ResultItem, ResultStatus } from "../studios/sessionStore";
 
 interface TaskTimelineProps {
@@ -23,6 +23,8 @@ interface TaskTimelineProps {
   /** 是否位于底部附近（滚动区让输入条展开/收起）。layout=true 表示该次变化由布局收缩（折叠动画让位）被动钳制产生，非用户滚动 */
   onBottomStateChange?: (atBottom: boolean, layout?: boolean) => void;
   onImageToVideo?: (src: string, prompt: string) => void;
+  /** 以图生图：把该结果作为参考图带回工作室（i2i），可直接改提示词重新生成 */
+  onImageToImage?: (src: string, prompt: string) => void;
   onDeleteTask: (taskId: string) => void;
   onRegenerate: (taskId: string) => void;
   /** 点击完成结果卡：打开作品详情 */
@@ -71,7 +73,7 @@ const mediaAspect = (ar: string) => {
   return `${w} / ${h}`;
 };
 
-// 网格列数自适应（loading / 完成共用）：
+// 网格列数自适应（完成态共用）：
 // 竖图且 4 张及以上 → xl 4 列一行（每格窄、高度低于 45vh，纯图无卡片背景）；
 // 其余（1-3 张 / 横图）→ 2 列（每格宽、竖图被 45vh 压缩露出卡片背景）。
 const gridCols = (count: number, ar: string) => {
@@ -80,25 +82,11 @@ const gridCols = (count: number, ar: string) => {
   return fourCols ? "grid-cols-1 gap-1 sm:grid-cols-2 xl:grid-cols-4" : "grid-cols-1 gap-1 sm:grid-cols-2";
 };
 
-// 装饰性进度动画：厂商无法提供真实进度（只能等完成取结果），
-// 模拟"快速爬升 → 在 ~90% 附近减速停住"的自然形态，不无限循环；
-// 真实完成后任务切换为 done，百分比自然消失。
-function FakePct() {
-  const [pct, setPct] = useState(0);
-  useEffect(() => {
-    let v = 0;
-    const id = setInterval(() => {
-      if (v < 3) {
-        v = 3 + Math.random() * 4; // 起步
-      } else {
-        v = 90 - (90 - v) * (0.82 + Math.random() * 0.08); // 渐近收敛到 ~90
-      }
-      setPct(Math.floor(v));
-    }, 150);
-    return () => clearInterval(id);
-  }, []);
-  return <span className="text-[30px] font-extrabold tracking-wide text-primary drop-shadow-[0_0_24px_rgba(59,130,246,.40)]">{pct}%</span>;
-}
+// 分辨率徽标文本："1080x1920" → "1080 × 1920"；比例（"9:16"）原样显示。
+const resolutionLabel = (ar: string) => {
+  const m = /^(\d+)x(\d+)$/.exec(ar);
+  return m ? `${m[1]} × ${m[2]}` : ar;
+};
 
 const FLOAT_TINT = [
   "radial-gradient(circle at 50% 40%, rgba(59,130,246,.18), transparent 70%)",
@@ -121,6 +109,7 @@ export const TaskTimeline = memo(function TaskTimeline({
   scrollRef,
   onBottomStateChange,
   onImageToVideo,
+  onImageToImage,
   onDeleteTask,
   onRegenerate,
   onOpenDetail,
@@ -167,8 +156,6 @@ export const TaskTimeline = memo(function TaskTimeline({
   // 导致重启 / 切换会话后无法自动回到底部。
   const stick = useRef(true);
   const lastScrollHeight = useRef(0);
-  // ⋯ 菜单 open 状态（受控 DropdownMenu）
-  const [menuTask, setMenuTask] = useState<string | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -252,10 +239,22 @@ export const TaskTimeline = memo(function TaskTimeline({
           {/* 左列：prompt 卡 + 模型徽章（krea 队列布局） */}
           <div className="flex w-full justify-end lg:w-1/4">
             <div className="group/metadata flex w-full flex-col items-end sm:w-fit">
-              <button
-                className="w-fit min-w-48 max-w-96 cursor-pointer rounded-xl bg-chip p-5 text-left text-sm leading-relaxed text-foreground transition-[background-color,scale] duration-200 ease-out active:scale-[0.995] hover:bg-hover"
+              {/* 提示词卡：用 div（非 button）保证文本可拖选复制；
+                  滚动隔离靠内层 overflow-y-auto + overscroll-contain（滚轮在卡片内滚动、不带动时间线）；
+                  拖选结束（存在选区）时不触发点击打开，避免复制时误跳转 */}
+              <div
+                className="w-fit min-w-48 max-w-96 cursor-pointer select-text rounded-xl bg-chip p-5 text-left text-sm leading-relaxed text-foreground transition-[background-color,scale] duration-200 ease-out active:scale-[0.995] hover:bg-hover"
+                role="button"
+                tabIndex={0}
                 title={t("common.open")}
                 onClick={() => {
+                  const sel = window.getSelection();
+                  if (sel && sel.toString().trim()) return;
+                  const first = g.items.find((it) => it.url);
+                  if (first?.url) window.open(first.url, "_blank");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
                   const first = g.items.find((it) => it.url);
                   if (first?.url) window.open(first.url, "_blank");
                 }}
@@ -263,7 +262,7 @@ export const TaskTimeline = memo(function TaskTimeline({
                 <div className="max-h-[200px] overflow-y-auto overscroll-contain [scrollbar-color:var(--scroll-thumb)_transparent] [scrollbar-width:thin] hover:[scrollbar-color:var(--scroll-thumb)_transparent]">
                   {g.prompt}
                 </div>
-              </button>
+              </div>
               <div className="mt-2 flex w-full flex-wrap items-center justify-between gap-1.5 pl-1">
                 <div className="ml-1 flex flex-wrap justify-end gap-1.5">
                   <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-xs font-medium text-text-3">{g.model}</span>
@@ -281,19 +280,22 @@ export const TaskTimeline = memo(function TaskTimeline({
           <div className="group relative w-full grow pt-2 md:pt-0 lg:w-2/3">
             {g.status === "loading" && (
               <div className="flex min-w-0 flex-col gap-2" aria-busy="true">
-                {/* 占位卡与完成卡同网格同高约束（见 gridCols + xl:max-h-[45vh]），生成中网格不放大、完成后不回缩 */}
+                {/* 生成中动画：与完成网格同布局同比例（每格一块生成画布，max-h 45vh 对齐结果卡），
+                    完成后原格替换为结果图，无布局跳动。提示词在左侧气泡，这里不再重复。 */}
                 <div className={cn("grid min-w-0", gridCols(g.items.length, g.ar))}>
                   {g.items.map((it) => (
-                    <div
-                      className="grid min-w-0 place-items-center overflow-hidden rounded-xl border border-dashed border-border-3 bg-card-shade xl:max-h-[45vh]"
+                    <ImageGeneration
                       key={it.id}
-                      style={{ aspectRatio: mediaAspect(g.ar) }}
-                    >
-                      <FakePct />
-                    </div>
+                      resolution={resolutionLabel(g.ar)}
+                      ratio={mediaAspect(g.ar)}
+                    />
                   ))}
                 </div>
-                {g.phase && <span className="self-end text-[11px] text-text-2">{phaseLabel(t, g.phase)}</span>}
+                {g.phase && (
+                  <div className="flex justify-end">
+                    <ImageGenerationLabel text={phaseLabel(t, g.phase)} />
+                  </div>
+                )}
               </div>
             )}
             {g.status === "error" && (
@@ -338,35 +340,8 @@ export const TaskTimeline = memo(function TaskTimeline({
                         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 rounded-t-xl bg-linear-to-b from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
                         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 rounded-b-xl bg-linear-to-t from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
 
-                        {/* 右上 ⋯ 菜单（Radix DropdownMenu：焦点管理/外点关闭/Esc 内建） */}
-                        <div className="absolute top-0.5 right-1 z-10 opacity-0 transition-opacity duration-100 group-hover/image:opacity-100">
-                          <DropdownMenu open={menuTask === g.taskId} onOpenChange={(o) => setMenuTask(o ? g.taskId : null)}>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                className="grid h-9 w-9 cursor-pointer place-items-center border-0 bg-transparent text-white [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                                title={t("gallery.more")}
-                                aria-label={t("gallery.more")}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <IconMore size={18} />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  if (it.url) window.open(it.url, "_blank");
-                                }}
-                              >
-                                <IconDownload size={13} /> {t("common.open")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem variant="destructive" onClick={() => onDeleteTask(g.taskId)}>
-                                <IconTrash size={13} /> {t("result.deleteTask")}
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-
-                        {/* 底部操作条：Vary / Edit / Video + Download（krea 风格：无底色，hover 才浮现黑底） */}
+                        {/* 底部操作条：重新生成 / 编辑 / 以图生图 / 图生视频 + 在文件夹中显示
+                            （产物在本地，不做"下载"，与图库/详情面板约定一致）。点卡片本体打开作品详情。 */}
                         <div className="absolute inset-x-1 bottom-1 z-10 flex items-end justify-between text-xs font-medium text-white opacity-0 transition-[translate,opacity] duration-150 ease-out translate-y-2 group-hover/image:translate-y-0 group-hover/image:opacity-100">
                           <div className="pointer-events-none flex flex-col-reverse">
                             <button
@@ -405,6 +380,32 @@ export const TaskTimeline = memo(function TaskTimeline({
                                 <path d="M7 17 17 7" />
                               </svg>
                             </button>
+                            {studio === "image" && onImageToImage && (
+                              <button
+                                className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onImageToImage(it.path ?? it.url ?? "", g.prompt);
+                                }}
+                              >
+                                <IconImage size={15} />
+                                <span>{t("result.imgToImage")}</span>
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth={1.5}
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="-ml-1 w-0 overflow-hidden opacity-0 transition-all duration-150 group-hover/arrowbtn:ml-0 group-hover/arrowbtn:w-3 group-hover/arrowbtn:opacity-50"
+                                >
+                                  <path d="M7 7h10v10" />
+                                  <path d="M7 17 17 7" />
+                                </svg>
+                              </button>
+                            )}
                             {studio === "image" && onImageToVideo && (
                               <button
                                 className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
@@ -437,18 +438,18 @@ export const TaskTimeline = memo(function TaskTimeline({
                             className="pointer-events-auto flex w-fit min-w-[28px] cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (it.url) window.open(it.url, "_blank");
+                              if (it.path) void openPath(it.path, "reveal").catch(() => {});
                             }}
                           >
                             <IconDownload size={14} />
-                            <span>{t("gallery.download")}</span>
+                            <span>{t("common.revealInFolder")}</span>
                           </button>
                         </div>
                     </div>
                   ))}
                 </div>
 
-                {/* 行级操作栏（整行 hover 上浮）：下载全部 / 删除 */}
+                {/* 行级操作栏（整行 hover 上浮）：在文件夹中显示 / 删除 */}
                 <div className="flex min-h-[28px] w-full flex-wrap items-center justify-end gap-1 text-xs font-medium text-text-3 transition-[translate,opacity] duration-150 ease-out translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100">
                   <button
                     className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-hover"
@@ -459,7 +460,7 @@ export const TaskTimeline = memo(function TaskTimeline({
                       }
                     }}
                   >
-                    <IconDownload size={12} /> {t("gallery.downloadAll")}
+                    <IconDownload size={12} /> {t("common.revealInFolder")}
                   </button>
                   <button
                     className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-red-500/15 hover:text-red-600"

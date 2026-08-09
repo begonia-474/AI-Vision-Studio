@@ -166,7 +166,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                 className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[#f0f1f3] px-2.5 text-[13px] font-medium text-[#111827] transition-colors hover:bg-[#e5e7eb]"
                 onClick={download}
               >
-                <IconDownload size={13} /> {t("gallery.download")}
+                <IconDownload size={13} /> {t("common.revealInFolder")}
               </button>
               <div className="flex items-center">
                 {source.starred != null && source.onToggleStar && (

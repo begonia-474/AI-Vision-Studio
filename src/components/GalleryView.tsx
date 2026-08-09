@@ -12,6 +12,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
 import { parseLoras } from "../studios/sessionStore";
+import type { SessionApi } from "../studios/sessionStore";
 import { IconChevron, IconDownload, IconLibrary, IconPlay, IconSearch, IconStar, IconTrash, IconUpload } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -22,6 +23,8 @@ type TypeFilter = "all" | "image" | "video";
 type SortOrder = "newest" | "oldest";
 
 interface GalleryViewProps {
+  imageSession: SessionApi;
+  videoSession: SessionApi;
   onImageToVideo?: (src: string, prompt: string) => void;
   onImageToImage?: (src: string, prompt: string) => void;
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
@@ -146,7 +149,7 @@ const MENU_ITEM = "justify-between text-[#374151] focus:bg-[#f3f4f6] focus:text-
 const MENU_LABEL = "px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]";
 const MENU_SEP = "mx-3 my-1.5 h-px bg-[#f0f1f3]";
 
-export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: GalleryViewProps) {
+export function GalleryView({ imageSession, videoSession, onImageToVideo, onImageToImage, onReEdit }: GalleryViewProps) {
   const { t } = useTranslation();
   const [items, setItems] = useState<HistoryTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -360,6 +363,9 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
     try {
       await deleteHistories([it.id]);
       setItems((prev) => prev.filter((x) => x.id !== it.id));
+      // 同步两个工作室会话时间线：产物已被后端删除，时间线里对应卡一并移除
+      imageSession.removeByHistoryId(it.id);
+      videoSession.removeByHistoryId(it.id);
       closeDetail();
     } catch {
       /* 忽略，刷新兜底 */
@@ -372,6 +378,11 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
     try {
       await deleteHistories([...selected]);
       setItems((prev) => prev.filter((x) => !selected.has(x.id)));
+      // 同步两个工作室会话时间线（删除的产物可能属于任意会话）
+      for (const id of selected) {
+        imageSession.removeByHistoryId(id);
+        videoSession.removeByHistoryId(id);
+      }
       setSelected(new Set());
       setManage(false);
     } catch {
@@ -571,7 +582,7 @@ export function GalleryView({ onImageToVideo, onImageToImage, onReEdit }: Galler
                 <IconTrash size={13} /> {t("common.delete")}
               </button>
               <button className={batchBtn} disabled={selected.size === 0} onClick={downloadSelected}>
-                <IconDownload size={13} /> {t("gallery.download")}
+                <IconDownload size={13} /> {t("common.revealInFolder")}
               </button>
               <button className={batchBtn} disabled>
                 <IconUpload size={13} /> {t("gallery.publish")}
