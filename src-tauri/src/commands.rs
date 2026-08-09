@@ -5,9 +5,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{
     GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord,
-    ProgressPayload, ProviderInfoDto, TaskPhase, UserModelRow,
+    ProgressPayload, ProviderInfoDto, SessionRow, TaskPhase, UserModelRow,
 };
-use crate::providers::{all_providers, get_provider};
+use crate::providers::{all_providers, get_provider, sanitize_body};
 use crate::storage;
 
 #[tauri::command]
@@ -22,7 +22,19 @@ pub fn save_api_key(provider_id: String, api_key: String) -> Result<(), String> 
 
 #[tauri::command]
 pub fn get_api_key(provider_id: String) -> Result<Option<String>, String> {
-    storage::get_key(&provider_id)
+    // 只回显掩码（存在性 + 首尾 4 位），完整密钥不出后端——前端仅需判断"是否已设置"。
+    Ok(storage::get_key(&provider_id)?.map(|k| mask_key(&k)))
+}
+
+/// 密钥掩码："sk-abcdefgh1234" → "sk-a...1234"；过短（≤8 字符）统一 "****"。
+fn mask_key(k: &str) -> String {
+    let n = k.chars().count();
+    if n <= 8 {
+        return "****".to_string();
+    }
+    let head: String = k.chars().take(4).collect();
+    let tail: String = k.chars().skip(n - 4).collect();
+    format!("{}...{}", head, tail)
 }
 
 #[tauri::command]
@@ -33,7 +45,12 @@ pub fn delete_api_key(provider_id: String) -> Result<(), String> {
 // WorkspaceId：业务空间专属域名（https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com）
 #[tauri::command]
 pub fn save_workspace_id(provider_id: String, workspace_id: String) -> Result<(), String> {
-    storage::save_workspace(&provider_id, &workspace_id)
+    let ws = workspace_id.trim();
+    // 防误输入污染域名：仅允许字母/数字/连字符（https://{ws}.cn-beijing.maas.aliyuncs.com）
+    if !ws.is_empty() && !ws.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("WorkspaceId 只能包含字母、数字与连字符".to_string());
+    }
+    storage::save_workspace(&provider_id, ws)
 }
 
 #[tauri::command]
@@ -46,7 +63,11 @@ pub async fn test_api_key(
     provider_id: String,
     client: State<'_, reqwest::Client>,
 ) -> Result<String, String> {
-    let api_key = storage::get_key(&provider_id)?.ok_or("未设置 API Key")?;
+    let pid = provider_id.clone();
+    let api_key = tokio::task::spawn_blocking(move || storage::get_key(&pid))
+        .await
+        .map_err(|e| format!("读取密钥异常: {}", e))??
+        .ok_or("未设置 API Key")?;
     let provider = get_provider(&provider_id, client.inner().clone())
         .ok_or("未知的 provider")?;
     provider.test_connectivity(&api_key).await
@@ -61,7 +82,11 @@ pub async fn generate(
     let provider_id = req.provider_id.clone();
     let provider = get_provider(&provider_id, client.inner().clone())
         .ok_or("未知的 provider")?;
-    let api_key = storage::get_key(&provider_id)?
+    // keyring 读凭据是同步 IO，丢阻塞线程池避免占 tokio 工作线程。
+    let pid_key = provider_id.clone();
+    let api_key = tokio::task::spawn_blocking(move || storage::get_key(&pid_key))
+        .await
+        .map_err(|e| format!("读取密钥异常: {}", e))??
         .ok_or("未设置 API Key，请先在设置页填入")?;
 
     let _ = app.emit(
@@ -78,19 +103,100 @@ pub async fn generate(
     // 收编后的路径/URL 写入 params_json.references，重新生成时可直接复用；
     // 公网 URL 原样保留。收编后再归一化为 data URL 提交（厂商只能拿到公网 URL 或 data URL）。
     let mut req2 = req.clone();
-    let collected_refs = req
-        .references
-        .iter()
-        .map(|r| storage::save_reference(r))
-        .collect::<Result<Vec<_>, _>>()?;
-    req2.references = collected_refs
-        .iter()
-        .map(|r| storage::normalize_reference(r))
-        .collect::<Result<Vec<_>, _>>()?;
+    // 参考图收编/归一化是同步文件 IO，丢阻塞线程池避免占 tokio 工作线程。
+    let req_refs = req.references.clone();
+    let collected_refs = tokio::task::spawn_blocking(move || {
+        req_refs
+            .iter()
+            .map(|r| storage::save_reference(r))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|e| format!("参考图处理异常: {}", e))??;
+    let norm_refs = collected_refs.clone();
+    req2.references = tokio::task::spawn_blocking(move || {
+        norm_refs
+            .iter()
+            .map(|r| storage::normalize_reference(r))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|e| format!("参考图处理异常: {}", e))??;
 
-    let handle = provider.submit(&req2, &api_key).await?;
+    // —— 提交即落库：先写 running 行，成功/失败终态再回写 ——
+    // 会话与时间线完全以 SQLite 为权威（前端已无 localStorage 业务数据）：
+    // 进行中任务重启后按 running 行恢复为「中断」卡；失败任务也留行，
+    // 图库可重新编辑、产物不会因瞬时错误/写库前崩溃而永久丢失。
+    let model = req
+        .model
+        .clone()
+        .unwrap_or_else(|| provider.default_model().to_string());
+    let mut params_obj = serde_json::json!({
+        "size": req.size,
+        "n": req.n,
+        "aspect_ratio": req.aspect_ratio,
+        "quality": req.quality,
+        "duration": req.duration,
+        // 生图模式（single/group）：重新编辑/重新生成时恢复组图任务需要它
+        "mode": req.mode,
+        "output_format": req.output_format,
+        // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
+        "references": collected_refs,
+    });
+    // 魔搭自由参数快照（steps/guidance/seed/negative_prompt/loras 等）原样并入
+    // params_json：详情页/图库按 params_json 消费完整参数，重新编辑时回填弹层。
+    // 结构化字段（size/n/aspect_ratio/quality/duration/mode/output_format/references）
+    // 以顶部 json! 为准——用户自建模型声明同名 key 时跳过，防止污染快照。
+    const STRUCTURED_PARAM_KEYS: &[&str] = &[
+        "size",
+        "n",
+        "aspect_ratio",
+        "quality",
+        "duration",
+        "mode",
+        "output_format",
+        "references",
+    ];
+    if let Some(map) = req
+        .extra
+        .as_ref()
+        .and_then(|e| e.get("params"))
+        .and_then(|p| p.as_object())
+    {
+        for (k, v) in map {
+            if STRUCTURED_PARAM_KEYS.contains(&k.as_str()) {
+                continue;
+            }
+            params_obj[k] = v.clone();
+        }
+    }
+    let history_id = storage::insert_task(storage::HistoryInsert {
+        provider: provider_id.clone(),
+        model: model.clone(),
+        capability: req.capability.clone(),
+        prompt: req.prompt.clone(),
+        params_json: Some(params_obj.to_string()),
+        status: "running".to_string(),
+        local_paths_json: "[]".to_string(),
+        remote_urls_json: None,
+        thumbnail_path: None,
+        request_json: None,
+        raw_response: None,
+        error: None,
+        session_id: req.session_id.clone(),
+    })?;
+
+    let handle = match provider.submit(&req2, &api_key).await {
+        Ok(h) => h,
+        Err(e) => {
+            cleanup_files(&collected_refs);
+            let _ = storage::update_task_result(history_id, "failed", "[]", None, None, None, None, None, Some(&e));
+            return Err(e);
+        }
+    };
     if handle.phase == TaskPhase::Failed {
         let err = handle.error.unwrap_or_else(|| "生成失败".to_string());
+        let _ = storage::update_task_result(history_id, "failed", "[]", None, None, None, None, None, Some(&err));
         let _ = app.emit(
             "gen-progress",
             ProgressPayload {
@@ -114,9 +220,42 @@ pub async fn generate(
         // 视频轮询间隔 5s，图像 3s；此处统一按 capability 区分。
         let is_video = req.capability == "t2v" || req.capability == "i2v";
         let interval = if is_video { 5u64 } else { 3u64 };
+        // 轮询总时长上限：厂商任务卡死/丢失时不能无限轮询（图像 20 分钟，视频 60 分钟）。
+        // 注：超时后服务端任务可能仍在生成并计费——错误文案提示用户稍后可到图库核对。
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(if is_video { 60 * 60 } else { 20 * 60 });
         let mut last_progress = 15i32;
         loop {
-            let snap = provider.poll(&handle, &api_key).await?;
+            if std::time::Instant::now() >= deadline {
+                cleanup_files(&collected_refs);
+                let err = "任务超时（生成超过时限），请稍后到图库查看是否已生成".to_string();
+                let _ = storage::update_task_result(history_id, "failed", "[]", None, None, None, None, None, Some(&err));
+                return Err(err);
+            }
+            // 轮询失败重试：状态查询是幂等的 GET，网络抖动/厂商瞬断重试不产生额外费用；
+            // 连续 3 次失败才判任务失败（原实现单次抖动即整任务失败，结果永久丢失）。
+            let mut snap = None;
+            let mut last_err = String::new();
+            for attempt in 0..3u64 {
+                match provider.poll(&handle, &api_key).await {
+                    Ok(s) => {
+                        snap = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = e;
+                        tokio::time::sleep(std::time::Duration::from_millis(1200 * (attempt + 1))).await;
+                    }
+                }
+            }
+            let snap = match snap {
+                Some(s) => s,
+                None => {
+                    cleanup_files(&collected_refs);
+                    let _ = storage::update_task_result(history_id, "failed", "[]", None, None, None, None, None, Some(&last_err));
+                    return Err(last_err);
+                }
+            };
             // 只保留最后一次轮询的交换记录（提交记录在 handle.http_log 中保留）
             poll_log = snap.http_log.clone();
             match snap.phase {
@@ -128,6 +267,8 @@ pub async fn generate(
                     let err = snap
                         .message
                         .unwrap_or_else(|| "生成失败".to_string());
+                    cleanup_files(&collected_refs);
+                    let _ = storage::update_task_result(history_id, "failed", "[]", None, None, None, None, None, Some(&err));
                     let _ = app.emit(
                         "gen-progress",
                         ProgressPayload {
@@ -187,10 +328,29 @@ pub async fn generate(
 
     let mut local_paths = Vec::new();
     for url in &remote_urls {
-        let p = storage::save_remote(client.inner(), url, &provider_id)
-            .await
-            .map_err(|e| format!("下载失败: {}", e))?;
-        local_paths.push(p);
+        // 下载重试：结果 URL 的 GET 幂等，瞬时失败重试不产生额外费用；连续失败才整任务报错。
+        let mut last_err = String::new();
+        let mut ok = false;
+        for attempt in 0..3u64 {
+            match storage::save_remote(client.inner(), url, &provider_id).await {
+                Ok(p) => {
+                    local_paths.push(p);
+                    ok = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e;
+                    tokio::time::sleep(std::time::Duration::from_millis(1000 * (attempt + 1))).await;
+                }
+            }
+        }
+        if !ok {
+            cleanup_files(&local_paths);
+            cleanup_files(&collected_refs);
+            let err = format!("下载失败: {}", last_err);
+            let _ = storage::update_task_result(history_id, "failed", "[]", None, None, None, None, None, Some(&err));
+            return Err(err);
+        }
     }
     eprintln!(
         "[gen] task={} local_paths({}) = {:?}",
@@ -199,53 +359,26 @@ pub async fn generate(
         local_paths,
     );
 
-    let model = req
-        .model
-        .clone()
-        .unwrap_or_else(|| provider.default_model().to_string());
-    let mut params_obj = serde_json::json!({
-        "size": req.size,
-        "n": req.n,
-        "aspect_ratio": req.aspect_ratio,
-        "quality": req.quality,
-        "duration": req.duration,
-        "output_format": req.output_format,
-        // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
-        "references": collected_refs,
-    });
-    // 魔搭自由参数快照（steps/guidance/seed/negative_prompt/loras 等）原样并入
-    // params_json：详情页/图库按 params_json 消费完整参数，重新编辑时回填弹层。
-    // （前端 extra.params 只含自定义/魔搭模型声明的参数，不会与上方结构化字段冲突。）
-    if let Some(map) = req
-        .extra
-        .as_ref()
-        .and_then(|e| e.get("params"))
-        .and_then(|p| p.as_object())
-    {
-        for (k, v) in map {
-            params_obj[k] = v.clone();
-        }
-    }
-
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
     // 每张图都生成 256px webp 缩略图（{stem}.thumb.webp 命名约定，网格按此渲染），
     // 避免网格直接解码全尺寸原图导致图库量大时卡顿；
     // thumbnail_path 字段存第一张（详情/兼容旧逻辑用）。
     // 原图文件保持下载原样，不做任何重编码。
-    let thumbnail_path = local_paths
-        .first()
-        .filter(|p| storage::is_image_path(p))
-        .and_then(|p| storage::make_thumbnail(p).ok());
-    for p in local_paths.iter().skip(1) {
-        if storage::is_image_path(p) {
-            let _ = storage::make_thumbnail(p);
-        }
+    // 解码+编码是 CPU 密集，走阻塞线程池（ensure_thumbnails 同款模式）。
+    let thumbnail_path = match local_paths.first().filter(|p| storage::is_image_path(p)) {
+        Some(p) => make_thumbnail_blocking(p).await,
+        None => None,
+    };
+    for p in local_paths.iter().skip(1).filter(|p| storage::is_image_path(p)) {
+        let _ = make_thumbnail_blocking(p).await;
     }
 
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
 
     // HTTP 调试记录：请求数组与响应数组按下标一一对应（一次任务可能含多次提交/轮询交换）。
+    // 请求体写库前统一脱敏：提交体里的 base64 参考图（单张可达数 MB）替换为长度标记，
+    // 与厂商侧对响应体做的事一致（mod.rs sanitize_body），保证记录体积有界。
     let http_req_json = serde_json::to_string(
         &http_log
             .iter()
@@ -253,7 +386,7 @@ pub async fn generate(
                 serde_json::json!({
                     "method": r.method,
                     "url": r.url,
-                    "body": r.request_body,
+                    "body": r.request_body.as_deref().map(sanitize_body),
                 })
             })
             .collect::<Vec<_>>(),
@@ -274,21 +407,18 @@ pub async fn generate(
     )
     .ok();
 
-    let history_id = storage::insert_task(storage::HistoryInsert {
-        provider: provider_id.clone(),
-        model: model.clone(),
-        capability: req.capability.clone(),
-        prompt: req.prompt.clone(),
-        params_json: Some(params_obj.to_string()),
-        status: "succeeded".to_string(),
-        local_paths_json: local_json,
-        remote_urls_json: remote_json,
-        thumbnail_path,
-        request_json: http_req_json,
-        raw_response: http_resp_json,
-        error: None,
-        session_id: req.session_id.clone(),
-    })?;
+    // 终态回写：running 行 → succeeded（提交即落库，前端时间线/图库以库为准）。
+    storage::update_task_result(
+        history_id,
+        "succeeded",
+        &local_json,
+        remote_json.as_deref(),
+        thumbnail_path.as_deref(),
+        Some(&params_obj.to_string()),
+        http_req_json.as_deref(),
+        http_resp_json.as_deref(),
+        None,
+    )?;
 
     let _ = app.emit(
         "gen-progress",
@@ -312,6 +442,38 @@ pub async fn generate(
     })
 }
 
+/// 失败路径尽力清理本次任务已产生的文件（参考图收编副本 / 已下载产物），
+/// 避免 inputs/outputs 在失败任务上累积垃圾（成功路径的 inputs 副本保留供重新生成复用）。
+fn cleanup_files(paths: &[String]) {
+    for p in paths {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// 生成单张缩略图（图像解码+编码 CPU 密集）：在阻塞线程池执行，避免占 tokio 工作线程。
+async fn make_thumbnail_blocking(p: &str) -> Option<String> {
+    let p = p.to_string();
+    tokio::task::spawn_blocking(move || storage::make_thumbnail(&p))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+}
+
+#[tauri::command]
+pub fn list_sessions() -> Result<Vec<SessionRow>, String> {
+    storage::list_sessions()
+}
+
+#[tauri::command]
+pub fn upsert_session(s: SessionRow) -> Result<(), String> {
+    storage::upsert_session(&s)
+}
+
+#[tauri::command]
+pub fn delete_session(id: String) -> Result<(), String> {
+    storage::delete_session(&id)
+}
+
 #[tauri::command]
 pub fn list_history() -> Result<Vec<HistoryTaskDto>, String> {
     storage::query_all()
@@ -323,11 +485,16 @@ pub fn set_star(id: i64, starred: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
-    for id in ids {
-        storage::delete_task(id)?;
-    }
-    Ok(())
+pub async fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
+    // 文件删除（大视频可达数百 MB）丢阻塞线程池，避免卡住主线程/UI。
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        for id in ids {
+            storage::delete_task(id)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("删除任务异常: {}", e))?
 }
 
 /// 补全历史任务缺失的缩略图（旧数据仅第一张有）。

@@ -16,7 +16,8 @@ import type { SessionApi } from "../studios/sessionStore";
 import { IconChevron, IconDownload, IconLibrary, IconPlay, IconSearch, IconStar, IconTrash, IconUpload } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Button } from "./ui/button";
 import { DetailPanel, type DetailSource } from "./DetailPanel";
 
 type TypeFilter = "all" | "image" | "video";
@@ -110,6 +111,9 @@ const resOf = (it: HistoryTask): string | null => {
 };
 const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
 const ratioOf = (it: HistoryTask): string | null => {
+  // 优先提交时声明的 aspect_ratio（对所有模型准确）；旧数据缺失时按像素 gcd 推导。
+  const ar = paramsOf(it)?.aspect_ratio;
+  if (typeof ar === "string" && ar) return ar;
   const s = sizeOf(it);
   if (!s) return null;
   const g = gcd(s.w, s.h);
@@ -163,7 +167,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   const [query, setQuery] = useState("");
   const [manage, setManage] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [detailIdx, setDetailIdx] = useState<number | null>(null);
+  const [detailKey, setDetailKey] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<"filter" | "time" | "sort" | null>(null);
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -233,7 +237,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
       if (e.key === "Escape") {
         setSearchOpen(false);
         setOpenMenu(null);
-        setDetailIdx(null);
+        setDetailKey(null);
       }
     };
     document.addEventListener("mousedown", onDown);
@@ -248,6 +252,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   const visible = useMemo(
     () =>
       items.filter((it) => {
+        if (it.status !== "succeeded") return false; // 图库只展示成功产物（running/failed 行仅时间线可见）
         if (type !== "all" && isImage(it) !== (type === "image")) return false;
         if (starredOnly && !it.starred) return false;
         if (range.start && dayKey(it.created_at) < range.start) return false;
@@ -358,36 +363,35 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     }
   };
 
-  const removeOne = async (it: HistoryTask) => {
-    if (!window.confirm(t("gallery.deleteConfirm"))) return;
+  // 删除确认（AGENTS.md：占位提示一律用 Dialog，禁原生 confirm）
+  const [confirmDel, setConfirmDel] = useState<{ ids: number[]; n: number } | null>(null);
+
+  const doDelete = async (ids: number[]) => {
+    const idSet = new Set(ids);
+    setConfirmDel(null);
     try {
-      await deleteHistories([it.id]);
-      setItems((prev) => prev.filter((x) => x.id !== it.id));
+      await deleteHistories(ids);
+      setItems((prev) => prev.filter((x) => !idSet.has(x.id)));
       // 同步两个工作室会话时间线：产物已被后端删除，时间线里对应卡一并移除
-      imageSession.removeByHistoryId(it.id);
-      videoSession.removeByHistoryId(it.id);
+      for (const id of ids) {
+        imageSession.removeByHistoryId(id);
+        videoSession.removeByHistoryId(id);
+      }
+      setSelected(new Set());
+      setManage(false);
       closeDetail();
     } catch {
       /* 忽略，刷新兜底 */
     }
   };
 
-  const removeSelected = async () => {
+  const removeOne = (it: HistoryTask) => {
+    setConfirmDel({ ids: [it.id], n: 1 });
+  };
+
+  const removeSelected = () => {
     if (selected.size === 0) return;
-    if (!window.confirm(t("gallery.deleteConfirmMany", { n: selected.size }))) return;
-    try {
-      await deleteHistories([...selected]);
-      setItems((prev) => prev.filter((x) => !selected.has(x.id)));
-      // 同步两个工作室会话时间线（删除的产物可能属于任意会话）
-      for (const id of selected) {
-        imageSession.removeByHistoryId(id);
-        videoSession.removeByHistoryId(id);
-      }
-      setSelected(new Set());
-      setManage(false);
-    } catch {
-      /* 忽略 */
-    }
+    setConfirmDel({ ids: [...selected], n: selected.size });
   };
 
   // 下载 = 在文件管理器中定位第一个产物
@@ -445,21 +449,24 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     fn();
   };
 
+  // 详情锚定：按条目 key 定位当前索引（entries 在后台任务完成刷新时重排，
+  // 纯索引会让打开的面板静默切到别的作品）；条目消失（删除/筛选排除）时自动关闭。
+  const detailIdx = detailKey ? entries.findIndex((e) => e.key === detailKey) : null;
+
   // 打开详情：记录当前所在网格位置，供详情左右切换
   const openDetail = (entry: GalleryEntry) => {
-    const idx = entries.findIndex((e) => e.key === entry.key);
-    setDetailIdx(idx);
+    setDetailKey(entry.key);
   };
 
   const closeDetail = () => {
-    setDetailIdx(null);
+    setDetailKey(null);
   };
 
   const goDetail = (delta: number) => {
-    if (detailIdx == null) return;
+    if (detailIdx == null || detailIdx < 0) return;
     const next = detailIdx + delta;
     if (next < 0 || next >= entries.length) return;
-    setDetailIdx(next);
+    setDetailKey(entries[next].key);
   };
 
   // 详情数据源：由历史任务标准化而来（收藏/删除/跳转绑定原任务）
@@ -510,7 +517,14 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   const buildReEdit = (it: HistoryTask): StudioJump & { studio: "image" | "video" } => {
     const params = paramsOf(it) ?? {};
     const first = localPaths(it)[0];
-    const refs = it.capability === "i2i" && first ? [toAssetUrl(first)] : undefined;
+    // 参考图优先取数据库 params_json.references（i2i/i2v 都保留原参考图，与时间线同源）；
+    // 旧数据无该字段时按能力回退：i2i 用第一张产物当参考图，i2v 无参考图（按 t2v 生成）。
+    const rawRefs = Array.isArray(params.references) ? params.references : undefined;
+    const refs = rawRefs
+      ? rawRefs.filter((r): r is string => typeof r === "string" && r.length > 0)
+      : it.capability === "i2i" && first
+        ? [toAssetUrl(first)]
+        : undefined;
     return jumpFromParams({ prompt: it.prompt, model: it.model }, params, isImage(it), refs);
   };
 
@@ -798,7 +812,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
               {items.length === 0 ? t("gallery.empty") : t("gallery.emptySearch")}
             </h1>
             <p className="m-0 max-w-[480px] text-[13px] leading-relaxed text-[#6b7280]">
-              {items.length === 0 ? t("gallery.emptySearch") : t("gallery.empty")}
+              {items.length === 0 ? t("gallery.emptyDesc") : t("gallery.emptySearchDesc")}
             </p>
           </div>
         ) : (
@@ -911,13 +925,36 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         />
       )}
 
-      {detailIdx != null && (
+      {detailIdx != null && detailIdx >= 0 && (
         <DetailPanel
           sources={detailSources}
           index={detailIdx}
           onClose={closeDetail}
           onNavigate={goDetail}
         />
+      )}
+
+      {/* 删除确认 Dialog（替代原生 confirm） */}
+      {confirmDel && (
+        <Dialog open onOpenChange={(o) => !o && setConfirmDel(null)}>
+          <DialogContent className="max-w-[340px] text-center">
+            <DialogHeader>
+              <DialogTitle className="text-sm">
+                {confirmDel.n > 1
+                  ? t("gallery.deleteConfirmMany", { n: confirmDel.n })
+                  : t("gallery.deleteConfirm")}
+              </DialogTitle>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:justify-center">
+              <Button variant="outline" onClick={() => setConfirmDel(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button variant="destructive" onClick={() => void doDelete(confirmDel.ids)}>
+                {t("common.delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* 画布占位提示（待接入功能，Dialog 替代原生 alert） */}

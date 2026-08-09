@@ -339,11 +339,12 @@ export const TaskTimeline = memo(function TaskTimeline({
                           />
                         ) : (
                           <>
+                            {/* 视频卡：img 保持 in-flow 撑起卡片高度（absolute 会让网格行塌陷为 0，视频不可见） */}
                             <img
                               src={it.url}
                               alt=""
                               className="block w-full object-contain xl:max-h-[45vh]"
-                              style={{ aspectRatio: mediaAspect(g.ar), position: "absolute", inset: 0 }}
+                              style={{ aspectRatio: mediaAspect(g.ar) }}
                             />
                             <div className="absolute inset-0 grid place-items-center before:absolute before:inset-0 before:content-[''] before:bg-black/25">
                               <IconPlay size={16} className="relative size-12 rounded-full border border-border-4 bg-btn-dark p-4 text-foreground backdrop-blur-[8px]" />

@@ -62,7 +62,13 @@ impl GenerationProvider for KlingProvider {
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let ar = req.aspect_ratio.clone().unwrap_or_else(|| "16:9".to_string());
-        let duration = req.duration.clone().unwrap_or_else(|| "5".to_string());
+        // duration 字符串透传（可灵接口为字符串），越界值钳制到 [2,15] 防 400。
+        let duration = req
+            .duration
+            .as_deref()
+            .and_then(|d| d.parse::<i64>().ok())
+            .map(|d| d.clamp(2, 15).to_string())
+            .unwrap_or_else(|| "5".to_string());
         // quality=4K → mode=4k（仅 v3/v3-omni 支持），其余 std
         let mode = if req.quality.as_deref() == Some("4K") {
             "4k"

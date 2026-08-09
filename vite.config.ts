@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
-// @ts-expect-error process is a nodejs global
+// @types/node 已提供 process 类型，直接使用
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/

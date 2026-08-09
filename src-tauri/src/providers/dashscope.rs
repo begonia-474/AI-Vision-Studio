@@ -733,6 +733,9 @@ impl DashScopeProvider {
             .unwrap_or(5);
 
         // media 结构：i2v 追加 first_frame（首尾帧/驱动音频/视频续写待 UI 支持）。
+        if req.capability == "i2v" && req.references.first().is_none() {
+            return Err("i2v 需要首帧参考图".to_string());
+        }
         let mut media = Vec::new();
         if req.capability == "i2v" {
             if let Some(first) = req.references.first() {

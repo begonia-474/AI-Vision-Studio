@@ -450,9 +450,13 @@ impl VolcArkProvider {
             .duration
             .as_deref()
             .and_then(|d| d.parse().ok())
+            .map(|d: i64| d.clamp(2, 15))
             .unwrap_or(5);
 
         // content 数组：text + 可选 first_frame
+        if req.capability == "i2v" && req.references.first().is_none() {
+            return Err("i2v 需要首帧参考图".to_string());
+        }
         let mut content = vec![json!({ "type": "text", "text": req.prompt })];
         if req.capability == "i2v" {
             if let Some(first) = req.references.first() {

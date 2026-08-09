@@ -104,6 +104,20 @@ export interface HistoryTask {
   thumbnail_path: string | null;
   /** 所属会话 ID（旧记录为 null，仅出现在图库） */
   session_id: string | null;
+  /** 任务级错误信息（failed/running 状态行的原因） */
+  error: string | null;
+}
+
+/** 会话行（SQLite sessions 表；会话元数据是权威数据的可重建索引） */
+export interface SessionRow {
+  id: string;
+  title: string;
+  /** 标题是否用户手动改过（自动命名不得覆盖显式标题） */
+  name_manually_edited: boolean;
+  /** 创建时间（Unix 毫秒） */
+  created_at: number;
+  /** 最近活动时间（Unix 毫秒，排序键） */
+  updated_at: number;
 }
 
 export interface ProgressPayload {
@@ -121,6 +135,8 @@ export interface StudioJump {
   quality?: string;
   duration?: string;
   n?: number;
+  /** 生图模式（single/group；volcark 组图任务快照恢复用，缺省保持当前模式） */
+  mode?: "single" | "group";
   /** 图像输出格式（png/jpeg，仅图像） */
   format?: string;
   /** 提交时实际像素尺寸 "WxH"（size 区模型回填，优先于 ar 换算） */

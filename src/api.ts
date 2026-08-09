@@ -7,6 +7,7 @@ import type {
   HistoryTask,
   ProgressPayload,
   ProviderInfo,
+  SessionRow,
   UserModelRow,
 } from "./types";
 
@@ -36,6 +37,14 @@ export const generate = (req: GenRequest) =>
   invoke<GenerationResult>("generate", { req });
 
 export const listHistory = () => invoke<HistoryTask[]>("list_history");
+
+// ============ 会话（SQLite sessions 表，权威介质） ============
+export const listSessions = () => invoke<SessionRow[]>("list_sessions");
+
+export const upsertSession = (s: SessionRow) =>
+  invoke<void>("upsert_session", { s });
+
+export const deleteSession = (id: string) => invoke<void>("delete_session", { id });
 
 export const setStar = (id: number, starred: boolean) =>
   invoke<void>("set_star", { id, starred });

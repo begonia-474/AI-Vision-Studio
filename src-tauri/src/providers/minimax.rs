@@ -306,9 +306,14 @@ impl MiniMaxProvider {
             .duration
             .as_deref()
             .and_then(|d| d.parse().ok())
+            .map(|d: i64| d.clamp(2, 15))
             .unwrap_or(6);
         let resolution = req.quality.clone().unwrap_or_else(|| "1080P".to_string());
 
+        // i2v：first_frame_image
+        if req.capability == "i2v" && req.references.first().is_none() {
+            return Err("i2v 需要首帧参考图".to_string());
+        }
         let mut payload = json!({
             "model": model,
             "prompt": req.prompt,

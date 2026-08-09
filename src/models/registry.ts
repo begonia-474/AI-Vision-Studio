@@ -373,7 +373,8 @@ function toUserModelDef(row: UserModelRow): ModelDef | null {
     providerId: row.provider_id,
     custom,
     sections,
-    blurb: `${row.name}（自定义）`,
+    // 用户模型无简介；「自定义」后缀由展示层用 t() 拼接（registry 无 i18n 上下文）
+    blurb: row.name,
   };
 }
 

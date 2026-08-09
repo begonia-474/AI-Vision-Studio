@@ -1,13 +1,23 @@
 // 会话（session）存储：对话式时间线的会话管理与持久化。
 // 每个 studio 一个 useSessionStore 实例（App 层持有），工作室与侧边栏共享同一份会话状态。
-// 会话及时间线快照持久化到 localStorage（保留失败卡/删除状态，关闭时未完成任务转为 interrupted）；
-// 完成结果以 SQLite 历史为权威来源（tasks.session_id 关联会话），启动时按会话 ID 各归各补回；
-// 会话按最近活动时间倒序（类 ChatGPT），活动 = 提交/完成/进度/删除卡片。
+// 【持久化架构（对齐 Codex 范式）】SQLite 是唯一权威：
+//  - sessions 表：会话元数据（id/title/手动标记/时间戳）——权威数据的可重建索引；
+//  - tasks 表：任务行（succeeded/running/failed，提交即落库、终态回写）；
+//  - 前端状态只是镜像，不再使用 localStorage（清理 WebView 缓存不影响任何会话数据）；
+//  - 孤儿 session_id 启动时自动补建会话（历史任务按归属回到时间线）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { listHistory, onProgress, toAssetUrl } from "../api";
-import type { HistoryTask, LoraEntry, StudioJump } from "../types";
+import type { TFunction } from "i18next";
+import {
+  deleteSession as deleteSessionApi,
+  listHistory,
+  listSessions,
+  onProgress,
+  toAssetUrl,
+  upsertSession,
+} from "../api";
+import type { HistoryTask, LoraEntry, SessionRow, StudioJump } from "../types";
 
 export type Studio = "image" | "video";
 export type ResultStatus = "loading" | "done" | "error";
@@ -47,6 +57,8 @@ export interface ResultItem {
 export interface Session {
   id: string;
   title: string;
+  /** 标题是否用户手动改过（自动命名不得覆盖显式标题，对齐 Codex） */
+  nameManuallyEdited?: boolean;
   createdAt: number;
   /** 最近活动时间（提交/完成/进度/删除卡片时刷新），侧边栏按此倒序排列。 */
   updatedAt: number;
@@ -73,37 +85,15 @@ export interface SessionApi {
   removeByHistoryId: (historyId: number) => void;
   createSession: () => void;
   switchSession: (id: string) => void;
-  renameSession: (id: string, title: string) => void;
+  renameSession: (id: string, title: string, manual?: boolean) => void;
   deleteSession: (id: string) => void;
 }
 
 let _seq = 0;
 const uid = () => `r_${Date.now().toString(36)}_${_seq++}`;
 
-const sessionsKey = (studio: Studio) => `aivision-studio.sessions.v2.${studio}`;
-
 // 历史恢复任务的前缀（SQLite 会话恢复的条目，不计入会话 x/y 角标）。
 const HISTORY_TASK_PREFIX = "history_";
-
-function normalizeStoredResults(raw: unknown, interruptedMessage: string): ResultItem[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((item): item is Partial<ResultItem> => Boolean(item && typeof item === "object"))
-    .map((item) => {
-      const path = typeof item.path === "string" ? item.path : undefined;
-      const wasLoading = item.status === "loading";
-      return {
-        ...(item as ResultItem),
-        id: String(item.id ?? uid()),
-        taskId: String(item.taskId ?? item.id ?? uid()),
-        at: Number(item.at) || Date.now(),
-        status: wasLoading ? "error" : item.status === "done" ? "done" : "error",
-        path,
-        url: path ? toAssetUrl(path) : item.url,
-        error: wasLoading ? interruptedMessage : item.error,
-      };
-    });
-}
 
 function historyParams(item: HistoryTask): Record<string, unknown> {
   if (!item.params_json) return {};
@@ -127,6 +117,7 @@ const STRUCTURED_PARAM_KEYS = new Set([
   "output_format",
   "references",
   "loras",
+  "mode",
 ]);
 
 export function freeParams(raw: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -161,6 +152,7 @@ export function jumpFromParams(
     quality: typeof params.quality === "string" ? params.quality : undefined,
     duration: typeof params.duration === "string" ? params.duration : undefined,
     n: typeof params.n === "number" ? params.n : undefined,
+    mode: params.mode === "single" || params.mode === "group" ? params.mode : undefined,
     format: typeof params.output_format === "string" ? params.output_format : undefined,
     size: typeof params.size === "string" ? params.size : undefined,
     params: jumpParams(freeParams(params)),
@@ -241,6 +233,36 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
   }));
 }
 
+/// SQLite 记录 → 会话时间线条目，按状态映射：
+/// succeeded → 完成卡（historyResults）；running（应用关闭时未完成）→「中断」错误卡；
+/// failed → 失败卡（带错误信息）。taskId 带 history_ 前缀，不计入会话角标。
+function historyCards(studio: Studio, item: HistoryTask, t: TFunction): ResultItem[] {
+  if (item.status === "succeeded") {
+    return historyResults(studio, item);
+  }
+  const at = Date.parse(item.created_at) || Date.now();
+  const taskId = `${HISTORY_TASK_PREFIX}${item.id}`;
+  const params = historyParams(item);
+  const error =
+    item.status === "failed"
+      ? (item.error ?? t("common.generationFailed"))
+      : t("prompt.interrupted");
+  return [
+    {
+      id: `${taskId}_0`,
+      taskId,
+      historyId: item.id,
+      at,
+      status: "error",
+      error,
+      prompt: item.prompt,
+      model: item.model,
+      ar: String(params.aspect_ratio ?? params.size ?? "1:1"),
+      extra: "",
+    },
+  ];
+}
+
 /// 会话按最近活动倒序（类 ChatGPT：新对话置顶，旧对话有新消息时上浮）。
 function sortByRecent(list: Session[]): Session[] {
   return [...list].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
@@ -256,50 +278,35 @@ function freshSession(title: string): Session {
   return { id: uid(), title, createdAt: now, updatedAt: now, results: [] };
 }
 
-function loadSessions(studio: Studio, defaultTitle: string, interruptedMessage: string): SessionState {
-  if (typeof window !== "undefined") {
-    try {
-      const raw = window.localStorage.getItem(sessionsKey(studio));
-      if (raw) {
-        const parsed: unknown = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") {
-          const rawSessions = (parsed as { sessions?: unknown }).sessions;
-          const rawActive = (parsed as { activeId?: unknown }).activeId;
-          if (Array.isArray(rawSessions) && rawSessions.length > 0) {
-            const sessions = sortByRecent(
-              rawSessions
-                .filter((s): s is Record<string, unknown> => Boolean(s && typeof s === "object"))
-                .map((s) => {
-                  const createdAt = Number(s.createdAt) || Date.now();
-                  return {
-                    id: String(s.id ?? uid()),
-                    title: String(s.title ?? defaultTitle),
-                    createdAt,
-                    updatedAt: Number(s.updatedAt) || createdAt,
-                    results: normalizeStoredResults(s.results, interruptedMessage),
-                  };
-                }),
-            );
-            return {
-              sessions,
-              activeId: sessions.some((s) => s.id === rawActive) ? String(rawActive) : sessions[0].id,
-            };
-          }
-        }
-      }
-    } catch {
-      // 存储损坏时走默认会话。
-    }
-  }
-  const s = freshSession(defaultTitle);
-  return { sessions: [s], activeId: s.id };
+function toSession(r: SessionRow): Session {
+  return {
+    id: r.id,
+    title: r.title,
+    nameManuallyEdited: r.name_manually_edited,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    results: [],
+  };
+}
+
+function toSessionRow(s: Session): SessionRow {
+  return {
+    id: s.id,
+    title: s.title,
+    name_manually_edited: s.nameManuallyEdited ?? false,
+    created_at: s.createdAt,
+    updated_at: s.updatedAt,
+  };
 }
 
 export function useSessionStore(studio: Studio): SessionApi {
   const { t } = useTranslation();
-  const [state, setState] = useState<SessionState>(() =>
-    loadSessions(studio, t("sessions.defaultTitle"), t("prompt.interrupted")),
-  );
+  // 占位会话：SQLite 启动加载完成前保证 activeId/results 可用；加载后以库为准整体替换。
+  const [state, setState] = useState<SessionState>(() => {
+    const s = freshSession(t("sessions.defaultTitle"));
+    return { sessions: [s], activeId: s.id };
+  });
+  const [ready, setReady] = useState(false);
   const aliveRef = useRef(true);
 
   const activeSession = state.sessions.find((s) => s.id === state.activeId) ?? state.sessions[0];
@@ -324,24 +331,25 @@ export function useSessionStore(studio: Studio): SessionApi {
     };
   }, [results]);
 
-  // 会话持久化：会话列表、当前会话、各会话时间线（含失败卡与删除状态）。
-  // loading 任务在下次启动时转为 interrupted，当前 provider 层还不能跨进程续轮询。
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(sessionsKey(studio), JSON.stringify(state));
-    } catch {
-      // 存储不可用时不影响正常生成。
-    }
-  }, [state, studio]);
-
-  // SQLite 是完成结果的权威来源：启动时按 tasks.session_id 把各会话自己的记录补回对应会话
-  // （重启后 localStorage 可能丢失，库中的会话归属保证时间线仍可恢复）。
-  // 按会话 ID 各归各，不做任何"整库注入当前会话"。
+  // 启动加载（SQLite 为唯一权威，无 localStorage）：
+  // 1) sessions 表 → 会话列表（空库建默认会话）；
+  // 2) tasks 表按 session_id 分组回灌，孤儿 id 自动补建会话（历史任务回到时间线）；
+  // 3) 卡片按状态映射：succeeded→done / running→中断 / failed→失败（含错误信息）。
   useEffect(() => {
     let mounted = true;
-    listHistory()
-      .then((history) => {
-        if (!mounted) return;
+    (async () => {
+      const [sessionRows, history] = await Promise.all([
+        listSessions(),
+        listHistory().catch(() => []),
+      ]);
+      if (!mounted) return;
+      setState((prev) => {
+        let sessions = sessionRows.map(toSession);
+        if (sessions.length === 0) {
+          const s = freshSession(t("sessions.defaultTitle"));
+          sessions = [s];
+          void upsertSession(toSessionRow(s));
+        }
         const bySession = new Map<string, HistoryTask[]>();
         for (const item of history) {
           if (!item.session_id) continue; // 旧记录无会话归属，仅图库可见
@@ -349,44 +357,69 @@ export function useSessionStore(studio: Studio): SessionApi {
           if (arr) arr.push(item);
           else bySession.set(item.session_id, [item]);
         }
-        setState((prev) => {
-          const sessions = prev.sessions.map((s) => {
-            const rows = bySession.get(s.id);
-            if (!rows || rows.length === 0) return s;
-            const existingTaskIds = new Set(s.results.map((it) => it.taskId));
-            const existingHistoryIds = new Set(
-              s.results
-                .map((it) => it.historyId)
-                .filter((id): id is number => id !== undefined),
-            );
-            const existingPaths = new Set(
-              s.results.map((it) => it.path).filter((p): p is string => Boolean(p)),
-            );
-            const restored = rows
-              .filter((item) => {
-                const isImage = item.capability === "t2i" || item.capability === "i2i";
-                return studio === "image" ? isImage : !isImage;
-              })
-              .slice()
-              .reverse()
-              .flatMap((item) => historyResults(studio, item))
-              .filter(
-                (it) =>
-                  !existingTaskIds.has(it.taskId) &&
-                  (it.historyId === undefined || !existingHistoryIds.has(it.historyId)) &&
-                  (!it.path || !existingPaths.has(it.path)),
-              );
-            if (restored.length === 0) return s;
-            return { ...s, results: [...restored, ...s.results] };
-          });
-          return { ...prev, sessions };
+        // 孤儿 session_id：按库中归属补建会话（权威数据 → 重建索引）
+        const known = new Set(sessions.map((s) => s.id));
+        for (const sid of bySession.keys()) {
+          if (!known.has(sid)) {
+            const s = freshSession(t("sessions.defaultTitle"));
+            s.id = sid;
+            sessions.push(s);
+            void upsertSession(toSessionRow(s));
+          }
+        }
+        sessions = sortByRecent(sessions);
+        // 保留加载窗口内已在内存中的实时卡（loading 占位等），再注入库中恢复卡
+        sessions = sessions.map((s) => {
+          const live = prev.sessions.find((p) => p.id === s.id);
+          return live ? { ...s, results: live.results } : s;
         });
-      })
-      .catch(() => {});
+        sessions = sessions.map((s) => {
+          const rows = bySession.get(s.id);
+          if (!rows || rows.length === 0) return s;
+          const existingTaskIds = new Set(s.results.map((it) => it.taskId));
+          const existingHistoryIds = new Set(
+            s.results
+              .map((it) => it.historyId)
+              .filter((id): id is number => id !== undefined),
+          );
+          const existingPaths = new Set(
+            s.results.map((it) => it.path).filter((p): p is string => Boolean(p)),
+          );
+          const restored = rows
+            .filter((item) => {
+              const isImage = item.capability === "t2i" || item.capability === "i2i";
+              return studio === "image" ? isImage : !isImage;
+            })
+            .slice()
+            .reverse()
+            .flatMap((item) => historyCards(studio, item, t))
+            .filter(
+              (it) =>
+                !existingTaskIds.has(it.taskId) &&
+                (it.historyId === undefined || !existingHistoryIds.has(it.historyId)) &&
+                (!it.path || !existingPaths.has(it.path)),
+            );
+          if (restored.length === 0) return s;
+          return { ...s, results: [...restored, ...s.results] };
+        });
+        const active = sessions.some((s) => s.id === prev.activeId) ? prev.activeId : sessions[0].id;
+        return { sessions, activeId: active };
+      });
+      setReady(true);
+    })();
     return () => {
       mounted = false;
     };
-  }, [studio]);
+  }, [studio, t]);
+
+  // 会话行持久化（幂等 upsert）：任何会话变更（新建/重命名/活动时间上浮/回灌）落库。
+  // ready 前不写——占位会话不该污染库。SQLite 为权威、状态为镜像。
+  useEffect(() => {
+    if (!ready) return;
+    for (const s of state.sessions) {
+      void upsertSession(toSessionRow(s));
+    }
+  }, [state.sessions, ready]);
 
   // mount 时订阅一次进度事件；按 task_id 路由（跨会话更新，后台会话的任务同样刷新阶段，
   // 并把会话的最近活动时间上浮，类 ChatGPT 的"有动静的对话置顶"）。
@@ -483,15 +516,21 @@ export function useSessionStore(studio: Studio): SessionApi {
     setState((prev) => (prev.sessions.some((s) => s.id === id) ? { ...prev, activeId: id } : prev));
   }, []);
 
-  const renameSession = useCallback((id: string, title: string) => {
+  const renameSession = useCallback((id: string, title: string, manual = false) => {
     setState((prev) => ({
       ...prev,
-      sessions: prev.sessions.map((s) => (s.id === id ? { ...s, title } : s)),
+      sessions: prev.sessions.map((s) =>
+        s.id === id
+          ? { ...s, title, nameManuallyEdited: manual || s.nameManuallyEdited }
+          : s,
+      ),
     }));
   }, []);
 
   const deleteSession = useCallback(
     (id: string) => {
+      // 删会话行（任务行保留，仅图库可见——会话与任务生命周期分离）
+      void deleteSessionApi(id).catch(() => {});
       setState((prev) => {
         const remaining = prev.sessions.filter((s) => s.id !== id);
         if (remaining.length === 0) {

@@ -6,7 +6,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogTitle } from "./ui/dialog";
+import { Button } from "./ui/button";
 import { IconCheck, IconSearch } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { AddModelDialog } from "./AddModelDialog";
@@ -58,6 +59,7 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
   const all = useMemo(() => modelsForStudio(studio), [studio, userModels]);
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ModelDef | null>(null);
 
   // 关闭时清空搜索，下次打开回到全量列表。
   useEffect(() => {
@@ -182,9 +184,7 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
                                   aria-label={t("model.addModelDelete")}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    if (window.confirm(t("model.addModelDeleteConfirm", { name: m.name }))) {
-                                      void removeUserModel(m.id).catch(() => {});
-                                    }
+                                    setDeleteTarget(m);
                                   }}
                                   className="absolute top-1 right-1 z-10 grid size-6 cursor-pointer place-items-center rounded-md bg-transparent text-[11px] leading-none text-faint opacity-0 transition-all hover:bg-[rgba(239,68,68,.12)] hover:text-destructive group-hover:opacity-100"
                                 >
@@ -215,7 +215,7 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
                                   )}
                                 </div>
                                 <div className="w-full truncate text-xs text-muted-foreground">
-                                  {m.blurb}
+                                  {isUser ? t("model.customSuffix") : m.blurb}
                                 </div>
                                 <div className="flex gap-[6px]">
                                   {modelTags(m, t).map((tag) => (
@@ -237,6 +237,29 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
           </div>
         </div>
         <AddModelDialog open={addOpen} onClose={() => setAddOpen(false)} studio={studio} />
+
+        {/* 删除用户模型确认（AGENTS.md：占位提示一律用 Dialog，禁原生 confirm） */}
+        <Dialog open={deleteTarget != null} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+          <DialogContent className="max-w-[340px] text-center">
+            <DialogTitle className="text-sm">
+              {t("model.addModelDeleteConfirm", { name: deleteTarget?.name ?? "" })}
+            </DialogTitle>
+            <DialogFooter className="mt-1 gap-2 sm:justify-center">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (deleteTarget) void removeUserModel(deleteTarget.id).catch(() => {});
+                  setDeleteTarget(null);
+                }}
+              >
+                {t("common.delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );

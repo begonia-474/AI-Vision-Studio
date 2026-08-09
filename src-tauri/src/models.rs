@@ -91,6 +91,22 @@ pub struct HistoryTaskDto {
     pub thumbnail_path: Option<String>,
     /// 所属会话 ID（旧记录为 NULL，仅出现在图库，不归属任何会话）。
     pub session_id: Option<String>,
+    /// 任务级错误信息（failed/running 状态行的原因；成功行为 NULL）。
+    pub error: Option<String>,
+}
+
+/// 会话行（SQLite sessions 表，对齐 Codex threads 元数据索引的设计：
+/// 会话列表是权威数据的可重建索引，不再依赖 localStorage）。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionRow {
+    pub id: String,
+    pub title: String,
+    /// 标题是否用户手动改过（自动命名不得覆盖显式标题）。
+    pub name_manually_edited: bool,
+    /// 创建时间（Unix 毫秒）。
+    pub created_at: i64,
+    /// 最近活动时间（Unix 毫秒，排序键）。
+    pub updated_at: i64,
 }
 
 /// 生成进度事件 payload，通过 app.emit("gen-progress", ...) 推送前端。

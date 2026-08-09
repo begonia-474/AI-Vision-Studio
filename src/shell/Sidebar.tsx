@@ -41,7 +41,8 @@ export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onS
   const [draft, setDraft] = useState("");
 
   const commit = () => {
-    if (renamingId && draft.trim() && sessions) sessions.renameSession(renamingId, draft.trim());
+    // 手动重命名：标记 nameManuallyEdited，自动命名不得覆盖（对齐 Codex）
+    if (renamingId && draft.trim() && sessions) sessions.renameSession(renamingId, draft.trim(), true);
     setRenamingId(null);
   };
 

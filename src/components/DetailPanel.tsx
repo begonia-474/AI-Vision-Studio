@@ -147,9 +147,13 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
     paramRows.push({ label: t((PARAM_TITLES[k] ?? k) as ParseKeys), value: String(v) });
   }
 
-  // 复制全部参数（提示词 + 参数表）
+  // 复制全部参数（提示词 + 负向提示词 + 参数表）
   const copyParams = async () => {
-    const lines = [source.prompt, ...paramRows.map((r) => `${r.label}：${r.value}`)];
+    const lines = [source.prompt];
+    if (negativePrompt) {
+      lines.push(`${t((PARAM_TITLES.negative_prompt ?? "prompt.paramNegativePrompt") as ParseKeys)}：${negativePrompt}`);
+    }
+    lines.push(...paramRows.map((r) => `${r.label}：${r.value}`));
     await copyText(lines.join("\n"));
     setCopied(true);
     window.clearTimeout(copyTimer.current);

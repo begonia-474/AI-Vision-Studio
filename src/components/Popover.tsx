@@ -194,6 +194,7 @@ function RatioSection({
 
 // —— W/H 自定义尺寸（基准随画质档位，锁定比例联动；合规性按官方总像素区间） ——
 function SizeRow({ model, api }: { model: ModelDef; api: StudioApi }) {
+  const { t } = useTranslation();
   const base = api.size ?? parseSizePx(aspectToSize(model.providerId, model.id, api.ar, api.quality));
   const locked = api.sizeLocked;
   const bounds = pixelBounds(model);
@@ -223,7 +224,7 @@ function SizeRow({ model, api }: { model: ModelDef; api: StudioApi }) {
       <button
         type="button"
         onClick={() => api.setSizeLocked(!locked)}
-        title={locked ? "解除锁定" : "锁定比例"}
+        title={locked ? t("prompt.unlockRatio") : t("prompt.lockRatio")}
         className={cn(
           "grid size-9 shrink-0 cursor-pointer place-items-center rounded-md transition-all duration-150",
           locked ? "bg-accent text-black" : "bg-soft text-text-3 hover:bg-hover hover:text-foreground",
@@ -248,6 +249,11 @@ function NumberBox({
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
   const submit = () => onCommit(text);
+  // 步进基于当前输入框文本（未 blur 时也是用户最后输入的值），避免基于陈旧 value 提交
+  const step = (delta: number) => {
+    const cur = Number(text) || value;
+    onCommit(String(cur + delta));
+  };
   return (
     <div className="flex h-9 min-w-0 flex-1 items-center gap-1 rounded-lg bg-soft px-2.5">
       <span className="w-3 shrink-0 text-xs text-faint">{label}</span>
@@ -270,7 +276,7 @@ function NumberBox({
           type="button"
           aria-label="+"
           className="grid h-3.5 w-4 cursor-pointer place-items-center rounded-sm text-faint hover:bg-hover hover:text-foreground"
-          onClick={() => onCommit(String(value + SIZE_STEP))}
+          onClick={() => step(SIZE_STEP)}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3.5} strokeLinecap="round">
             <polyline points="6 15 12 9 18 15" />
@@ -280,7 +286,7 @@ function NumberBox({
           type="button"
           aria-label="−"
           className="grid h-3.5 w-4 cursor-pointer place-items-center rounded-sm text-faint hover:bg-hover hover:text-foreground"
-          onClick={() => onCommit(String(value - SIZE_STEP))}
+          onClick={() => step(-SIZE_STEP)}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3.5} strokeLinecap="round">
             <polyline points="6 9 12 15 18 9" />

@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aspectToSize, batchCap, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
-import type { ResultItem, SessionApi } from "./sessionStore";
+import { freeParams, jumpParams, type ResultItem, type SessionApi } from "./sessionStore";
 import type { LoraEntry, StudioJump } from "../types";
 
 let _seq = 0;
@@ -229,7 +229,14 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       if (j.ar && (!m || m.aspectRatios.includes(j.ar))) applyAr(target, j.ar, j.quality ?? quality);
       if (j.quality && (!m || m.qualities.includes(j.quality))) setQualityCb(j.quality);
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
-      if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group")) : 4));
+      // 生图模式：快照带 mode 时按该模式上限收敛张数（组图任务恢复后仍是组图，
+      // 而非退化为单图模式带超量 n 并行请求）；无 mode 的旧数据按原逻辑取两模式上限。
+      if (j.mode === "single" || j.mode === "group") {
+        setModeState(j.mode);
+        if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? batchCap(m, j.mode) : 4));
+      } else if (j.n != null) {
+        setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group")) : 4));
+      }
       // 自定义像素尺寸（size 区模型）：原任务手动 W/H 优先于 ar 换算
       if (j.size && supportsCustomSize(target)) {
         const px = parseSizePx(j.size);
@@ -265,8 +272,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       refs: string[];
       loras: LoraEntry[];
       isVideo: boolean;
+      /** 魔搭自由参数覆盖（重新生成时从原任务 params_json 还原，优先于弹层当前值） */
+      paramsOverride?: Record<string, string | number>;
     }) => {
-      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, duration: d, n, mode, refs: refs0, loras: loras0, isVideo } = params;
+      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, duration: d, n, mode, refs: refs0, loras: loras0, isVideo, paramsOverride } = params;
       const capability = refs0.length > 0 ? (isVideo ? "i2v" : "i2i") : isVideo ? "t2v" : "t2i";
       // 声明 size 区的模型（volcark）用自定义像素尺寸直传 size；其余仍走 aspect_ratio。
       const useCustomSize = size !== null && supportsCustomSize(m);
@@ -280,6 +289,11 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         const merged: Record<string, unknown> = { ...m.custom.params };
         for (const s of m.sections ?? []) {
           if (s.type === "param" && paramValues[s.key] !== undefined) {
+            const ov = paramsOverride?.[s.key];
+            if (ov !== undefined) {
+              merged[s.key] = s.kind === "number" ? Number(ov) : ov;
+              continue;
+            }
             const raw = paramValues[s.key];
             if (raw === "") continue;
             merged[s.key] = s.kind === "number" ? Number(raw) : raw;
@@ -412,7 +426,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         );
       }
     },
-    [session.patchSession, t, size, supportsCustomSize, paramValues, format, loras],
+    // 会话切换时重建 submitTask：内部捕获 session.activeId，陈旧闭包会把新提交
+    // 写到旧会话（占位卡隐形 + 数据库 session_id 错归属）。activeId 必须入 deps。
+    [session.patchSession, session.activeId, t, size, supportsCustomSize, paramValues, format, loras],
   );
 
   const handleGenerate = useCallback(async () => {
@@ -421,7 +437,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       (studio === "video" ? "cinematic dynamic scene, high quality" : "a beautiful scene, highly detailed");
 
     // 会话内首条消息时用提示词自动命名（类 ChatGPT）。
-    if (results.length === 0 && p.trim()) {
+    // 用户手动改过标题的会话不自动覆盖（对齐 Codex：显式标题优先）。
+    const activeS = session.sessions.find((s) => s.id === session.activeId);
+    if (results.length === 0 && p.trim() && !activeS?.nameManuallyEdited) {
       session.renameSession(session.activeId, p.trim().slice(0, 12));
     }
 
@@ -446,12 +464,26 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
+  // mode 与魔搭自由参数优先从数据库 params_json 还原（与「重新编辑」同源），
+  // 避免组图任务退化为单图模式带超量 n 并行请求、自由参数回退弹层默认值。
   const regenerate = useCallback(
     (taskId: string) => {
       const task = results.find((it) => it.taskId === taskId);
       if (!task || task.status !== "done") return;
       const m = allModels.find((x) => x.id === task.modelId) ?? model;
       const n = results.filter((it) => it.taskId === taskId).length;
+      let regenMode: "single" | "group" = mode;
+      let paramsOverride: Record<string, string | number> | undefined;
+      if (task.paramsJson) {
+        try {
+          const p = JSON.parse(task.paramsJson) as Record<string, unknown>;
+          if (p.mode === "single" || p.mode === "group") regenMode = p.mode;
+          const fp = jumpParams(freeParams(p));
+          if (fp) paramsOverride = fp;
+        } catch {
+          // paramsJson 损坏回退散装快照
+        }
+      }
       void submitTask({
         taskId: uid(),
         prompt: task.prompt,
@@ -461,9 +493,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         format: task.format ?? format,
         duration: task.duration ?? duration,
         n,
-        mode,
+        mode: regenMode,
         refs: task.refs ?? [],
         loras: task.loras ?? [],
+        paramsOverride,
         isVideo: studio === "video",
       });
     },

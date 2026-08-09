@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use rusqlite::{params, Connection};
 
-use crate::models::{HistoryTaskDto, UserModelRow};
+use crate::models::{HistoryTaskDto, SessionRow, UserModelRow};
 
 const APP_DIR_NAME: &str = "AIVisionStudio";
 const KEYRING_SERVICE: &str = "AIVisionStudio.ApiKey";
@@ -87,6 +87,8 @@ pub async fn save_remote(
     } else {
         let resp = client
             .get(url)
+            // 客户端全局 120s 对数百 MB 视频下载过紧，下载单独放宽到 300s。
+            .timeout(std::time::Duration::from_secs(300))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -319,7 +321,9 @@ pub fn make_thumbnail(src: &str) -> Result<String, String> {
     }
 }
 
-/// 按命名约定推导缩略图路径：thumbs 目录 `{stem}.thumb.webp`（make_thumbnail 输出）。
+/// 按命名约定推导缩略图路径：优先 `{stem}.thumb.webp`，WebP 编码失败时
+/// make_thumbnail 会回退输出 `{stem}.thumb.png`——两种都存在时按实际文件返回，
+/// 否则返回 webp 路径（不存在即视为缺失，由调用方触发重新生成）。
 fn thumbnail_path_of(p: &str) -> PathBuf {
     let path = PathBuf::from(p);
     let stem = path
@@ -327,7 +331,15 @@ fn thumbnail_path_of(p: &str) -> PathBuf {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    thumbnail_root().join(format!("{}.thumb.webp", stem))
+    let webp = thumbnail_root().join(format!("{}.thumb.webp", stem));
+    if webp.exists() {
+        return webp;
+    }
+    let png = thumbnail_root().join(format!("{}.thumb.png", stem));
+    if png.exists() {
+        return png;
+    }
+    webp
 }
 
 /// 补全历史任务缺失的缩略图（旧数据仅第一张有）。
@@ -415,6 +427,14 @@ pub fn ensure_schema() -> Result<(), String> {
             params_json TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            name_manually_edited INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 ",
     )
     .map_err(|e| e.to_string())?;
@@ -462,7 +482,7 @@ pub struct HistoryInsert {
     pub request_json: Option<String>,
     /// HTTP 响应记录数组 JSON（[{method,url,status,body}]），body 已脱敏截断。
     pub raw_response: Option<String>,
-    /// 任务级错误信息（失败任务当前不入库，预留）。
+    /// 任务级错误信息（失败任务同样入库，终态由 update_task_result 回写）。
     pub error: Option<String>,
     /// 所属会话 ID（前端会话存储生成），NULL 表示不属于任何会话（旧数据/图库浏览）。
     pub session_id: Option<String>,
@@ -495,11 +515,112 @@ pub fn insert_task(h: HistoryInsert) -> Result<i64, String> {
     Ok(conn.last_insert_rowid())
 }
 
+// —— 会话（sessions 表）：会话元数据是权威数据的可重建索引（对齐 Codex threads 表设计） ——
+
+pub fn list_sessions() -> Result<Vec<SessionRow>, String> {
+    let conn = open_conn()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, name_manually_edited, created_at, updated_at FROM sessions",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let manual: i64 = row.get(2)?;
+            Ok(SessionRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                name_manually_edited: manual != 0,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// 幂等 upsert：前端每次会话变更（新建/重命名/活动时间上浮）都整行覆盖。
+pub fn upsert_session(s: &SessionRow) -> Result<(), String> {
+    let conn = open_conn()?;
+    conn.execute(
+        "INSERT INTO sessions (id, title, name_manually_edited, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            name_manually_edited = excluded.name_manually_edited,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at",
+        params![
+            s.id,
+            s.title,
+            s.name_manually_edited as i64,
+            s.created_at,
+            s.updated_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 删除会话：任务行解绑（session_id 置 NULL → 仅图库可见，不随会话删除），
+/// 且不会在下次启动时被孤儿重建复活（与「删除会话不删产物」语义一致）。
+pub fn delete_session(id: &str) -> Result<(), String> {
+    let conn = open_conn()?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE tasks SET session_id = NULL WHERE session_id = ?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM sessions WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 任务终态回写：提交即落库（status=running），成功/失败后在此收尾。
+/// 失败任务也留行——图库可编辑复用、时间线可删除，产物不会因瞬时错误永久丢失。
+pub fn update_task_result(
+    id: i64,
+    status: &str,
+    local_paths_json: &str,
+    remote_urls_json: Option<&str>,
+    thumbnail_path: Option<&str>,
+    params_json: Option<&str>,
+    request_json: Option<&str>,
+    raw_response: Option<&str>,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let conn = open_conn()?;
+    conn.execute(
+        "UPDATE tasks SET status=?2, local_paths_json=?3, remote_urls_json=?4,
+         thumbnail_path=?5, params_json=?6, request_json=?7, raw_response=?8, error=?9
+         WHERE id=?1",
+        params![
+            id,
+            status,
+            local_paths_json,
+            remote_urls_json,
+            thumbnail_path,
+            params_json,
+            request_json,
+            raw_response,
+            error,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
     let conn = open_conn()?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json, starred, thumbnail_path, session_id
+            "SELECT id, provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json, starred, thumbnail_path, session_id, error
              FROM tasks ORDER BY created_at DESC",
         )
         .map_err(|e| e.to_string())?;
@@ -520,6 +641,7 @@ pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
                 starred: starred != 0,
                 thumbnail_path: row.get(11)?,
                 session_id: row.get(12)?,
+                error: row.get(13)?,
             })
         })
         .map_err(|e| e.to_string())?;

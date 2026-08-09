@@ -14,11 +14,14 @@ pub fn run() {
 
     let client = Client::builder()
         .user_agent("AIVisionStudio/0.1")
+        // 超时保护：无超时下 TCP 悬挂/厂商无响应会让任务永久卡 loading。
+        // 连接 20s；整请求 120s（提交/轮询均在此内）；大文件下载在 save_remote 单独放宽。
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(120))
         .build()
         .expect("failed to build http client");
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(client)
@@ -32,6 +35,9 @@ pub fn run() {
             commands::get_workspace_id,
             commands::generate,
             commands::list_history,
+            commands::list_sessions,
+            commands::upsert_session,
+            commands::delete_session,
             commands::set_star,
             commands::delete_histories,
             commands::ensure_thumbnails,
