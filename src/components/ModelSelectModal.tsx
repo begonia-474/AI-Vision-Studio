@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogFooter, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { IconCheck, IconSearch } from "../lib/icons";
 import { cn } from "../lib/utils";
+import { ProviderLogo } from "./ProviderLogo";
 import { AddModelDialog } from "./AddModelDialog";
 import { removeUserModel } from "../models/registry";
 import {
@@ -154,12 +155,7 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
                   return (
                     <section key={pid}>
                       <div className="mb-3 flex items-center gap-2">
-                        <span
-                          className="grid size-5 shrink-0 place-items-center rounded-md text-[9px] font-extrabold text-black"
-                          style={{ background: p.color }}
-                        >
-                          {p.abbr}
-                        </span>
+                        <ProviderLogo provider={p} size={20} className="rounded-md" />
                         <h3 className="text-xs font-semibold text-text-2">
                           {providerDisplayName(pid, t)}
                         </h3>
@@ -192,15 +188,14 @@ export function ModelSelectModal({ open, onOpenChange, studio, current, onSelect
                                 </span>
                               )}
                               <div className="grid size-[50px] shrink-0 place-items-center overflow-hidden rounded-[16px] bg-[#F9FAFC] p-2 dark:bg-[#1B1B20]">
-                                <span
+                                <ProviderLogo
+                                  provider={p}
+                                  size={30}
                                   className={cn(
-                                    "grid size-full place-items-center text-[13px] font-extrabold text-black transition-transform duration-300",
+                                    "transition-transform duration-300",
                                     sel ? "scale-[1.2]" : "group-hover:scale-[1.2]",
                                   )}
-                                  style={{ background: p.color }}
-                                >
-                                  {p.abbr}
-                                </span>
+                                />
                               </div>
                               <div className="flex min-w-0 flex-1 flex-col items-start gap-[6px]">
                                 <div className="flex w-full items-center gap-2">

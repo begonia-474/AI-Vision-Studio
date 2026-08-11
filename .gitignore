@@ -27,7 +27,7 @@ config/
 
 
 #文档
-docs/*
+docs/参考/
 
 #agents相关
 .agents/*

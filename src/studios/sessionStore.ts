@@ -46,7 +46,7 @@ export interface ResultItem {
   format?: string; // 图像输出格式（png/jpeg）
   duration?: string;
   refs?: string[];
-  loras?: LoraEntry[]; // 重新生成参数快照：LoRA 列表（自定义魔搭厂商）
+  loras?: LoraEntry[]; // 重新生成参数快照：LoRA 列表（魔搭用户自添加模型）
   error?: string;
   // loading 期间实时阶段（由 gen-progress 事件按 taskId 写入；进度数值不展示，
   // 卡片上用装饰性动画代替，避免后端跳变式进度显得卡顿）

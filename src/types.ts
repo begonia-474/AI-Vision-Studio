@@ -27,7 +27,7 @@ export interface GenRequest {
   /** 图像输出格式（火山方舟 Seedream 5.0 pro/lite）：png / jpeg，缺省 jpeg */
   output_format?: string;
   references?: string[];
-  /** 自定义厂商透传：{ params: 用户按模型配置的自由参数 } */
+  /** 用户自添加模型透传：{ params: 用户按模型配置的自由参数 } */
   extra?: Record<string, unknown>;
 }
 
@@ -144,6 +144,6 @@ export interface StudioJump {
   /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等） */
   params?: Record<string, string | number>;
   refs?: string[];
-  /** LoRA 列表（自定义魔搭厂商；重新编辑/跳转时回填弹层） */
+  /** LoRA 列表（魔搭用户自添加模型；重新编辑/跳转时回填弹层） */
   loras?: LoraEntry[];
 }

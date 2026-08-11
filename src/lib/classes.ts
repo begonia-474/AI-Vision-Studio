@@ -30,6 +30,3 @@ export const AR_TAG = "text-[10px] text-muted-foreground";
 export const CM_BADGE =
   "ml-1.5 inline-block align-middle rounded-full bg-soft px-1.5 py-px text-[9px] font-bold text-muted-foreground";
 export const CM_BADGE_ACCENT = "bg-accent text-primary";
-
-export const PROVIDER_LOGO =
-  "grid size-4 shrink-0 place-items-center rounded-[6px] text-[8px] font-extrabold text-black";

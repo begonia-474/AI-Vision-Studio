@@ -10,6 +10,7 @@ import { cn } from "../lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import type { View } from "../App";
 import type { SessionApi } from "../studios/sessionStore";
+import logo from "../assets/logo.png";
 
 /** 折叠态悬停提示：展开态原样返回（不显示任何额外信息），折叠态包一层右侧 Tooltip */
 function TooltipIf({ show, label, children }: { show: boolean; label: string; children: ReactElement }) {
@@ -66,11 +67,7 @@ export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onS
       {/* 顶栏：logo + 程序名 + 折叠按钮（哩布式：成对居中，折叠时仅留居中的折叠钮） */}
       <div className="flex h-[68px] shrink-0 items-center justify-center gap-4 border-b border-border-1 px-2">
         <div className={cn("flex min-w-0 items-center gap-2", collapsed && "hidden")}>
-          <div className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-black">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
-          </div>
+          <img src={logo} alt="AI Vision Studio" draggable={false} className="size-7 shrink-0 rounded-md object-contain" />
           <span className="truncate text-[13px] font-bold tracking-tight">AI Vision Studio</span>
         </div>
         <button

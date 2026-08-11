@@ -12,7 +12,8 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { cn } from "../lib/utils";
-import { BADGE, BADGE_OK, BADGE_WARN, BTN, MDESC, MODAL, PROVIDER_LOGO, TAG } from "../lib/classes";
+import { BADGE, BADGE_OK, BADGE_WARN, BTN, MDESC, MODAL, TAG } from "../lib/classes";
+import { ProviderLogo } from "./ProviderLogo";
 
 interface ByokModalProps {
   open: boolean;
@@ -137,12 +138,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
           return (
             <div className="mb-3 rounded-md border border-border-2 bg-chip p-4" key={p.id}>
               <div className="mb-1 flex flex-wrap items-center gap-2.5">
-                <span
-                  className={cn(PROVIDER_LOGO, "text-[10px]")}
-                  style={{ background: p.color, width: 24, height: 24, borderRadius: 6, display: "grid", placeItems: "center", fontSize: 10 }}
-                >
-                  {p.abbr}
-                </span>
+                <ProviderLogo provider={p} size={24} className="rounded-[6px]" />
                 <h3 className="m-0 flex-1 text-sm font-bold">{p.i18nName ? t(p.name as ParseKeys) : p.name}</h3>
                 {badge(c.status)}
                 <Badge variant="outline" className={TAG}>{caps.join(" · ")}</Badge>

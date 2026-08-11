@@ -25,7 +25,7 @@ export interface StudioApi {
   mode: "single" | "group"; // 生图模式：单图固定 1 张（API 无 n），组图 = sequential auto
   size: { w: number; h: number } | null; // 自定义像素尺寸（仅声明 size 区的模型，选中比例时同步）
   sizeLocked: boolean; // W/H 锁定比例联动
-  paramValues: Record<string, string | number>; // 自定义厂商自由参数（popover 运行时值，提交时覆盖 params 默认）
+  paramValues: Record<string, string | number>; // 用户自添加模型的自由参数（popover 运行时值，提交时覆盖 params 默认）
   loras: LoraEntry[]; // LoRA 列表（魔搭 loras 字段；1 个→字符串，多个→{repo: weight}）
   prompt: string;
   refs: string[];
@@ -281,7 +281,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       const useCustomSize = size !== null && supportsCustomSize(m);
       const sizeField = useCustomSize ? `${size.w}x${size.h}` : aspectToSize(m.providerId, m.id, ar0, q);
       const extra = isVideo ? `${d}s · ${q}` : q;
-      // 自定义厂商：透传用户按模型配置的自由参数（协议原生字段名，如
+      // 用户自添加模型：透传按模型配置的自由参数（协议原生字段名，如
       // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））。
       // popover 里调整过的参数（paramValues）覆盖配置默认值；数值参数转 number，空值跳过。
       let customExtra: { params: Record<string, unknown> } | undefined;

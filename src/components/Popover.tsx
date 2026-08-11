@@ -297,7 +297,7 @@ function NumberBox({
   );
 }
 
-// —— 自定义厂商自由参数（popover 运行时调整，提交覆盖 params 默认） ——
+// —— 用户自添加模型的自由参数（popover 运行时调整，提交覆盖 params 默认） ——
 function ParamRow({
   section,
   api,

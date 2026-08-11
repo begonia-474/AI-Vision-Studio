@@ -7,6 +7,12 @@ import { useEffect, useReducer } from "react";
 import type { ParseKeys, TFunction } from "i18next";
 import { deleteUserModel, listUserModels } from "../api";
 import type { CustomModelConfig, UserModelRow } from "../types";
+// 供应商品牌图标（lobehub/lobe-icons，MIT）：透明底彩色 logo，渲染处 object-contain
+import volcengineLogo from "../assets/providers/volcengine-color.svg";
+import klingLogo from "../assets/providers/kling-color.svg";
+import qwenLogo from "../assets/providers/qwen-color.svg";
+import minimaxLogo from "../assets/providers/minimax-color.svg";
+import modelscopeLogo from "../assets/providers/modelscope-color.svg";
 
 export type Studio = "image" | "video";
 export type Capability = "t2i" | "i2i" | "t2v" | "i2v" | "r2v";
@@ -34,11 +40,11 @@ export type ParamSectionDef =
       /** 比例网格下方附加 W/H 自定义尺寸输入 + 锁定（仅 pixel-size 厂商，如 volcark） */
       size?: boolean;
     }
-  | { type: "size"; key: "size"; title: string } // 独立 W/H 自定义尺寸分区（自定义厂商提交 size="WxH"）
+  | { type: "size"; key: "size"; title: string } // 独立 W/H 自定义尺寸分区（pixel-size 模型提交 size="WxH"）
   | { type: "loras"; key: "loras"; title: string } // LoRA 列表（repo-id + 权重行，提交时 1 个→字符串，多个→{repo: weight}）
   | {
       type: "param";
-      key: string; // 接口字段名（自定义厂商自由参数，运行时调整）
+      key: string; // 接口字段名（用户自添加模型的自由参数，运行时调整）
       title: string; // 分区标题（直接显示，非 i18n key）
       kind: "number" | "text";
       def?: string;
@@ -50,10 +56,12 @@ export interface ProviderMeta {
   name: string;
   abbr: string;
   color: string;
+  /** 品牌 logo（lobehub 彩色 SVG，透明底）；内置厂商恒有，用户自添加模型挂靠内置厂商亦有 */
+  logo?: string;
   wired: boolean; // 后端是否已接入（仅 wired=true 可真实生成）
   capabilities: Capability[];
   authHelp: string;
-  i18nName?: boolean; // name 是否为 i18n key（内置 true；自定义厂商 false，name 即显示名）
+  i18nName?: boolean; // name 是否为 i18n key（内置 true；兜底路径 false，name 即显示名）
 }
 
 export interface ModelDef {
@@ -76,44 +84,49 @@ export interface ModelDef {
    *  百炼上很多"不支持编辑"的模型仍支持图生图（实测 z-image-turbo / qwen-image-max）。 */
   edit?: boolean;
   blurb: string; // 模型一句话描述
-  custom?: CustomModelConfig; // 自定义厂商模型配置，供生成时透传参数
+  custom?: CustomModelConfig; // 用户自添加模型配置（模板克隆 + 自定义参数），供生成时透传参数
   /** 参数弹层分区声明；缺省时按 studio/厂商推导（defaultSections） */
   sections?: ParamSectionDef[];
 }
 
 // ============ 厂商元信息 ============
 // 内置厂商 name / authHelp 为 i18n key（src/i18n/locales），渲染处需经 t() 转换；
-// 自定义厂商为明文显示名（i18nName=false），由动态注册表提供。
+// i18nName=false 仅出现在 providerMeta 兜底路径（DB 异常行防御）。
 export const PROVIDERS: Record<string, ProviderMeta> = {
   volcark: {
     id: "volcark", name: "providers.volcark.name", abbr: "BD", color: "#a855f7", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.volcark.authHelp",
     i18nName: true,
+    logo: volcengineLogo,
   },
   kling: {
     id: "kling", name: "providers.kling.name", abbr: "KL", color: "#f43f5e", wired: true,
     capabilities: ["t2v", "i2v"],
     authHelp: "providers.kling.authHelp",
     i18nName: true,
+    logo: klingLogo,
   },
   wanxiang: {
     id: "wanxiang", name: "providers.wanxiang.name", abbr: "AL", color: "#0ea5e9", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.wanxiang.authHelp",
     i18nName: true,
+    logo: qwenLogo,
   },
   minimax: {
     id: "minimax", name: "providers.minimax.name", abbr: "MX", color: "#ec4899", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.minimax.authHelp",
     i18nName: true,
+    logo: minimaxLogo,
   },
   modelscope: {
     id: "modelscope", name: "providers.modelscope.name", abbr: "MS", color: "#4f46e5", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
     authHelp: "providers.modelscope.authHelp",
     i18nName: true,
+    logo: modelscopeLogo,
   },
 };
 
@@ -401,7 +414,7 @@ export function useUserModels(): ModelDef[] {
   return userModels;
 }
 
-/** 厂商元信息查找（全部为内置厂商）。 */
+/** 厂商元信息查找；未知 pid 兜底到灰色缩写（仅 DB 异常行防御，正常路径不可达）。 */
 export function providerMeta(pid: string): ProviderMeta {
   return (
     PROVIDERS[pid] ?? {
@@ -506,11 +519,11 @@ export function aspectToSize(providerId: string, modelId: string, ar: string, qu
 }
 
 /** W/H 自定义尺寸总像素区间（UI 校验用）：
- *  自定义厂商通用 [512², 4096²]；volcark 官方区间：pro [921600, 4624220]，5.0 lite/4.5 [3686400, 16777216]，4.0 [921600, 16777216]；
+ *  用户自添加模型通用 [512², 4096²]；volcark 官方区间：pro [921600, 4624220]，5.0 lite/4.5 [3686400, 16777216]，4.0 [921600, 16777216]；
  *  wanxiang：qwen/z-image [512², 2048²]，其余 [768², 2048²]（wan2.7-image-pro 文生图 4K 放宽到 [768², 4096²]）。 */
 export function pixelBounds(model: ModelDef): { min: number; max: number } {
   if (model.custom) {
-    // 自定义/魔搭内置模型：最小 512²，最大按模型上限（魔搭 msMax，其余 4096²）。
+    // 用户自添加/魔搭内置模型：最小 512²，最大按模型上限（魔搭 msMax，其余 4096²）。
     const max = model.providerId === "modelscope" ? msMax(model.id) : 4096;
     return { min: 512 * 512, max: max * max };
   }

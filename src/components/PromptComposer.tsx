@@ -9,7 +9,7 @@ import { ModelSelectModal } from "./ModelSelectModal";
 import { ParamPanel } from "./Popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { cn } from "../lib/utils";
-import { PROVIDER_LOGO } from "../lib/classes";
+import { ProviderLogo } from "./ProviderLogo";
 import {
   IconAspect,
   IconChevron,
@@ -219,9 +219,7 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
             className={cn(ctrlBtn, openModel && ctrlBtnActive)}
             onClick={() => openOne(setOpenModel)(true)}
           >
-            <span className={cn(PROVIDER_LOGO, "size-4")} style={{ background: provider.color }}>
-              {provider.abbr}
-            </span>
+            <ProviderLogo provider={provider} size={16} />
             <span className={cn(ctrlLabel, openModel && "opacity-100")}>{api.model.name}</span>
             <IconChevron className="size-[10px] shrink-0 opacity-45 group-hover/ctrl:opacity-100" size={10} />
           </button>
