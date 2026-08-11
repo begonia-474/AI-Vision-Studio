@@ -20,9 +20,20 @@ pub fn app_dir() -> PathBuf {
 }
 
 /// 生成产物根目录（ComfyUI 式 output）：%LOCALAPPDATA%\AIVisionStudio\outputs\，
-/// 扁平存放，文件名 {ts}_{provider}_{uuid} 时间戳唯一。
+/// 按生成日期归档子目录 outputs\YYYY\MM\DD\（文件名 {ts}_{model}_{uuid} 时间戳唯一）。
 pub fn asset_root() -> PathBuf {
     app_dir().join("outputs")
+}
+
+/// 当日产物目录：outputs\YYYY\MM\DD（不存在时创建）。
+fn today_output_dir() -> Result<PathBuf, String> {
+    let now = chrono::Local::now();
+    let dir = asset_root()
+        .join(now.format("%Y").to_string())
+        .join(now.format("%m").to_string())
+        .join(now.format("%d").to_string());
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
 }
 
 /// 参考图收编根目录（ComfyUI 式 input）：%LOCALAPPDATA%\AIVisionStudio\inputs\。
@@ -52,31 +63,29 @@ fn open_conn() -> Result<Connection, String> {
 
 // —— AssetStore ——
 
-/// 把厂商返回的图片/视频 URL 下载到本地：%LOCALAPPDATA%\AIVisionStudio\outputs\。
-/// 文件名 {timestamp}_{provider}_{shortid}.{ext}，返回绝对路径。
+/// 把厂商返回的图片/视频 URL 下载到本地：%LOCALAPPDATA%\AIVisionStudio\outputs\YYYY\MM\DD\。
+/// 文件名 {timestamp}_{model}_{uuid}.{ext}，返回绝对路径。
 pub async fn save_remote(
     client: &reqwest::Client,
     url: &str,
-    provider_id: &str,
+    model: &str,
 ) -> Result<String, String> {
-    let root = asset_root();
     let now = chrono::Local::now();
-    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let day_dir = today_output_dir()?;
 
     let ext = guess_extension(url);
     let ts = now.format("%Y%m%d_%H%M%S").to_string();
     let short_id = uuid::Uuid::new_v4().simple().to_string();
-    // 厂商 id 含非法文件名字符时统一替换为安全字符（Windows 的 ":" 会当作 NTFS 数据流分隔符）。
-    let safe_provider: String = provider_id
+    // 模型段：用户自建模型 id 是自由输入（可含 /、中文等），统一替换为安全字符（Windows
+    // 文件名限制），并截断控制总长（ts 14 + model 24 + uuid 32 ≈ 70，远低于系统限制）。
+    let safe_model: String = model
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
-    // 文件名 {ts}_{provider前12位}_{uuid}：UUID 必须完整保留——
-    // 同一秒内并行/批量下载的多张图靠它区分，截断 uuid 会同名覆盖（只剩最后一张）。
-    // provider 截断到 12 位控制总长（ts 14 + provider 12 + uuid 32 ≈ 59，远低于系统限制）。
-    let provider_short: String = safe_provider.chars().take(12).collect();
-    let name = format!("{}_{}_{}", ts, provider_short, short_id);
-    let full_path = root.join(format!("{}{}", name, ext));
+    let model_short: String = safe_model.chars().take(24).collect();
+    // UUID 必须完整保留——同一秒内并行/批量下载的多张图靠它区分，截断 uuid 会同名覆盖（只剩最后一张）。
+    let name = format!("{}_{}_{}", ts, model_short, short_id);
+    let full_path = day_dir.join(format!("{}{}", name, ext));
 
     if url.to_lowercase().starts_with("data:") {
         let comma = url.find(',').ok_or("invalid data url")?;
@@ -293,7 +302,15 @@ pub fn is_image_path(p: &str) -> bool {
     [".png", ".jpg", ".jpeg", ".webp"].iter().any(|e| lower.ends_with(e))
 }
 
-/// 为图片生成 256px 缩略图（WEBP，失败回退 PNG），输出到 thumbs 目录 `{stem}.thumb.*`。
+/// 缩略图目录：镜像产物路径的日期子路径（outputs\YYYY\MM\DD → thumbs\YYYY\MM\DD）。
+/// 无日期子路径的产物（旧数据）自然落到 thumbs 根（join("") 即根目录）。
+fn thumbnail_dir_for(src: &Path) -> PathBuf {
+    let rel = src.strip_prefix(asset_root()).unwrap_or(src);
+    let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+    thumbnail_root().join(parent)
+}
+
+/// 为图片生成 256px 缩略图（WEBP，失败回退 PNG），输出到与产物同日期子路径的 thumbs 目录。
 /// 缩略图是可再生的预览文件（ensure_thumbnails 可重建），不随产物放 outputs。
 /// 生成失败返回 Err（调用方忽略即可，不影响主流程）。
 pub fn make_thumbnail(src: &str) -> Result<String, String> {
@@ -306,7 +323,7 @@ pub fn make_thumbnail(src: &str) -> Result<String, String> {
         .ok_or("invalid file name")?
         .to_string_lossy()
         .to_string();
-    let dir = thumbnail_root();
+    let dir = thumbnail_dir_for(&path);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let webp_dest = dir.join(format!("{}.thumb.webp", stem));
     match thumb.save_with_format(&webp_dest, image::ImageFormat::WebP) {
@@ -331,11 +348,12 @@ fn thumbnail_path_of(p: &str) -> PathBuf {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let webp = thumbnail_root().join(format!("{}.thumb.webp", stem));
+    let dir = thumbnail_dir_for(&path);
+    let webp = dir.join(format!("{}.thumb.webp", stem));
     if webp.exists() {
         return webp;
     }
-    let png = thumbnail_root().join(format!("{}.thumb.png", stem));
+    let png = dir.join(format!("{}.thumb.png", stem));
     if png.exists() {
         return png;
     }

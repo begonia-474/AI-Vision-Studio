@@ -30,7 +30,7 @@
 |------|---------|---------|---------|
 | 火山方舟（即梦/豆包） | ✅ | Seedream 5.0 Pro / 5.0 Lite / 4.5 / 4.0 | Seedance 2.0 / 2.0 Fast / 2.0 Mini / 1.5 Pro / 1.0 Pro / 1.0 Pro Fast |
 | 可灵 Kling | ✅ | — | Kling 3.0 / 2.6 |
-| 通义万相 | ✅ | wan2.6-t2i / wan2.6-image | wan2.7-t2v / wan2.7-i2v |
+| 通义万相 | ✅ | qwen-image 2.0 / edit / max / plus 系列、wan2.7-image、wan2.6-t2i / wan2.6-image、z-image-turbo（共 13 个） | wan2.7-t2v / wan2.7-i2v |
 | MiniMax 海螺 | ✅ | image-01 / image-01-live | Hailuo video-01 |
 | 魔搭 ModelScope | ✅ | 魔搭 AIGC 专区模型（含 LoRA） | — |
 
@@ -51,7 +51,7 @@
 ┌────────────────────── 前端 (React + TS) ──────────────────────┐
 │  App ── Sidebar（会话列表 / BYOK / 设置）           │
 │   ├─ ImageStudio / VideoStudio ── TaskTimeline（对话式时间线）  │
-│   │        └─ useStudio ─ sessionStore（多会话 + localStorage） │
+│   │        └─ useStudio ─ sessionStore（多会话 + SQLite 持久化） │
 │   └─ GalleryView（哩布风格图库）── DetailPanel（作品详情）        │
 │   api.ts (Tauri invoke + gen-progress 事件订阅 + asset URL)    │
 └──────────────────────────┬────────────────────────────────────┘
@@ -127,8 +127,8 @@ cargo test           # Rust 单元测试（src-tauri/src/storage.rs 等）
 
 | 数据 | 位置 |
 |------|------|
-| 生成产物 | `%LOCALAPPDATA%\AIVisionStudio\outputs\`（扁平命名 `{时间戳}_{厂商}_{uuid}`） |
-| 缩略图 | `%LOCALAPPDATA%\AIVisionStudio\thumbs\`（可再生的预览文件） |
+| 生成产物 | `%LOCALAPPDATA%\AIVisionStudio\outputs\YYYY\MM\DD\`（按生成日期归档，文件名 `{时间戳}_{模型}_{uuid}`） |
+| 缩略图 | `%LOCALAPPDATA%\AIVisionStudio\thumbs\`（镜像产物日期子路径，可再生的预览文件） |
 | 参考图收编 | `%LOCALAPPDATA%\AIVisionStudio\inputs\` |
 | 历史记录 / 用户自添加模型 | `%LOCALAPPDATA%\AIVisionStudio\history.db` |
 | API Key | 系统凭据管理器（Service: `AIVisionStudio.ApiKey`） |

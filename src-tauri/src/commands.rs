@@ -332,7 +332,7 @@ pub async fn generate(
         let mut last_err = String::new();
         let mut ok = false;
         for attempt in 0..3u64 {
-            match storage::save_remote(client.inner(), url, &provider_id).await {
+            match storage::save_remote(client.inner(), url, &model).await {
                 Ok(p) => {
                     local_paths.push(p);
                     ok = true;

@@ -57,7 +57,8 @@ interface GalleryEntry {
   fallback?: string;
 }
 
-// 缩略图命名约定：thumbs 目录 `{stem}.thumb.webp`（后端 make_thumbnail 输出），
+// 缩略图命名约定：thumbs 目录 `{stem}.thumb.webp`（后端 make_thumbnail 输出，镜像产物日期子路径
+// outputs\YYYY\MM\DD → thumbs\YYYY\MM\DD；旧平铺数据回退 thumbs 根），
 // 网格按产物路径推导渲染（产物父目录 outputs → thumbs），缺缩略图时由 <img onError> 回退原图。
 const thumbOf = (p: string): string => {
   const i = p.lastIndexOf(".");
@@ -66,7 +67,8 @@ const thumbOf = (p: string): string => {
   const dirEnd = p.lastIndexOf(sep);
   if (dirEnd < 0) return p;
   const stem = p.slice(dirEnd + 1, i);
-  const dir = p.slice(0, dirEnd).replace(/outputs$/i, "thumbs");
+  // 替换 outputs 目录段为 thumbs（保留日期子路径），兼容旧平铺（outputs 在尾部）
+  const dir = p.slice(0, dirEnd).replace(/(^|[\\/])outputs([\\/]|$)/i, "$1thumbs$2");
   return `${dir}${sep}${stem}.thumb.webp`;
 };
 
