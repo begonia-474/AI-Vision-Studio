@@ -51,6 +51,11 @@ cargo test           # Rust 单元测试（src-tauri/src/storage.rs 等）
 
 > `npm run tauri dev` 会同时启动 Vite 与 Rust 后端。生产构建的 CSP 已启用；开发模式使用 `devCsp: null` 以兼容 React Fast Refresh。
 
+### 持续集成（CI/CD）
+
+- **CI**（`.github/workflows/ci.yml`）：每次 push / PR 自动跑前端 `npm run build` 与后端 `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo check --all-targets` + `cargo test`（Ubuntu runner，含 Tauri Linux 系统依赖）。
+- **发布**（`.github/workflows/release.yml`）：打 `v*` 标签触发 `tauri-action` 在 Windows / macOS（aarch64 + x86_64）/ Linux 构建安装包，创建 Release 草稿供人工确认后发布。
+
 ### 应用图标
 
 应用图标（窗口/任务栏）在编译期由 tauri-build 嵌入可执行文件；`src-tauri/build.rs` 已显式声明 `rerun-if-changed`，更换 `icons/icon.ico` 后重编译会自动生效。重生成全套图标：`npm run tauri icon <1024px源图>`（源图在 `assets/AI_Vision_Studio_logo_1024.png`）。

@@ -4,8 +4,8 @@
 use tauri::{AppHandle, Emitter, State};
 
 use crate::models::{
-    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, ProgressPayload,
-    ProviderInfoDto, SessionRow, TaskHandle, TaskPhase, UserModelRow,
+    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, ProgressPayload, ProviderInfoDto,
+    SessionRow, TaskHandle, TaskPhase, UserModelRow,
 };
 use crate::providers::{all_providers, get_provider, sanitize_body, GenerationProvider};
 use crate::storage;
@@ -88,8 +88,7 @@ pub async fn test_api_key(
         .await
         .map_err(|e| format!("读取密钥异常: {}", e))??
         .ok_or("未设置 API Key")?;
-    let provider = get_provider(&provider_id, client.inner().clone())
-        .ok_or("未知的 provider")?;
+    let provider = get_provider(&provider_id, client.inner().clone()).ok_or("未知的 provider")?;
     provider.test_connectivity(&api_key).await
 }
 
@@ -100,8 +99,7 @@ pub async fn generate(
     client: State<'_, reqwest::Client>,
 ) -> Result<GenerationResultDto, String> {
     let provider_id = req.provider_id.clone();
-    let provider = get_provider(&provider_id, client.inner().clone())
-        .ok_or("未知的 provider")?;
+    let provider = get_provider(&provider_id, client.inner().clone()).ok_or("未知的 provider")?;
     // keys.json 读取是同步文件 IO，丢阻塞线程池避免占 tokio 工作线程。
     let pid_key = provider_id.clone();
     let api_key = tokio::task::spawn_blocking(move || storage::get_key(&pid_key))
@@ -262,7 +260,14 @@ pub async fn generate(
     let local_paths = match download_all(client.inner(), &remote_urls, &model).await {
         Ok(paths) => paths,
         Err((e, partial)) => {
-            fail_generation(&app, &req.task_id, history_id, &collected_refs, &partial, &e)?;
+            fail_generation(
+                &app,
+                &req.task_id,
+                history_id,
+                &collected_refs,
+                &partial,
+                &e,
+            )?;
             return Err(e);
         }
     };
@@ -283,7 +288,11 @@ pub async fn generate(
         Some(p) => make_thumbnail_blocking(p).await,
         None => None,
     };
-    for p in local_paths.iter().skip(1).filter(|p| storage::is_image_path(p)) {
+    for p in local_paths
+        .iter()
+        .skip(1)
+        .filter(|p| storage::is_image_path(p))
+    {
         let _ = make_thumbnail_blocking(p).await;
     }
 
@@ -395,6 +404,8 @@ fn fail_generation(
 /// 与轮询总时长上限（厂商任务卡死时不能无限轮询，图像 20 分钟/视频 60 分钟；
 /// 超时后服务端任务可能仍在生成并计费——错误文案提示用户稍后可到图库核对）。
 /// 终态前一律经 fail_generation 收尾并返回 Err。
+/// 参数来自 generate 的多个来源（app/request/provider/history），各自独立无聚合意义，故允许。
+#[allow(clippy::too_many_arguments)]
 async fn poll_to_finish(
     app: &AppHandle,
     provider: &dyn GenerationProvider,
@@ -616,4 +627,3 @@ pub async fn delete_user_model(id: i64) -> Result<(), String> {
         .await
         .map_err(|e| format!("删除自添加模型异常: {}", e))?
 }
-

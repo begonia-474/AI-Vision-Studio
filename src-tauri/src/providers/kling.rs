@@ -28,10 +28,7 @@ impl KlingProvider {
         ProviderInfoDto {
             id: PROVIDER_ID.to_string(),
             display_name: "可灵 Kling".to_string(),
-            capabilities: vec![
-                "text_to_video".to_string(),
-                "image_to_video".to_string(),
-            ],
+            capabilities: vec!["text_to_video".to_string(), "image_to_video".to_string()],
             auth_help: "推荐 API Key（Bearer）；旧模型兼容 JWT（暂不支持）。".to_string(),
         }
     }
@@ -61,7 +58,10 @@ impl GenerationProvider for KlingProvider {
             .clone()
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let ar = req.aspect_ratio.clone().unwrap_or_else(|| "16:9".to_string());
+        let ar = req
+            .aspect_ratio
+            .clone()
+            .unwrap_or_else(|| "16:9".to_string());
         // duration 字符串透传（可灵接口为字符串），越界值钳制到 [2,15] 防 400。
         let duration = req
             .duration
@@ -101,7 +101,10 @@ impl GenerationProvider for KlingProvider {
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "POST",
             url: url.clone(),
@@ -165,13 +168,7 @@ impl GenerationProvider for KlingProvider {
         // task_id 前缀无法反推 endpoint，故两个端点都尝试一次（容忍 404）。
         for endpoint in ["text2video", "image2video"] {
             let url = format!("{}/v1/videos/{}/{}", BASE_URL, endpoint, handle.task_id);
-            let resp = match self
-                .client
-                .get(&url)
-                .bearer_auth(api_key)
-                .send()
-                .await
-            {
+            let resp = match self.client.get(&url).bearer_auth(api_key).send().await {
                 Ok(r) => r,
                 Err(_) => continue,
             };
@@ -179,7 +176,10 @@ impl GenerationProvider for KlingProvider {
             if status.as_u16() == 404 {
                 continue; // 端点不匹配，换下一个
             }
-            let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| format!("读取响应失败: {}", e))?;
             let record = HttpRecord {
                 method: "GET",
                 url: url.clone(),

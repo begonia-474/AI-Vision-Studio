@@ -80,7 +80,10 @@ impl GenerationProvider for MiniMaxProvider {
             .await
             .map_err(|e| format!("轮询失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let mut http_log = vec![HttpRecord {
             method: "GET",
             url: url.clone(),
@@ -144,7 +147,12 @@ impl GenerationProvider for MiniMaxProvider {
             "failed" => Ok(TaskSnapshot {
                 phase: TaskPhase::Failed,
                 progress: 100,
-                message: Some(v.get("task_err").and_then(|e| e.as_str()).unwrap_or("生成失败").to_string()),
+                message: Some(
+                    v.get("task_err")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("生成失败")
+                        .to_string(),
+                ),
                 remote_urls: vec![],
                 http_log,
             }),
@@ -184,7 +192,10 @@ impl MiniMaxProvider {
             .clone()
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_IMAGE_MODEL.to_string());
-        let ar = req.aspect_ratio.clone().unwrap_or_else(|| "1:1".to_string());
+        let ar = req
+            .aspect_ratio
+            .clone()
+            .unwrap_or_else(|| "1:1".to_string());
 
         let mut payload = json!({
             "model": model,
@@ -195,12 +206,11 @@ impl MiniMaxProvider {
         });
         // i2i：subject_reference（character 角色参考）
         if req.capability == "i2i" && !req.references.is_empty() {
-            payload["subject_reference"] = json!(
-                req.references
-                    .iter()
-                    .map(|r| json!({ "type": "character", "image_file": r }))
-                    .collect::<Vec<_>>()
-            );
+            payload["subject_reference"] = json!(req
+                .references
+                .iter()
+                .map(|r| json!({ "type": "character", "image_file": r }))
+                .collect::<Vec<_>>());
         }
 
         let resp = self
@@ -246,7 +256,10 @@ impl MiniMaxProvider {
         log: &mut Vec<HttpRecord>,
     ) -> Result<(Option<Vec<String>>, Option<String>), String> {
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         log.push(HttpRecord {
             method: "POST",
             url,
@@ -283,13 +296,11 @@ impl MiniMaxProvider {
                     .collect::<Vec<_>>()
             })
             .or_else(|| {
-                v.get("images")
-                    .and_then(|u| u.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                            .collect::<Vec<_>>()
-                    })
+                v.get("images").and_then(|u| u.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
             });
         Ok((urls, None))
     }
@@ -309,7 +320,7 @@ impl MiniMaxProvider {
         let resolution = req.quality.clone().unwrap_or_else(|| "1080P".to_string());
 
         // i2v：first_frame_image
-        if req.capability == "i2v" && req.references.first().is_none() {
+        if req.capability == "i2v" && req.references.is_empty() {
             return Err("i2v 需要首帧参考图".to_string());
         }
         let mut payload = json!({
@@ -337,7 +348,10 @@ impl MiniMaxProvider {
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "POST",
             url: url.clone(),
@@ -406,7 +420,10 @@ impl MiniMaxProvider {
             .await
             .map_err(|e| format!("拉取文件失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         log.push(HttpRecord {
             method: "GET",
             url: url.clone(),

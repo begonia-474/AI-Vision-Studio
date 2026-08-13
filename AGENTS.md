@@ -49,7 +49,9 @@ cd src-tauri && cargo check --all-targets   # 后端门禁
 cd src-tauri && cargo test                  # 后端单测（storage 层）
 ```
 
-- **提交前跑最小相关检查，并报告实际运行的命令**：前端改动 `npm run build`，后端改动 `cargo check --all-targets` + `cargo test`；不要为每次提交重跑已通过的检查。仓库没有 CI、没有 ESLint / Prettier / Biome——tsc 与 cargo 就是全部门禁，Rust 保持 `cargo fmt` 默认格式。
+- **提交前跑最小相关检查，并报告实际运行的命令**：前端改动 `npm run build`，后端改动 `cargo check --all-targets` + `cargo test`；不要为每次提交重跑已通过的检查。仓库没有 ESLint / Prettier / Biome——tsc 与 cargo 就是全部门禁，Rust 保持 `cargo fmt` 默认格式。
+- **CI 门禁（`.github/workflows/ci.yml`）**：每次 push / PR 自动跑前端 `npm run build` 与后端 `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo check --all-targets` + `cargo test`。推送前务必本地先过一遍，避免红叉；CI 是最终裁决，本地检查是前置自查。
+- **CD 发布（`.github/workflows/release.yml`）**：打 `v*` 标签（如 `v0.2.0`）触发 Windows / macOS（双架构）/ Linux 三平台构建并创建 Release 草稿，人工确认后发布；发布前同步更新 `src-tauri/tauri.conf.json` 的 version。
 - 证据匹配表面：行为改动看测试与构建，文档改动核对 README / docs 一致，纯类型改动 `tsc` / `cargo check` 即可。
 - 环境适配说明（Vite 固定端口 53217/53218 的决策理由、图标重生成）见 [docs/architecture.md](docs/architecture.md#环境适配说明)；端口是刻意决策，不要"顺手修正"为默认值。
 

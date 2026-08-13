@@ -120,10 +120,7 @@ fn image_protocol(model: &str) -> ImageProtocol {
 /// 总像素 ≈ k²（比例非 1:1 时略小），宽高比落在官方 [1:8, 8:1] 内。
 fn ratio_px(ar: &str, k: i64) -> String {
     let (a, b) = match ar.split_once(':') {
-        Some((x, y)) => (
-            x.parse::<i64>().unwrap_or(1),
-            y.parse::<i64>().unwrap_or(1),
-        ),
+        Some((x, y)) => (x.parse::<i64>().unwrap_or(1), y.parse::<i64>().unwrap_or(1)),
         None => (1, 1),
     };
     if a <= 0 || b <= 0 {
@@ -189,14 +186,11 @@ fn extra_param<'a>(req: &'a GenRequest, key: &str) -> Option<&'a serde_json::Val
 
 /// 负向提示词：顶层字段优先，fallback extra.params；截断 ≤500 字符（官方上限）。
 fn negative_prompt(req: &GenRequest) -> Option<String> {
-    let raw = req
-        .negative_prompt
-        .clone()
-        .or_else(|| {
-            extra_param(req, "negative_prompt")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })?;
+    let raw = req.negative_prompt.clone().or_else(|| {
+        extra_param(req, "negative_prompt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    })?;
     let t = raw.trim();
     if t.is_empty() {
         return None;
@@ -207,7 +201,10 @@ fn negative_prompt(req: &GenRequest) -> Option<String> {
 /// seed：仅从 extra.params 透传（无 UI），钳制 [0, 2147483647]。
 fn seed_param(req: &GenRequest) -> Option<i64> {
     extra_param(req, "seed")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .map(|s| s.clamp(0, 2_147_483_647))
 }
 
@@ -251,7 +248,10 @@ impl GenerationProvider for DashScopeProvider {
             .await
             .map_err(|e| format!("轮询失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "GET",
             url: url.clone(),
@@ -525,6 +525,7 @@ impl DashScopeProvider {
     /// i2i 格式分两种：
     /// - max/plus/image：**单对象合并** [{text, image}]（实测 2026-08-05，content 长度必须为 1，仅单图参考）
     /// - 2.0 系列 / edit 系列：独立对象 [{text}, {image}...]（官方文档格式，参考 ≤3 张）
+    ///
     /// qwen-image-edit（无后缀）不支持 size 参数。
     async fn submit_image_qwen(
         &self,
@@ -548,7 +549,10 @@ impl DashScopeProvider {
         // 变体张数：2.0 系列 / edit-max / edit-plus 1-6；max/plus/image/edit 固定 1。
         let variable = matches!(
             model,
-            "qwen-image-2.0-pro" | "qwen-image-2.0" | "qwen-image-edit-max" | "qwen-image-edit-plus"
+            "qwen-image-2.0-pro"
+                | "qwen-image-2.0"
+                | "qwen-image-edit-max"
+                | "qwen-image-edit-plus"
         );
         let n = if variable { req.n.clamp(1, 6) } else { 1 };
 
@@ -560,11 +564,12 @@ impl DashScopeProvider {
         } else if merged {
             Some(qwen_legacy_size(ar).to_string())
         } else {
-            let k = if req.quality.as_deref() == Some("1K") { 1024 } else { 2048 };
-            Some(
-                custom_size_px(req, 2048 * 2048)
-                    .unwrap_or_else(|| ratio_px(ar, k)),
-            )
+            let k = if req.quality.as_deref() == Some("1K") {
+                1024
+            } else {
+                2048
+            };
+            Some(custom_size_px(req, 2048 * 2048).unwrap_or_else(|| ratio_px(ar, k)))
         };
 
         let content = if merged && req.capability == "i2i" {
@@ -612,7 +617,11 @@ impl DashScopeProvider {
         api_key: &str,
     ) -> Result<TaskHandle, String> {
         let ar = req.aspect_ratio.as_deref().unwrap_or("1:1");
-        let k = if req.quality.as_deref() == Some("2K") { 2048 } else { 1024 };
+        let k = if req.quality.as_deref() == Some("2K") {
+            2048
+        } else {
+            1024
+        };
         let size = custom_size_px(req, 2048 * 2048).unwrap_or_else(|| ratio_px(ar, k));
         let content = if req.capability == "i2i" {
             let img = req
@@ -655,7 +664,10 @@ impl DashScopeProvider {
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "POST",
             url: url.clone(),
@@ -693,7 +705,10 @@ impl DashScopeProvider {
         }
         // 提取 output.choices[].message.content[].image（组图：同数组多张 image）
         let mut urls = Vec::new();
-        if let Some(choices) = v.get("output").and_then(|o| o.get("choices")).and_then(|c| c.as_array())
+        if let Some(choices) = v
+            .get("output")
+            .and_then(|o| o.get("choices"))
+            .and_then(|c| c.as_array())
         {
             for ch in choices {
                 if let Some(arr) = ch
@@ -744,7 +759,7 @@ impl DashScopeProvider {
             .unwrap_or(5);
 
         // media 结构：i2v 追加 first_frame（首尾帧/驱动音频/视频续写待 UI 支持）。
-        if req.capability == "i2v" && req.references.first().is_none() {
+        if req.capability == "i2v" && req.references.is_empty() {
             return Err("i2v 需要首帧参考图".to_string());
         }
         let mut media = Vec::new();
@@ -802,7 +817,10 @@ impl DashScopeProvider {
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "POST",
             url: url.clone(),

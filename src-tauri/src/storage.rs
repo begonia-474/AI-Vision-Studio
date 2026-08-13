@@ -75,10 +75,7 @@ fn gc_inputs(max_age_days: u64) -> usize {
 }
 
 pub fn app_dir() -> PathBuf {
-    APP_DIR
-        .get()
-        .cloned()
-        .unwrap_or_else(|| default_app_dir())
+    APP_DIR.get().cloned().unwrap_or_else(default_app_dir)
 }
 
 /// 兜底目录（未显式 init 时，如单元测试）：debug 沿用项目本地 .data/，
@@ -158,7 +155,13 @@ pub async fn save_remote(
     // 文件名限制），并截断控制总长（ts 14 + model 24 + uuid 32 ≈ 70，远低于系统限制）。
     let safe_model: String = model
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let model_short: String = safe_model.chars().take(24).collect();
     // UUID 必须完整保留——同一秒内并行/批量下载的多张图靠它区分，截断 uuid 会同名覆盖（只剩最后一张）。
@@ -236,7 +239,8 @@ fn guess_extension(url: &str) -> String {
 pub fn normalize_reference(r: &str) -> Result<String, String> {
     let lower = r.to_lowercase();
     if lower.starts_with("data:") || lower.starts_with("http://") || lower.starts_with("https://") {
-        if lower.starts_with("http://asset.localhost/") || lower.starts_with("https://asset.localhost/")
+        if lower.starts_with("http://asset.localhost/")
+            || lower.starts_with("https://asset.localhost/")
         {
             // http://asset.localhost/C%3A%5CUsers%5C... → 去掉 scheme+host 后百分号解码
             let rest = r.splitn(4, '/').nth(3).unwrap_or(r);
@@ -251,14 +255,18 @@ pub fn normalize_reference(r: &str) -> Result<String, String> {
         let after_host = match rest.split_once('/') {
             Some((head, tail))
                 if !head.is_empty()
-                    && head.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+                    && head
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
                     && !head.contains('%') =>
             {
                 tail
             }
             _ => rest,
         };
-        percent_decode(after_host).trim_start_matches('/').to_string()
+        percent_decode(after_host)
+            .trim_start_matches('/')
+            .to_string()
     } else {
         r.to_string()
     };
@@ -310,7 +318,8 @@ pub fn save_reference(r: &str) -> Result<String, String> {
     }
     if is_url {
         // http(s)://asset.localhost/... 是 Tauri asset 协议的伪装形态，实际是本地文件
-        if lower.starts_with("http://asset.localhost/") || lower.starts_with("https://asset.localhost/")
+        if lower.starts_with("http://asset.localhost/")
+            || lower.starts_with("https://asset.localhost/")
         {
             let rest = r.splitn(4, '/').nth(3).unwrap_or(r);
             return copy_input(percent_decode(rest).trim_start_matches('/'));
@@ -322,14 +331,18 @@ pub fn save_reference(r: &str) -> Result<String, String> {
         let after_host = match rest.split_once('/') {
             Some((head, tail))
                 if !head.is_empty()
-                    && head.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+                    && head
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
                     && !head.contains('%') =>
             {
                 tail
             }
             _ => rest,
         };
-        percent_decode(after_host).trim_start_matches('/').to_string()
+        percent_decode(after_host)
+            .trim_start_matches('/')
+            .to_string()
     } else {
         r.to_string()
     };
@@ -386,7 +399,9 @@ fn percent_decode(s: &str) -> String {
 /// 是否为可解码的图像文件（png/jpg/jpeg/webp）。
 pub fn is_image_path(p: &str) -> bool {
     let lower = p.to_lowercase();
-    [".png", ".jpg", ".jpeg", ".webp"].iter().any(|e| lower.ends_with(e))
+    [".png", ".jpg", ".jpeg", ".webp"]
+        .iter()
+        .any(|e| lower.ends_with(e))
 }
 
 /// 缩略图目录：镜像产物路径的日期子路径（outputs\YYYY\MM\DD → thumbs\YYYY\MM\DD）。
@@ -494,8 +509,11 @@ pub fn ensure_thumbnails() -> Result<usize, String> {
         }
     }
     for (id, t) in backfill {
-        conn.execute("UPDATE tasks SET thumbnail_path=?1 WHERE id=?2", params![t, id])
-            .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE tasks SET thumbnail_path=?1 WHERE id=?2",
+            params![t, id],
+        )
+        .map_err(|e| e.to_string())?;
     }
     Ok(made)
 }
@@ -545,22 +563,25 @@ pub fn ensure_schema() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     // 渐进式迁移：旧库补列（starred 收藏 / thumbnail_path 缩略图 /
     // request_json·raw_response·error HTTP 调试记录 / session_id 会话归属）
-    ensure_column(&conn, "tasks", "starred", "starred INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &conn,
+        "tasks",
+        "starred",
+        "starred INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(&conn, "tasks", "thumbnail_path", "thumbnail_path TEXT")?;
     ensure_column(&conn, "tasks", "request_json", "request_json TEXT")?;
     ensure_column(&conn, "tasks", "error", "error TEXT")?;
     ensure_column(&conn, "tasks", "session_id", "session_id TEXT")?;
     // 会话恢复查询索引（IF NOT EXISTS 幂等，无需 ensure_column）
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);",
-    )
-    .map_err(|e| e.to_string())?;
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);")
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// 幂等补列：pragma_table_info 无该列时执行 ALTER TABLE ADD COLUMN。
 fn ensure_column(conn: &Connection, table: &str, column: &str, ddl: &str) -> Result<(), String> {
-    let sql = format!("SELECT 1 FROM pragma_table_info(?1) WHERE name=?2");
+    let sql = "SELECT 1 FROM pragma_table_info(?1) WHERE name=?2".to_string();
     let exists: bool = conn
         .prepare(&sql)
         .map_err(|e| e.to_string())?
@@ -625,9 +646,7 @@ pub fn insert_task(h: HistoryInsert) -> Result<i64, String> {
 pub fn list_sessions() -> Result<Vec<SessionRow>, String> {
     let conn = open_conn()?;
     let mut stmt = conn
-        .prepare(
-            "SELECT id, title, name_manually_edited, created_at, updated_at FROM sessions",
-        )
+        .prepare("SELECT id, title, name_manually_edited, created_at, updated_at FROM sessions")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -689,6 +708,8 @@ pub fn delete_session(id: &str) -> Result<(), String> {
 
 /// 任务终态回写：提交即落库（status=running），成功/失败后在此收尾。
 /// 失败任务也留行——图库可编辑复用、时间线可删除，产物不会因瞬时错误永久丢失。
+/// 参数多（9 个）是 tasks 表终态字段的直接映射，打包 struct 反而多一层转换，故允许。
+#[allow(clippy::too_many_arguments)]
 pub fn update_task_result(
     id: i64,
     status: &str,
@@ -849,7 +870,8 @@ pub fn save_key(provider_id: &str, api_key: &str) -> Result<(), String> {
     if api_key.trim().is_empty() {
         keys.api_keys.remove(provider_id);
     } else {
-        keys.api_keys.insert(provider_id.to_string(), api_key.trim().to_string());
+        keys.api_keys
+            .insert(provider_id.to_string(), api_key.trim().to_string());
     }
     save_key_file(&keys)
 }
@@ -873,7 +895,8 @@ pub fn save_workspace(provider_id: &str, workspace_id: &str) -> Result<(), Strin
     if workspace_id.trim().is_empty() {
         keys.workspaces.remove(provider_id);
     } else {
-        keys.workspaces.insert(provider_id.to_string(), workspace_id.trim().to_string());
+        keys.workspaces
+            .insert(provider_id.to_string(), workspace_id.trim().to_string());
     }
     save_key_file(&keys)
 }

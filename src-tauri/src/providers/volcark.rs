@@ -169,10 +169,7 @@ impl GenerationProvider for VolcArkProvider {
             });
         }
         // 异步视频：GET /contents/generations/tasks/{id}
-        let url = format!(
-            "{}/contents/generations/tasks/{}",
-            BASE_URL, handle.task_id
-        );
+        let url = format!("{}/contents/generations/tasks/{}", BASE_URL, handle.task_id);
         let resp = self
             .client
             .get(&url)
@@ -181,7 +178,10 @@ impl GenerationProvider for VolcArkProvider {
             .await
             .map_err(|e| format!("轮询失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "GET",
             url: url.clone(),
@@ -295,7 +295,8 @@ impl VolcArkProvider {
         // 组图模式（mode=group 且模型支持）：一次请求 sequential auto + max_images（一组关联图）；
         // 单图模式（默认，含 5.0 pro）：官方 API 无 n 参数，同样参数**并行**请求，每张图一个独立请求
         // （哩布行为：N 张 = N 次请求，计费 N 份），全部归入同一任务。
-        let group = req.mode.as_deref() == Some("group") && want_n > 1 && supports_sequential(&model);
+        let group =
+            req.mode.as_deref() == Some("group") && want_n > 1 && supports_sequential(&model);
         let loops = if group { 1 } else { want_n };
 
         let mut payload = json!({
@@ -415,7 +416,7 @@ impl VolcArkProvider {
         if let Some(data) = v.get("data").and_then(|d| d.as_array()) {
             for item in data {
                 // 单图错误 data.error 不中断其余图，跳过失败项
-                if item.get("error").map_or(false, |e| !e.is_null()) {
+                if item.get("error").is_some_and(|e| !e.is_null()) {
                     continue;
                 }
                 if let Some(u) = item.get("url").and_then(|u| u.as_str()) {
@@ -442,7 +443,10 @@ impl VolcArkProvider {
             .clone()
             .unwrap_or_else(|| "1080p".to_string())
             .to_lowercase();
-        let ratio = req.aspect_ratio.clone().unwrap_or_else(|| "16:9".to_string());
+        let ratio = req
+            .aspect_ratio
+            .clone()
+            .unwrap_or_else(|| "16:9".to_string());
         let duration: i64 = req
             .duration
             .as_deref()
@@ -451,7 +455,7 @@ impl VolcArkProvider {
             .unwrap_or(5);
 
         // content 数组：text + 可选 first_frame
-        if req.capability == "i2v" && req.references.first().is_none() {
+        if req.capability == "i2v" && req.references.is_empty() {
             return Err("i2v 需要首帧参考图".to_string());
         }
         let mut content = vec![json!({ "type": "text", "text": req.prompt })];
@@ -484,7 +488,10 @@ impl VolcArkProvider {
             .await
             .map_err(|e| format!("请求失败: {}", e))?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         let record = HttpRecord {
             method: "POST",
             url: url.clone(),

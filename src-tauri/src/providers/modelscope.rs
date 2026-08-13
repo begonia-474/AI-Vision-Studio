@@ -107,14 +107,8 @@ impl ModelScopeProvider {
             if body.get("seed").is_none() {
                 body["seed"] = json!((Uuid::new_v4().as_u128() % 1_000_000_000) as u64);
             }
-            match Self::ms_create_once(
-                self.client.clone(),
-                api_key,
-                endpoint,
-                body,
-                &mut http_log,
-            )
-            .await
+            match Self::ms_create_once(self.client.clone(), api_key, endpoint, body, &mut http_log)
+                .await
             {
                 Ok(t) => task_ids.push(t),
                 Err(msg) => {
@@ -175,8 +169,7 @@ impl ModelScopeProvider {
         if !status.is_success() {
             return Err(format!("HTTP {}: {}", status, body));
         }
-        let v: Value =
-            serde_json::from_str(&body).map_err(|e| format!("解析响应失败: {}", e))?;
+        let v: Value = serde_json::from_str(&body).map_err(|e| format!("解析响应失败: {}", e))?;
         match v.get("task_id").and_then(|x| x.as_str()) {
             Some(t) => Ok(t.to_string()),
             None => {
@@ -192,7 +185,10 @@ impl ModelScopeProvider {
     async fn poll_inner(&self, handle: &TaskHandle, api_key: &str) -> Result<TaskSnapshot, String> {
         if handle.phase == TaskPhase::Failed {
             return Ok(Self::failed_snapshot(
-                handle.error.clone().unwrap_or_else(|| "生成失败".to_string()),
+                handle
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "生成失败".to_string()),
             ));
         }
         // 单图循环：task_id 打包为 JSON 数组（submit 内），拆分轮询全部并聚合。
@@ -221,7 +217,10 @@ impl ModelScopeProvider {
                     Err(_) => continue,
                 };
                 let status = resp.status();
-                let body = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+                let body = resp
+                    .text()
+                    .await
+                    .map_err(|e| format!("读取响应失败: {}", e))?;
                 if !status.is_success() {
                     if status.as_u16() == 404 || status.as_u16() == 400 {
                         continue;

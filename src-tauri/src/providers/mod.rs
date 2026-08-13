@@ -51,7 +51,9 @@ fn truncate_json_strings(v: serde_json::Value, max: usize) -> serde_json::Value 
             serde_json::Value::String(format!("<省略超长文本，原 {} 字符>", s.chars().count()))
         }
         serde_json::Value::Array(a) => serde_json::Value::Array(
-            a.into_iter().map(|x| truncate_json_strings(x, max)).collect(),
+            a.into_iter()
+                .map(|x| truncate_json_strings(x, max))
+                .collect(),
         ),
         serde_json::Value::Object(o) => serde_json::Value::Object(
             o.into_iter()
