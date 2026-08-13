@@ -119,7 +119,6 @@ impl ModelScopeProvider {
                 Ok(t) => task_ids.push(t),
                 Err(msg) => {
                     return Ok(TaskHandle {
-                        provider_id: PROVIDER_ID.to_string(),
                         task_id: String::new(),
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
@@ -136,7 +135,6 @@ impl ModelScopeProvider {
             serde_json::to_string(&task_ids).unwrap_or_else(|_| task_ids.join(","))
         };
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id: packed,
             phase: TaskPhase::Submitted,
             remote_urls: vec![],

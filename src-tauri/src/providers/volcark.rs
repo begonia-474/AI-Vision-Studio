@@ -343,7 +343,6 @@ impl VolcArkProvider {
                 }
                 Ok(Err(msg)) => {
                     return Ok(TaskHandle {
-                        provider_id: PROVIDER_ID.to_string(),
                         task_id: String::new(),
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
@@ -353,7 +352,6 @@ impl VolcArkProvider {
                 }
                 Err(e) => {
                     return Ok(TaskHandle {
-                        provider_id: PROVIDER_ID.to_string(),
                         task_id: String::new(),
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
@@ -365,7 +363,6 @@ impl VolcArkProvider {
         }
 
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id: String::new(),
             phase: TaskPhase::Succeeded,
             remote_urls: urls,
@@ -497,7 +494,6 @@ impl VolcArkProvider {
         };
         if !status.is_success() {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -513,7 +509,6 @@ impl VolcArkProvider {
             .and_then(|m| m.as_str())
         {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -527,7 +522,6 @@ impl VolcArkProvider {
             .ok_or_else(|| format!("响应缺 id: {}", body))?
             .to_string();
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id,
             phase: TaskPhase::Submitted,
             remote_urls: vec![],

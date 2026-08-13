@@ -24,7 +24,7 @@
       "devCsp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["**/AppData/Local/AIVisionStudio/**"]
+        "scope": ["$APPLOCALDATA/**"]
       }
     }
   },

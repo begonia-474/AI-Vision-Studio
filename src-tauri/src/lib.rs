@@ -7,11 +7,6 @@ use reqwest::Client;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 启动即建库，避免首条命令才建表带来的延迟与并发问题。
-    if let Err(e) = storage::ensure_schema() {
-        eprintln!("警告：初始化历史库失败: {}", e);
-    }
-
     let client = Client::builder()
         .user_agent("AIVisionStudio/0.1")
         // 超时保护：无超时下 TCP 悬挂/厂商无响应会让任务永久卡 loading。
@@ -24,9 +19,18 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // 解析数据目录（debug 本地 .data/，release 平台标准目录）+ 建库 + asset scope 授权。
+            // 启动即完成，避免首条命令才建表带来的延迟与并发问题。
+            if let Err(e) = storage::init(app.handle()) {
+                eprintln!("警告：初始化存储失败: {}", e);
+            }
+            Ok(())
+        })
         .manage(client)
         .invoke_handler(tauri::generate_handler![
             commands::list_providers,
+            commands::get_app_dir,
             commands::save_api_key,
             commands::get_api_key,
             commands::delete_api_key,

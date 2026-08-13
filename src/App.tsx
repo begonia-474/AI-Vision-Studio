@@ -16,7 +16,7 @@ import { GalleryView } from "./components/GalleryView";
 import { ByokModal } from "./components/ByokModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { useSessionStore } from "./studios/sessionStore";
-import { IMAGE_MODELS, VIDEO_MODELS, refreshUserModels } from "./models/registry";
+import { defaultModelForStudio, refreshUserModels } from "./models/registry";
 import type { StudioJump } from "./types";
 
 export type View = "image" | "video" | "gallery";
@@ -114,8 +114,8 @@ export default function App() {
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        defaultImage={IMAGE_MODELS[0].name}
-        defaultVideo={VIDEO_MODELS[1].name}
+        defaultImage={defaultModelForStudio("image").name}
+        defaultVideo={defaultModelForStudio("video").name}
       />
     </div>
   );

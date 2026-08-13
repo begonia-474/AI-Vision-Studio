@@ -111,7 +111,6 @@ impl GenerationProvider for KlingProvider {
         };
         if !status.is_success() {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -130,7 +129,6 @@ impl GenerationProvider for KlingProvider {
                 .unwrap_or("提交失败")
                 .to_string();
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -145,7 +143,6 @@ impl GenerationProvider for KlingProvider {
             .ok_or_else(|| format!("响应缺 data.task_id: {}", body))?
             .to_string();
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id,
             phase: TaskPhase::Submitted,
             remote_urls: vec![],

@@ -145,8 +145,6 @@ pub struct HttpRecord {
 
 /// 任务句柄。同步模式 task_id 可为空字符串，remote_urls 在 Submit 阶段即填入结果 URL。
 pub struct TaskHandle {
-    #[allow(dead_code)]
-    pub provider_id: String,
     pub task_id: String,
     pub phase: TaskPhase,
     pub remote_urls: Vec<String>,

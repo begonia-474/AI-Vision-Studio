@@ -443,6 +443,19 @@ export function modelsForStudio(studio: Studio): ModelDef[] {
   return [...builtin, ...extra];
 }
 
+// 工作室默认模型（审计#11：原先 useStudio/App 用列表魔法下标 0/1，列表重排即静默换默认；
+// 显式按 id 声明，保持现状：图像=wan2.7-image-pro，视频=Seedance 2.0 Fast）。
+const DEFAULT_MODEL_IDS: Record<Studio, string> = {
+  image: "wan2.7-image-pro",
+  video: "doubao-seedance-2-0-fast-260128",
+};
+
+/** 工作室默认模型：按 id 定位，内置模型被删除/改名时回退列表首个。 */
+export function defaultModelForStudio(studio: Studio): ModelDef {
+  const all = modelsForStudio(studio);
+  return all.find((m) => m.id === DEFAULT_MODEL_IDS[studio]) ?? all[0];
+}
+
 export function getModel(studio: Studio, id: string): ModelDef | undefined {
   return modelsForStudio(studio).find((m) => m.id === id);
 }

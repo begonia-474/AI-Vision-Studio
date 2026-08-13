@@ -6,13 +6,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, batchCap, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
+import { aspectToSize, batchCap, defaultModelForStudio, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import { freeParams, jumpParams, type ResultItem, type SessionApi } from "./sessionStore";
+import { uid } from "../lib/utils";
 import type { LoraEntry, StudioJump } from "../types";
-
-let _seq = 0;
-const uid = () => `r_${Date.now().toString(36)}_${_seq++}`;
 
 export interface StudioApi {
   studio: "image" | "video";
@@ -58,11 +56,11 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const { t } = useTranslation();
   const userModels = useUserModels();
   const allModels = useMemo(() => modelsForStudio(studio), [studio, userModels]);
-  const [model, setModel] = useState<ModelDef>(() => allModels[studio === "image" ? 0 : 1]);
-  const [ar, setAr] = useState(() => allModels[studio === "image" ? 0 : 1].aspectRatios[0]);
-  const [quality, setQuality] = useState(() => allModels[studio === "image" ? 0 : 1].qualities[0]);
+  const [model, setModel] = useState<ModelDef>(() => defaultModelForStudio(studio));
+  const [ar, setAr] = useState(() => defaultModelForStudio(studio).aspectRatios[0]);
+  const [quality, setQuality] = useState(() => defaultModelForStudio(studio).qualities[0]);
   const [format, setFormat] = useState("jpeg"); // 输出格式（仅声明 formats 的模型生效）
-  const [duration, setDuration] = useState(() => allModels[studio === "image" ? 0 : 1].durations?.[0] ?? "5");
+  const [duration, setDuration] = useState(() => defaultModelForStudio(studio).durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
   const [mode, setModeState] = useState<"single" | "group">("single");
   const [size, setSizeState] = useState<{ w: number; h: number } | null>(null);
@@ -125,13 +123,17 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const setArCb = useCallback((v: string) => applyAr(model, v, quality), [applyAr, model, quality]);
 
   /** 画质切换：声明 size 区的模型按新档位换算当前比例的像素尺寸（比例不变）。
-   *  volcark 查官方表；wanxiang 按档位长边换算；自定义模型识别 K 档（1K/2K/3K/4K → 长边 1024×档位，保持比例），其余档位不联动。 */
+   *  volcark 查官方表；wanxiang 按档位长边换算；自定义模型识别 K 档（1K/2K/3K/4K → 长边 1024×档位，保持比例），其余档位不联动。
+   *  审计#10：支持显式传入 model/ar——applyJump 在 selectModel 之后调用时闭包里的
+   *  model/ar 还是旧值，会导致换算用旧模型并覆盖 selectModel 已算好的尺寸。 */
   const setQualityCb = useCallback(
-    (v: string) => {
+    (v: string, m?: ModelDef, arOverride?: string) => {
+      const target = m ?? model;
+      const targetAr = arOverride ?? ar;
       setQuality(v);
-      if (!supportsCustomSize(model)) return;
-      if (model.providerId === "volcark" || model.providerId === "wanxiang" || model.providerId === "modelscope") {
-        const { w, h } = parseSizePx(aspectToSize(model.providerId, model.id, ar, v));
+      if (!supportsCustomSize(target)) return;
+      if (target.providerId === "volcark" || target.providerId === "wanxiang" || target.providerId === "modelscope") {
+        const { w, h } = parseSizePx(aspectToSize(target.providerId, target.id, targetAr, v));
         setSizeState({ w, h });
         return;
       }
@@ -166,7 +168,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
 
   // 自定义模型（魔搭）列表变化时，保持当前选中模型；若已被删除则回退默认。
   useEffect(() => {
-    setModel((prev) => allModels.find((m) => m.id === prev.id) ?? allModels[studio === "image" ? 0 : 1]);
+    setModel((prev) => allModels.find((m) => m.id === prev.id) ?? defaultModelForStudio(studio));
   }, [allModels, studio]);
 
   const selectModel = useCallback(
@@ -201,21 +203,27 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
 
   const removeResult = useCallback(
     (id: string) => {
-      const target = results.find((it) => it.id === id);
-      session.patchActive((prev) => prev.filter((it) => it.id !== id));
+      // 审计#11：卡片可能位于任意会话（历史按 session_id 归属恢复），
+      // 用全部会话快照定位而非激活会话，找到才同步删 DB 记录。
+      const target = session.sessions
+        .flatMap((s) => s.results)
+        .find((it) => it.id === id);
+      session.removeByResultId(id);
       if (target?.historyId != null) void deleteHistories([target.historyId]).catch(() => {});
     },
-    [results, session.patchActive],
+    [session],
   );
 
   // 按任务整条删除（时间线的任务级删除：一次提交的全部产物一起移除）。
   const removeTask = useCallback(
     (taskId: string) => {
-      const target = results.find((it) => it.taskId === taskId);
-      session.patchActive((prev) => prev.filter((it) => it.taskId !== taskId));
+      const target = session.sessions
+        .flatMap((s) => s.results)
+        .find((it) => it.taskId === taskId);
+      session.removeByTaskId(taskId);
       if (target?.historyId != null) void deleteHistories([target.historyId]).catch(() => {});
     },
-    [results, session.patchActive],
+    [session],
   );
 
   // 工作室跳转（图生视频/作为参考图/重新编辑）：按参数快照回填表单。
@@ -227,7 +235,17 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       const target = m ?? model;
       setPrompt(j.prompt);
       if (j.ar && (!m || m.aspectRatios.includes(j.ar))) applyAr(target, j.ar, j.quality ?? quality);
-      if (j.quality && (!m || m.qualities.includes(j.quality))) setQualityCb(j.quality);
+      // 审计#10：selectModel/applyAr 之后闭包 model/ar 仍是旧值，画质换算必须显式
+      // 传入目标模型与已收敛的比例（否则用旧模型换算像素并覆盖已算好的尺寸）。
+      if (j.quality && (!m || m.qualities.includes(j.quality))) {
+        const arForQuality =
+          j.ar && (!m || m.aspectRatios.includes(j.ar))
+            ? j.ar
+            : m
+              ? (m.aspectRatios.includes(ar) ? ar : m.aspectRatios[0])
+              : ar;
+        setQualityCb(j.quality, target, arForQuality);
+      }
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
       // 生图模式：快照带 mode 时按该模式上限收敛张数（组图任务恢复后仍是组图，
       // 而非退化为单图模式带超量 n 并行请求）；无 mode 的旧数据按原逻辑取两模式上限。

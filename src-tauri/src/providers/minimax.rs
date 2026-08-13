@@ -222,7 +222,6 @@ impl MiniMaxProvider {
             .await?;
         match urls {
             Some(u) if !u.is_empty() => Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Succeeded,
                 remote_urls: u,
@@ -230,7 +229,6 @@ impl MiniMaxProvider {
                 http_log,
             }),
             _ => Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -349,7 +347,6 @@ impl MiniMaxProvider {
         };
         if !status.is_success() {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -371,7 +368,6 @@ impl MiniMaxProvider {
                     .and_then(|s| s.as_str())
                     .unwrap_or("提交失败");
                 return Ok(TaskHandle {
-                    provider_id: PROVIDER_ID.to_string(),
                     task_id: String::new(),
                     phase: TaskPhase::Failed,
                     remote_urls: vec![],
@@ -386,7 +382,6 @@ impl MiniMaxProvider {
             .ok_or_else(|| format!("响应缺 task_id: {}", body))?
             .to_string();
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id,
             phase: TaskPhase::Submitted,
             remote_urls: vec![],

@@ -18,6 +18,7 @@ import {
   upsertSession,
 } from "../api";
 import type { HistoryTask, LoraEntry, SessionRow, StudioJump } from "../types";
+import { uid } from "../lib/utils";
 
 export type Studio = "image" | "video";
 export type ResultStatus = "loading" | "done" | "error";
@@ -83,14 +84,16 @@ export interface SessionApi {
   /** 从全部会话移除指定 historyId 的结果卡（图库删除产物后同步时间线；
    *  卡片可能位于任意会话——历史按 session_id 归属恢复，用户可能已切换会话） */
   removeByHistoryId: (historyId: number) => void;
+  /** 从全部会话移除指定结果卡（审计#11：时间线删除时卡片可能不在激活会话，
+   *  原实现只在激活会话里 find，其他会话的卡删不掉） */
+  removeByResultId: (id: string) => void;
+  /** 从全部会话移除指定任务的全部卡片 */
+  removeByTaskId: (taskId: string) => void;
   createSession: () => void;
   switchSession: (id: string) => void;
   renameSession: (id: string, title: string, manual?: boolean) => void;
   deleteSession: (id: string) => void;
 }
-
-let _seq = 0;
-const uid = () => `r_${Date.now().toString(36)}_${_seq++}`;
 
 // 历史恢复任务的前缀（SQLite 会话恢复的条目，不计入会话 x/y 角标）。
 const HISTORY_TASK_PREFIX = "history_";
@@ -308,27 +311,35 @@ export function useSessionStore(studio: Studio): SessionApi {
   });
   const [ready, setReady] = useState(false);
   const aliveRef = useRef(true);
+  // 启动加载 effect 依赖 t 会在切语言时重跑整库加载（审计#11），用 ref 固定最新 t。
+  const tRef = useRef(t);
+  tRef.current = t;
 
   const activeSession = state.sessions.find((s) => s.id === state.activeId) ?? state.sessions[0];
   const results = activeSession?.results ?? [];
 
   // 会话级统计（不持久化，每次启动归零）：角标 x/y，x=已完成任务数，y=本会话新提交任务数。
   // SQLite 会话恢复的条目（taskId 前缀 history_）不计入。
+  // 单遍扫描（审计#9）：原实现 filter 嵌套在 taskIds 循环里是 O(n²)，时间线长时每次进度事件都重算。
   const stats = useMemo<SessionStats>(() => {
-    const taskIds = new Set<string>();
+    const byTask = new Map<string, { total: number; loading: number }>();
+    let running = 0;
     for (const it of results) {
-      if (!it.taskId.startsWith(HISTORY_TASK_PREFIX)) taskIds.add(it.taskId);
+      if (it.status === "loading") running += 1;
+      if (it.taskId.startsWith(HISTORY_TASK_PREFIX)) continue;
+      const cur = byTask.get(it.taskId);
+      if (cur) {
+        cur.total += 1;
+        if (it.status === "loading") cur.loading += 1;
+      } else {
+        byTask.set(it.taskId, { total: 1, loading: it.status === "loading" ? 1 : 0 });
+      }
     }
     let finished = 0;
-    for (const id of taskIds) {
-      const items = results.filter((it) => it.taskId === id);
-      if (items.length > 0 && items.every((it) => it.status !== "loading")) finished += 1;
+    for (const t of byTask.values()) {
+      if (t.loading === 0) finished += 1;
     }
-    return {
-      running: results.filter((it) => it.status === "loading").length,
-      finished,
-      sessionTotal: taskIds.size,
-    };
+    return { running, finished, sessionTotal: byTask.size };
   }, [results]);
 
   // 启动加载（SQLite 为唯一权威，无 localStorage）：
@@ -346,7 +357,7 @@ export function useSessionStore(studio: Studio): SessionApi {
       setState((prev) => {
         let sessions = sessionRows.map(toSession);
         if (sessions.length === 0) {
-          const s = freshSession(t("sessions.defaultTitle"));
+          const s = freshSession(tRef.current("sessions.defaultTitle"));
           sessions = [s];
           void upsertSession(toSessionRow(s));
         }
@@ -361,7 +372,7 @@ export function useSessionStore(studio: Studio): SessionApi {
         const known = new Set(sessions.map((s) => s.id));
         for (const sid of bySession.keys()) {
           if (!known.has(sid)) {
-            const s = freshSession(t("sessions.defaultTitle"));
+            const s = freshSession(tRef.current("sessions.defaultTitle"));
             s.id = sid;
             sessions.push(s);
             void upsertSession(toSessionRow(s));
@@ -410,13 +421,37 @@ export function useSessionStore(studio: Studio): SessionApi {
     return () => {
       mounted = false;
     };
-  }, [studio, t]);
+  }, [studio]);
 
   // 会话行持久化（幂等 upsert）：任何会话变更（新建/重命名/活动时间上浮/回灌）落库。
   // ready 前不写——占位会话不该污染库。SQLite 为权威、状态为镜像。
+  // 写入收敛（审计#8）：进度事件每 3-5s/任务 bump 一次 updatedAt 并生成新的 sessions
+  // 数组引用，若无收敛则每次事件把所有会话全量 upsert 一遍——并行任务时每秒数十次
+  // SQLite 事务（每次独立连接 + fsync）持续写盘并卡主线程。三层收敛：
+  //  1) 变更检测：只写与上次落库内容不同的会话（title/manual 标记/updatedAt 均未变则跳过）；
+  //  2) 冷却窗口：仅 updatedAt 变化（进度事件）距上次落库 <30s 不写；
+  //  3) 内容变化（重命名/新建）不受冷却限制，立即落库。
+  // 冷却窗口内最后的活动时间最多延迟 30s 落库——重启后排序以库内时间为准，偏差可接受。
+  const PERSIST_COOLDOWN_MS = 30_000;
+  const lastPersisted = useRef<Map<string, { contentKey: string; fullKey: string; at: number }>>(
+    new Map(),
+  );
   useEffect(() => {
     if (!ready) return;
+    const now = Date.now();
     for (const s of state.sessions) {
+      const contentKey = `${s.title}|${s.nameManuallyEdited ?? false}`;
+      const fullKey = `${contentKey}|${s.updatedAt}`;
+      const prev = lastPersisted.current.get(s.id);
+      if (prev?.fullKey === fullKey) continue;
+      if (
+        prev &&
+        prev.contentKey === contentKey &&
+        now - prev.at < PERSIST_COOLDOWN_MS
+      ) {
+        continue;
+      }
+      lastPersisted.current.set(s.id, { contentKey, fullKey, at: now });
       void upsertSession(toSessionRow(s));
     }
   }, [state.sessions, ready]);
@@ -503,6 +538,34 @@ export function useSessionStore(studio: Studio): SessionApi {
     });
   }, []);
 
+  // 按结果卡 id 从全部会话移除（调用方先用 sessions 快照定位卡片以同步 DB 删除）。
+  const removeByResultId = useCallback((id: string) => {
+    setState((prev) => {
+      let changed = false;
+      const sessions = prev.sessions.map((s) => {
+        const results = s.results.filter((it) => it.id !== id);
+        if (results.length === s.results.length) return s;
+        changed = true;
+        return { ...s, results };
+      });
+      return changed ? { ...prev, sessions } : prev;
+    });
+  }, []);
+
+  // 按任务 id 从全部会话移除该任务的全部卡片。
+  const removeByTaskId = useCallback((taskId: string) => {
+    setState((prev) => {
+      let changed = false;
+      const sessions = prev.sessions.map((s) => {
+        const results = s.results.filter((it) => it.taskId !== taskId);
+        if (results.length === s.results.length) return s;
+        changed = true;
+        return { ...s, results };
+      });
+      return changed ? { ...prev, sessions } : prev;
+    });
+  }, []);
+
   const createSession = useCallback(() => {
     setState((prev) => {
       const n = prev.sessions.length + 1;
@@ -551,6 +614,8 @@ export function useSessionStore(studio: Studio): SessionApi {
     patchActive,
     patchSession,
     removeByHistoryId,
+    removeByResultId,
+    removeByTaskId,
     createSession,
     switchSession,
     renameSession,

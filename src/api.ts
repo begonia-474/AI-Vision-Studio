@@ -13,6 +13,9 @@ import type {
 
 export const listProviders = () => invoke<ProviderInfo[]>("list_providers");
 
+// 数据根目录（debug: 项目 .data/，release: 平台标准数据目录），设置页展示用。
+export const getAppDir = () => invoke<string>("get_app_dir");
+
 export const getApiKey = (providerId: string) =>
   invoke<string | null>("get_api_key", { providerId });
 

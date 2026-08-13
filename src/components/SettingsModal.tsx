@@ -2,10 +2,11 @@
 // 默认模型 / 并发 / 主题 / 语言 / 资产路径 / 历史保留 / 关于。
 // 主题与语言已持久化到 localStorage；其余为只读展示（后端尚未持久化偏好）。
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTheme, type ThemeMode } from "../theme";
 import { switchLanguage, type Lang } from "../i18n";
+import { getAppDir } from "../api";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group";
@@ -27,6 +28,11 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [conc, setConc] = useState(4);
+  const [appDir, setAppDir] = useState("");
+
+  useEffect(() => {
+    getAppDir().then(setAppDir).catch(() => setAppDir(""));
+  }, []);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -113,7 +119,9 @@ export function SettingsModal({ open, onClose, defaultImage, defaultVideo }: Set
             <div className="text-[13px] font-semibold">{t("settings.assetsPath")}</div>
             <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("settings.assetsPathDesc")}</div>
           </div>
-          <div className="font-mono text-xs text-text-2">%LOCALAPPDATA%\assets\YYYY\MM\</div>
+          <div className="max-w-[55%] break-all text-right font-mono text-xs leading-relaxed text-text-2">
+            {appDir ? `${appDir}/outputs/YYYY/MM/` : "…"}
+          </div>
         </div>
         <div className="flex items-center justify-between gap-3 border-b border-border-2 py-3.5 [&:last-of-type]:border-b-0">
           <div>

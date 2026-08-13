@@ -22,7 +22,7 @@
 │                   ├─ KlingProvider    ─┘                      │
 │                   └─ ModelScopeProvider（魔搭，含 LoRA）        │
 │  storage.rs: AssetStore(下载落盘+缩略图) + HistoryDb(SQLite)   │
-│              + SecureKeyStore(keyring) + UserModelStore        │
+│              + KeyStore(明文 keys.json) + UserModelStore        │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -51,7 +51,10 @@ cargo test           # Rust 单元测试（src-tauri/src/storage.rs 等）
 
 > `npm run tauri dev` 会同时启动 Vite 与 Rust 后端。生产构建的 CSP 已启用；开发模式使用 `devCsp: null` 以兼容 React Fast Refresh。
 
-## 开发环境怪癖
+### 应用图标
 
-- Vite 固定端口 53217（HMR 53218）+ `strictPort`，与 `tauri.conf.json` 的 `devUrl` 对齐。默认的 1420/1421 落在 Windows Hyper-V/WSL2 排除端口段（1367-1466）会 EACCES，5180 也在本机排除段（5121-5220）——不要改回标准端口
-- 应用图标（窗口/任务栏）在编译期由 tauri-build 嵌入 exe；`src-tauri/build.rs` 已显式声明 `rerun-if-changed`，更换 `icons/icon.ico` 后重编译会自动生效。重生成全套图标：`npm run tauri icon <1024px源图>`（源图在 `assets/AI_Vision_Studio_logo_1024.png`）
+应用图标（窗口/任务栏）在编译期由 tauri-build 嵌入可执行文件；`src-tauri/build.rs` 已显式声明 `rerun-if-changed`，更换 `icons/icon.ico` 后重编译会自动生效。重生成全套图标：`npm run tauri icon <1024px源图>`（源图在 `assets/AI_Vision_Studio_logo_1024.png`）。
+
+## 环境适配说明
+
+- **Vite 端口固定为 53217（HMR 53218）+ `strictPort`**：不用 Tauri 默认的 1420/1421，是因为部分 Windows 机器上 Hyper-V/WSL2 会占用排除端口段（1367-1466、5121-5220），默认端口会报 EACCES。端口与 `tauri.conf.json` 的 `devUrl` 对齐，改动需两处同步；你的机器若无此冲突，改回标准端口亦可。

@@ -49,7 +49,7 @@
 
 ### 配置 API Key
 
-打开应用 → 左下角「自带密钥（BYOK）」→ 选择厂商，填入对应平台的 API Key 并保存。密钥仅存储在系统凭据管理器（Windows Credential Manager / macOS Keychain / Linux Secret Service），不落盘明文。
+打开应用 → 左下角「自带密钥（BYOK）」→ 选择厂商，填入对应平台的 API Key 并保存。密钥以明文 JSON 存在本地数据目录（`keys.json`，仅当前用户可读写），不经过任何第三方服务。
 
 ### 从源码构建
 
@@ -63,23 +63,32 @@ npm run tauri build  # 打包安装包
 
 ## 数据与安全
 
-生成产物与历史记录保存在本地，随时可清理：
+生成产物与历史记录保存在本地，随时可清理。数据根目录因构建形态而异：
 
-| 数据 | 位置（Windows） |
+| 构建形态 | 数据根目录 |
 |------|------|
-| 生成产物 | `%LOCALAPPDATA%\AIVisionStudio\outputs\YYYY\MM\DD\`（按生成日期归档） |
-| 缩略图 | `%LOCALAPPDATA%\AIVisionStudio\thumbs\`（可再生的预览文件） |
-| 参考图收编 | `%LOCALAPPDATA%\AIVisionStudio\inputs\` |
-| 历史记录 / 自添加模型 | `%LOCALAPPDATA%\AIVisionStudio\history.db` |
-| API Key | 系统凭据管理器（Service: `AIVisionStudio.ApiKey`） |
+| 开发（debug） | `<项目根目录>/.data/`（产物/历史一眼可见，随时可删） |
+| 发布（Windows） | `%LOCALAPPDATA%\com.aivisionstudio.app\` |
+| 发布（Linux） | `~/.local/share/com.aivisionstudio.app\`（遵循 XDG） |
+| 发布（macOS） | `~/Library/Application Support/com.aivisionstudio.app/` |
 
-- **密钥安全**：API Key 经系统凭据管理器加密存储，SQLite 只存生成历史与自添加模型配置，不存任何密钥
+| 数据 | 位置（以发布构建为例） |
+|------|------|
+| 生成产物 | `<数据根目录>\outputs\YYYY\MM\DD\`（按生成日期归档） |
+| 缩略图 | `<数据根目录>\thumbs\`（可再生的预览文件） |
+| 参考图收编 | `<数据根目录>\inputs\` |
+| 历史记录 / 自添加模型 | `<数据根目录>\history.db` |
+| API Key / WorkspaceId | `<数据根目录>\keys.json`（明文 JSON，Unix 上权限 0600） |
+
+- **密钥存储**：API Key / WorkspaceId 以明文 JSON 存于本地 `keys.json`（跨平台一致，不依赖系统凭据管理器）；SQLite 只存生成历史与自添加模型配置，不存任何密钥
 - **零服务端**：应用无自有服务器，所有请求直连你配置的厂商 API
 - **产物本地归档**：生成结果自动下载到本地并按月份归档，图像产物自动生成缩略图
 
+> 注意：`keys.json` 为明文文件，请确保数据目录仅本用户可访问（Unix 上已自动收紧为 0600）。
+
 ## 技术栈
 
-[Tauri 2](https://tauri.app)（Rust 后端 + 系统 WebView）· React 19 + TypeScript + Vite 7 · [shadcn/ui](https://ui.shadcn.com)（Tailwind v4）· react-i18next · SQLite / keyring
+[Tauri 2](https://tauri.app)（Rust 后端 + 系统 WebView）· React 19 + TypeScript + Vite 7 · [shadcn/ui](https://ui.shadcn.com)（Tailwind v4）· react-i18next · SQLite
 
 ## 贡献
 

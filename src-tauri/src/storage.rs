@@ -1,22 +1,100 @@
-//! 本地存储层：AssetStore（产物下载落盘）+ HistoryDb（rusqlite 历史）+ SecureKeyStore（keyring 密钥）。
-//! 三者共用 %LOCALAPPDATA%\AIVisionStudio\ 目录。每次操作打开独立连接，避免 Send/Sync 约束。
+//! 本地存储层：AssetStore（产物下载落盘）+ HistoryDb（rusqlite 历史）+ KeyStore（明文 JSON 密钥）。
+//! 三者共用数据根目录（debug: 项目 .data/，release: 平台标准数据目录）。每次操作打开独立连接，避免 Send/Sync 约束。
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use base64::Engine;
+use futures_util::StreamExt;
 use rusqlite::{params, Connection};
+use tauri::Manager;
+use tokio::io::AsyncWriteExt;
 
 use crate::models::{HistoryTaskDto, SessionRow, UserModelRow};
 
 const APP_DIR_NAME: &str = "AIVisionStudio";
-const KEYRING_SERVICE: &str = "AIVisionStudio.ApiKey";
 
 // —— 目录 ——
+// 数据根目录：debug 构建（npm run tauri dev）用项目本地 .data/，
+// 开发期产物/历史一眼可见、随手清理；release 构建用平台标准数据目录
+// （Windows %LOCALAPPDATA%\com.aivisionstudio.app、Linux ~/.local/share/...、
+// macOS ~/Library/Application Support/...），由 init 在启动时解析后固定。
+
+static APP_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// 启动时初始化数据目录：debug → 项目本地 .data/；release → 平台标准目录。
+/// 同时把该目录加入 asset 协议 scope（webview 内经 asset URL 展示产物/缩略图）。
+pub fn init(app: &tauri::AppHandle) -> Result<(), String> {
+    let dir = if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.data")
+    } else {
+        app.path().app_local_data_dir().map_err(|e| e.to_string())?
+    };
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // canonicalize 去掉 ../ 等未规范化段（CARGO_MANIFEST_DIR/../.data 会带 src-tauri/.. 前缀，
+    // 落库的产物路径串会带它，且 asset scope 授权的是带 .. 的原始串）。目录已存在，必然可解析。
+    let dir = fs::canonicalize(&dir).unwrap_or(dir);
+    let _ = APP_DIR.set(dir.clone());
+    app.asset_protocol_scope()
+        .allow_directory(&dir, true)
+        .map_err(|e| e.to_string())?;
+    // 参考图收编目录 GC（审计#5）：启动时顺手清理过期副本。
+    let cleaned = gc_inputs(INPUTS_MAX_AGE_DAYS);
+    if cleaned > 0 {
+        eprintln!("[storage] 参考图 GC：清理 {} 个过期文件", cleaned);
+    }
+    ensure_schema()
+}
+
+/// 参考图收编副本保留期（天）。副本仅用于"重新生成/跨工作室跳转"复用，属可再生数据：
+/// 失败路径已即时清理，成功路径的副本按年龄兜底回收，不追踪引用计数。
+const INPUTS_MAX_AGE_DAYS: u64 = 30;
+
+/// 清理 inputs 目录下超过保留期未修改的收编文件（按 mtime 年龄），返回清理数量。
+fn gc_inputs(max_age_days: u64) -> usize {
+    let Ok(entries) = fs::read_dir(input_root()) else {
+        return 0;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(max_age_days * 24 * 60 * 60))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        if let Ok(mtime) = meta.modified() {
+            if mtime < cutoff && fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
 
 pub fn app_dir() -> PathBuf {
-    let local = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(local).join(APP_DIR_NAME)
+    APP_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| default_app_dir())
+}
+
+/// 兜底目录（未显式 init 时，如单元测试）：debug 沿用项目本地 .data/，
+/// release 按平台惯例取系统数据目录。返回规范化（无 .. 段）的绝对路径。
+fn default_app_dir() -> PathBuf {
+    let dir = if cfg!(debug_assertions) {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.data")
+    } else {
+        let base = std::env::var("LOCALAPPDATA")
+            .or_else(|_| std::env::var("XDG_DATA_HOME"))
+            .or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.local/share")))
+            .unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(base).join(APP_DIR_NAME)
+    };
+    let _ = fs::create_dir_all(&dir);
+    fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 /// 生成产物根目录（ComfyUI 式 output）：%LOCALAPPDATA%\AIVisionStudio\outputs\，
@@ -104,8 +182,17 @@ pub async fn save_remote(
         if !resp.status().is_success() {
             return Err(format!("HTTP {} downloading asset", resp.status()));
         }
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-        fs::write(&full_path, bytes).map_err(|e| e.to_string())?;
+        // 流式落盘：数百 MB 视频不能整块进内存（resp.bytes() 会全量读入 RAM），
+        // 边收边写，峰值内存与块大小（默认 16KB）同阶。
+        let mut out = tokio::fs::File::create(&full_path)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            out.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        }
+        out.flush().await.map_err(|e| e.to_string())?;
     }
 
     Ok(full_path.to_string_lossy().to_string())
@@ -713,77 +800,87 @@ pub fn set_starred(id: i64, starred: bool) -> Result<(), String> {
     Ok(())
 }
 
-// —— SecureKeyStore ——
+// —— KeyStore ——
+// 各厂商 API Key / WorkspaceId 以明文 JSON 存于数据目录 keys.json（跨平台一致，
+// 不依赖系统凭据管理器；文件权限收紧到仅当前用户可读写）。
+// 结构与旧 keyring 数据不互通，首次使用需重新填入。
 
-/// 用系统凭据管理器（Windows Credential Manager，底层 DPAPI）安全存储各厂商 API Key。
-/// 绝不入 SQLite、不落明文。Service = 应用名，Account = providerId，Password = apiKey。
-pub fn save_key(provider_id: &str, api_key: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, provider_id).map_err(|e| e.to_string())?;
-    // 先删除旧凭据，避免残留多份
-    let _ = entry.delete_credential();
-    if !api_key.trim().is_empty() {
-        entry.set_password(api_key).map_err(|e| e.to_string())?;
+/// { "api_keys": { providerId: key }, "workspaces": { providerId: workspaceId } }
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct KeyFile {
+    api_keys: std::collections::HashMap<String, String>,
+    workspaces: std::collections::HashMap<String, String>,
+}
+
+fn keys_path() -> PathBuf {
+    app_dir().join("keys.json")
+}
+
+/// 串行化 keys.json 读写（保存路径：临时文件 + 原子重命名，避免写一半损坏）。
+static KEYS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn load_key_file() -> Result<KeyFile, String> {
+    match fs::read(keys_path()) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| format!("keys.json 损坏: {}", e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(KeyFile::default()),
+        Err(e) => Err(format!("读取 keys.json 失败: {}", e)),
     }
-    Ok(())
+}
+
+fn save_key_file(keys: &KeyFile) -> Result<(), String> {
+    let path = keys_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(keys).map_err(|e| e.to_string())?;
+    fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+pub fn save_key(provider_id: &str, api_key: &str) -> Result<(), String> {
+    let _guard = KEYS_LOCK.lock().unwrap();
+    let mut keys = load_key_file()?;
+    if api_key.trim().is_empty() {
+        keys.api_keys.remove(provider_id);
+    } else {
+        keys.api_keys.insert(provider_id.to_string(), api_key.trim().to_string());
+    }
+    save_key_file(&keys)
 }
 
 pub fn get_key(provider_id: &str) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, provider_id).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(p) => Ok(Some(p)),
-        Err(e) => {
-            let msg = e.to_string().to_lowercase();
-            // 跨版本/跨平台兼容：NoEntry / NoStorageAccess / Windows Credential Manager 的
-            // "No matching credential found" 等一律视为"未设置"。
-            if msg.contains("no entry")
-                || msg.contains("not found")
-                || msg.contains("no storage")
-                || msg.contains("matching credential")
-            {
-                Ok(None)
-            } else {
-                Err(e.to_string())
-            }
-        }
-    }
+    let _guard = KEYS_LOCK.lock().unwrap();
+    Ok(load_key_file()?.api_keys.get(provider_id).cloned())
 }
 
 pub fn delete_key(provider_id: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, provider_id).map_err(|e| e.to_string())?;
-    let _ = entry.delete_credential();
-    Ok(())
+    let _guard = KEYS_LOCK.lock().unwrap();
+    let mut keys = load_key_file()?;
+    keys.api_keys.remove(provider_id);
+    save_key_file(&keys)
 }
 
-/// WorkspaceId（业务空间专属域名）：keyring Account 加 "-workspace" 后缀，与 API Key 隔离。
-/// 例：wanxiang → account "wanxiang-workspace"，为空串时清除。
+/// WorkspaceId（业务空间专属域名），为空串时清除。
 pub fn save_workspace(provider_id: &str, workspace_id: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &format!("{}-workspace", provider_id))
-        .map_err(|e| e.to_string())?;
-    let _ = entry.delete_credential();
-    if !workspace_id.trim().is_empty() {
-        entry.set_password(workspace_id.trim()).map_err(|e| e.to_string())?;
+    let _guard = KEYS_LOCK.lock().unwrap();
+    let mut keys = load_key_file()?;
+    if workspace_id.trim().is_empty() {
+        keys.workspaces.remove(provider_id);
+    } else {
+        keys.workspaces.insert(provider_id.to_string(), workspace_id.trim().to_string());
     }
-    Ok(())
+    save_key_file(&keys)
 }
 
 pub fn get_workspace(provider_id: &str) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &format!("{}-workspace", provider_id))
-        .map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(p) => Ok(Some(p)),
-        Err(e) => {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("no entry")
-                || msg.contains("not found")
-                || msg.contains("no storage")
-                || msg.contains("matching credential")
-            {
-                Ok(None)
-            } else {
-                Err(e.to_string())
-            }
-        }
-    }
+    let _guard = KEYS_LOCK.lock().unwrap();
+    Ok(load_key_file()?.workspaces.get(provider_id).cloned())
 }
 
 // —— 用户自添加模型 ——
@@ -846,6 +943,22 @@ pub fn delete_user_model(id: i64) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_dir_is_canonical() {
+        // debug 目录由 CARGO_MANIFEST_DIR(../.data) 派生，必须规范化：
+        // 带 src-tauri/.. 前缀的路径串会原样落库/落盘，导致产物路径与真实位置不一致。
+        let dir = app_dir();
+        assert!(dir.is_absolute(), "app_dir 应为绝对路径: {}", dir.display());
+        let s = dir.to_string_lossy().to_string();
+        assert!(
+            !s.contains("/../") && !s.contains("/./"),
+            "app_dir 不应含未规范化段: {}",
+            s
+        );
+        assert!(s.ends_with("/.data"), "app_dir 应为项目 .data: {}", s);
+        assert_eq!(fs::canonicalize(&dir).unwrap(), dir);
+    }
 
     #[test]
     fn thumbnail_roundtrip() {

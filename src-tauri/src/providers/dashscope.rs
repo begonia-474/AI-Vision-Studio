@@ -19,9 +19,15 @@ use crate::storage;
 const BASE_URL: &str = "https://dashscope.aliyuncs.com";
 
 /// 当前生效的 base URL：优先业务空间专属域名（北京），未配置 WorkspaceId 时回退旧域名。
-fn base_url() -> String {
-    match storage::get_workspace(PROVIDER_ID) {
-        Ok(Some(ws)) if !ws.trim().is_empty() => {
+/// keys.json 读取是同步文件 IO，丢阻塞线程池避免占 tokio worker（审计#4）。
+async fn base_url() -> String {
+    let ws = tokio::task::spawn_blocking(move || storage::get_workspace(PROVIDER_ID))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .and_then(|o| o);
+    match ws {
+        Some(ws) if !ws.trim().is_empty() => {
             format!("https://{}.cn-beijing.maas.aliyuncs.com", ws.trim())
         }
         _ => BASE_URL.to_string(),
@@ -95,7 +101,16 @@ fn image_protocol(model: &str) -> ImageProtocol {
         ImageProtocol::Qwen
     } else if model == "z-image-turbo" {
         ImageProtocol::ZImage
+    } else if model.starts_with("wan2.6-") || model == "wan2.6-t2i" {
+        ImageProtocol::Wan26
     } else {
+        // 审计#7：用户自添加模型 id 是任意字符串，前缀匹配全不命中时静默落 Wan26 分支——
+        // 若模板模型协议不同会走错参数集。这里打日志暴露问题；自添加模型应复用
+        // 内置模型 id 前缀（如 wan2.7-image-xxx / qwen-image-xxx）以命中对应协议。
+        eprintln!(
+            "[dashscope] 未知模型 id '{}'，按 Wan26 协议提交（自添加模型请使用内置模型 id 前缀）",
+            model
+        );
         ImageProtocol::Wan26
     }
 }
@@ -227,7 +242,7 @@ impl GenerationProvider for DashScopeProvider {
             });
         }
         // 异步视频：GET /api/v1/tasks/{id}
-        let url = format!("{}/api/v1/tasks/{}", base_url(), handle.task_id);
+        let url = format!("{}/api/v1/tasks/{}", base_url().await, handle.task_id);
         let resp = self
             .client
             .get(&url)
@@ -340,7 +355,7 @@ impl GenerationProvider for DashScopeProvider {
         // 廉价鉴权校验：查询不存在任务，401→Key 无效，其余→Key 有效。
         let resp = self
             .client
-            .get(format!("{}/api/v1/tasks/0", base_url()))
+            .get(format!("{}/api/v1/tasks/0", base_url().await))
             .bearer_auth(api_key)
             .send()
             .await
@@ -629,7 +644,7 @@ impl DashScopeProvider {
     ) -> Result<TaskHandle, String> {
         let url = format!(
             "{}/api/v1/services/aigc/multimodal-generation/generation",
-            base_url()
+            base_url().await
         );
         let resp = self
             .client
@@ -650,7 +665,6 @@ impl DashScopeProvider {
         };
         if !status.is_success() {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -669,7 +683,6 @@ impl DashScopeProvider {
                     .unwrap_or(code)
                     .to_string();
                 return Ok(TaskHandle {
-                    provider_id: PROVIDER_ID.to_string(),
                     task_id: String::new(),
                     phase: TaskPhase::Failed,
                     remote_urls: vec![],
@@ -698,7 +711,6 @@ impl DashScopeProvider {
         }
         if urls.is_empty() {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -707,7 +719,6 @@ impl DashScopeProvider {
             });
         }
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id: String::new(),
             phase: TaskPhase::Succeeded,
             remote_urls: urls,
@@ -779,7 +790,7 @@ impl DashScopeProvider {
 
         let url = format!(
             "{}/api/v1/services/aigc/video-generation/video-synthesis",
-            base_url()
+            base_url().await
         );
         let resp = self
             .client
@@ -801,7 +812,6 @@ impl DashScopeProvider {
         };
         if !status.is_success() {
             return Ok(TaskHandle {
-                provider_id: PROVIDER_ID.to_string(),
                 task_id: String::new(),
                 phase: TaskPhase::Failed,
                 remote_urls: vec![],
@@ -819,7 +829,6 @@ impl DashScopeProvider {
                     .unwrap_or(code)
                     .to_string();
                 return Ok(TaskHandle {
-                    provider_id: PROVIDER_ID.to_string(),
                     task_id: String::new(),
                     phase: TaskPhase::Failed,
                     remote_urls: vec![],
@@ -835,7 +844,6 @@ impl DashScopeProvider {
             .ok_or_else(|| format!("响应缺 task_id: {}", body))?
             .to_string();
         Ok(TaskHandle {
-            provider_id: PROVIDER_ID.to_string(),
             task_id,
             phase: TaskPhase::Submitted,
             remote_urls: vec![],
