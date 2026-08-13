@@ -32,6 +32,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # tauri-action 不装项目依赖（只装全局 tauri CLI），必须显式 npm ci：
+      # 否则 macOS 无 node_modules（tsc not found），且自动安装会装到 TS 6 报 baseUrl 移除。
+      - name: 安装前端依赖
+        run: npm ci
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
@@ -52,4 +56,5 @@ jobs:
           releaseDraft: true
           prerelease: false
           projectPath: src-tauri
+          autoInstallDeps: false
           args: ${{ matrix.args }}
