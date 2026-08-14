@@ -4,7 +4,7 @@
 // 接收来自图库的「作为参考图」跳转（jump），通过 effect 注入参考图 + prompt。
 // 点击任务队列完成结果卡打开作品详情（DetailPanel，与图库共用）。
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toAssetUrl } from "../api";
 import { IconChevron } from "../lib/icons";
@@ -22,7 +22,10 @@ interface ImageStudioProps {
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
 }
 
-export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageStudioProps) {
+// memo：session（SessionApi）引用已稳定化（审计#12），视频工作室的进度事件不再
+// 连带重渲染图像工作室；提示词输入只重渲染本工作室表单区，时间线由 TaskTimeline
+// 自身的 memo 跳过。
+export const ImageStudio = memo(function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageStudioProps) {
   const api = useStudio("image", session);
   const streamRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -52,12 +55,23 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
   }
 
   // 详情数据源：当前会话的完成结果（删除整任务；跳转与重新编辑走会话参数快照）。
+  // 审计#12：原实现对每条完成结果内层再 filter 全量数组统计同任务张数（O(n²)），
+  // 每次进度事件都重算；改为先单遍扫描出 taskId→张数 Map 再 O(1) 查表
+  // （与 sessionStore 的 stats 单遍思路一致，审计#9）。
+  const doneCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of api.results) {
+      if (r.status === "done") m.set(r.taskId, (m.get(r.taskId) ?? 0) + 1);
+    }
+    return m;
+  }, [api.results]);
+
   const detailSources = useMemo<DetailSource[]>(
     () =>
       api.results
         .filter((r) => r.status === "done")
         .map((r) => {
-          const n = api.results.filter((x) => x.taskId === r.taskId && x.status === "done").length;
+          const n = doneCounts.get(r.taskId) ?? 1;
           return {
             key: r.id,
             image: true,
@@ -87,7 +101,7 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
             },
             onReEdit: () => {
               setDetailIdx(null);
-              const n = api.results.filter((x) => x.taskId === r.taskId && x.status === "done").length;
+              const n = doneCounts.get(r.taskId) ?? 1;
               let j: (StudioJump & { studio: "image" | "video" }) | undefined;
               if (r.paramsJson) {
                 try {
@@ -117,7 +131,7 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
             },
           };
         }),
-    [api.results, api.removeTask, onImageToVideo, onReEdit],
+    [api.results, doneCounts, api.removeTask, onImageToVideo, onReEdit],
   );
 
   // 时间线汇报底部状态：上滑离开底部时输入条收起（即梦式折叠），回到底部时展开。
@@ -137,45 +151,61 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
   }, []);
 
   // 打开详情 / 重新编辑：稳定引用，配合 TaskTimeline memo 在折叠动画期间跳过时间线重渲染。
-  const openDetail = useCallback(
-    (item: ResultItem) => {
-      const idx = detailSources.findIndex((s) => s.key === item.id);
-      if (idx >= 0) setDetailIdx(idx);
-    },
-    [detailSources],
-  );
-  const reEdit = useCallback(
-    (item: ResultItem) => {
-      const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
-      let j: (StudioJump & { studio: "image" | "video" }) | undefined;
-      if (item.paramsJson) {
-        try {
-          j = jumpFromParams(
-            { prompt: item.prompt, model: item.modelId ?? item.model },
-            JSON.parse(item.paramsJson) as Record<string, unknown>,
-            true,
-            item.refs,
-          );
-        } catch {
-          // paramsJson 损坏回退散装快照
-        }
+  // 审计#12：原实现依赖 detailSources / api.results——任何结果变化都重建回调引用，
+  // 使 TaskTimeline 的 memo 对全部任务卡失效；改用 ref 读取最新数据，回调恒稳定。
+  const detailSourcesRef = useRef(detailSources);
+  detailSourcesRef.current = detailSources;
+  const openDetail = useCallback((item: ResultItem) => {
+    const idx = detailSourcesRef.current.findIndex((s) => s.key === item.id);
+    if (idx >= 0) setDetailIdx(idx);
+  }, []);
+
+  const doneCountsRef = useRef(doneCounts);
+  doneCountsRef.current = doneCounts;
+  const onReEditRef = useRef(onReEdit);
+  onReEditRef.current = onReEdit;
+  const reEdit = useCallback((item: ResultItem) => {
+    const n = doneCountsRef.current.get(item.taskId) ?? 1;
+    let j: (StudioJump & { studio: "image" | "video" }) | undefined;
+    if (item.paramsJson) {
+      try {
+        j = jumpFromParams(
+          { prompt: item.prompt, model: item.modelId ?? item.model },
+          JSON.parse(item.paramsJson) as Record<string, unknown>,
+          true,
+          item.refs,
+        );
+      } catch {
+        // paramsJson 损坏回退散装快照
       }
-      onReEdit?.(
-        j ??
-          {
-            studio: "image",
-            prompt: item.prompt,
-            modelId: item.modelId,
-            ar: item.ar,
-            quality: item.quality,
-            duration: item.duration,
-            n,
-            refs: item.refs,
-            loras: item.loras,
-          },
-      );
+    }
+    onReEditRef.current?.(
+      j ??
+        {
+          studio: "image",
+          prompt: item.prompt,
+          modelId: item.modelId,
+          ar: item.ar,
+          quality: item.quality,
+          duration: item.duration,
+          n,
+          refs: item.refs,
+          loras: item.loras,
+        },
+    );
+  }, []);
+
+  // 审计#12：原实现为内联箭头函数，每次渲染（含输入击键）新建引用，击穿
+  // TaskTimeline 的 memo，数百张卡随每次击键整树重渲染；改为稳定引用
+  // （api.applyJump 仅随模型选择变化，输入过程恒稳定）。
+  const handleImageToImage = useCallback(
+    (src: string, prompt: string) => {
+      api.applyJump({ prompt, refs: [toAssetUrl(src)] });
+      // 回填后滚回底部让输入条展开，提示词/参考图立即可见可改
+      const el = streamRef.current;
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     },
-    [api.results, onReEdit],
+    [api.applyJump],
   );
 
   return (
@@ -189,12 +219,7 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
           scrollRef={streamRef}
           onBottomStateChange={handleBottomChange}
           onImageToVideo={onImageToVideo}
-          onImageToImage={(src, prompt) => {
-            api.applyJump({ prompt, refs: [toAssetUrl(src)] });
-            // 回填后滚回底部让输入条展开，提示词/参考图立即可见可改
-            const el = streamRef.current;
-            if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-          }}
+          onImageToImage={handleImageToImage}
           onDeleteTask={api.removeTask}
           onRegenerate={api.regenerate}
           onOpenDetail={openDetail}
@@ -234,4 +259,4 @@ export function ImageStudio({ session, onImageToVideo, jump, onReEdit }: ImageSt
       )}
     </div>
   );
-}
+});

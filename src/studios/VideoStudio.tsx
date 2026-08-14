@@ -5,7 +5,7 @@
 // 点击任务队列完成结果卡打开作品详情（DetailPanel，与图库共用）。
 // 交互：上滑浏览历史时输入框收起；点击收起栏在当前位置原地展开；「回到底部」按钮平滑滚回底部。
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconChevron } from "../lib/icons";
 import { PromptComposer } from "../components/PromptComposer";
@@ -21,7 +21,9 @@ interface VideoStudioProps {
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
 }
 
-export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
+// memo：session（SessionApi）引用已稳定化（审计#12），图像工作室的进度事件不再
+// 连带重渲染视频工作室（与 ImageStudio 同修）。
+export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
   const api = useStudio("video", session);
   const streamRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -66,12 +68,22 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
   }
 
   // 详情数据源：当前会话的完成结果（删除整任务；重新编辑走会话参数快照）。
+  // 审计#12：嵌套 filter 统计同任务张数是 O(n²)，进度事件反复重算；
+  // 改为先单遍扫描 taskId→张数 Map 再 O(1) 查表（与 ImageStudio 同修）。
+  const doneCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of api.results) {
+      if (r.status === "done") m.set(r.taskId, (m.get(r.taskId) ?? 0) + 1);
+    }
+    return m;
+  }, [api.results]);
+
   const detailSources = useMemo<DetailSource[]>(
     () =>
       api.results
         .filter((r) => r.status === "done")
         .map((r) => {
-          const n = api.results.filter((x) => x.taskId === r.taskId && x.status === "done").length;
+          const n = doneCounts.get(r.taskId) ?? 1;
           return {
             key: r.id,
             image: false,
@@ -93,7 +105,7 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
             },
             onReEdit: () => {
               setDetailIdx(null);
-              const n = api.results.filter((x) => x.taskId === r.taskId && x.status === "done").length;
+              const n = doneCounts.get(r.taskId) ?? 1;
               let j: (StudioJump & { studio: "image" | "video" }) | undefined;
               if (r.paramsJson) {
                 try {
@@ -124,50 +136,53 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
             },
           };
         }),
-    [api.results, api.removeTask, onReEdit],
+    [api.results, doneCounts, api.removeTask, onReEdit],
   );
 
   // 打开详情 / 重新编辑：稳定引用，配合 TaskTimeline memo 在折叠动画期间跳过时间线重渲染。
-  const openDetail = useCallback(
-    (item: ResultItem) => {
-      const idx = detailSources.findIndex((s) => s.key === item.id);
-      if (idx >= 0) setDetailIdx(idx);
-    },
-    [detailSources],
-  );
-  const reEdit = useCallback(
-    (item: ResultItem) => {
-      const n = api.results.filter((x) => x.taskId === item.taskId && x.status === "done").length;
-      let j: (StudioJump & { studio: "image" | "video" }) | undefined;
-      if (item.paramsJson) {
-        try {
-          j = jumpFromParams(
-            { prompt: item.prompt, model: item.modelId ?? item.model },
-            JSON.parse(item.paramsJson) as Record<string, unknown>,
-            false,
-            item.refs,
-          );
-        } catch {
-          // paramsJson 损坏回退散装快照
-        }
+  // 审计#12：依赖 detailSources / api.results 会使任何结果变化重建回调引用、
+  // 击穿 TaskTimeline memo；改用 ref 读取最新数据，回调恒稳定（与 ImageStudio 同修）。
+  const detailSourcesRef = useRef(detailSources);
+  detailSourcesRef.current = detailSources;
+  const openDetail = useCallback((item: ResultItem) => {
+    const idx = detailSourcesRef.current.findIndex((s) => s.key === item.id);
+    if (idx >= 0) setDetailIdx(idx);
+  }, []);
+
+  const doneCountsRef = useRef(doneCounts);
+  doneCountsRef.current = doneCounts;
+  const onReEditRef = useRef(onReEdit);
+  onReEditRef.current = onReEdit;
+  const reEdit = useCallback((item: ResultItem) => {
+    const n = doneCountsRef.current.get(item.taskId) ?? 1;
+    let j: (StudioJump & { studio: "image" | "video" }) | undefined;
+    if (item.paramsJson) {
+      try {
+        j = jumpFromParams(
+          { prompt: item.prompt, model: item.modelId ?? item.model },
+          JSON.parse(item.paramsJson) as Record<string, unknown>,
+          false,
+          item.refs,
+        );
+      } catch {
+        // paramsJson 损坏回退散装快照
       }
-      onReEdit?.(
-        j ??
-          {
-            studio: "video",
-            prompt: item.prompt,
-            modelId: item.modelId,
-            ar: item.ar,
-            quality: item.quality,
-            duration: item.duration,
-            n,
-            refs: item.refs,
-            loras: item.loras,
-          },
-      );
-    },
-    [api.results, onReEdit],
-  );
+    }
+    onReEditRef.current?.(
+      j ??
+        {
+          studio: "video",
+          prompt: item.prompt,
+          modelId: item.modelId,
+          ar: item.ar,
+          quality: item.quality,
+          duration: item.duration,
+          n,
+          refs: item.refs,
+          loras: item.loras,
+        },
+    );
+  }, []);
 
   return (
     <div className="relative flex h-full w-full flex-col items-center justify-center bg-background p-4">
@@ -218,4 +233,4 @@ export function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
       )}
     </div>
   );
-}
+});

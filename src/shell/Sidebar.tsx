@@ -3,7 +3,7 @@
 // 中部：Image / Video Studio / Gallery 三个入口 + 当前工作室的会话列表（类 ChatGPT/豆包，仅展开态显示）；
 // 底部：Settings 入口。collapsed 时仅显示图标，悬停经 Radix Tooltip 显示入口名（展开态无悬停信息）。
 
-import { useState, type ReactElement } from "react";
+import { memo, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 import { IconImage, IconKey, IconLibrary, IconSettings, IconSidebar, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -36,7 +36,9 @@ interface SidebarProps {
   onOpenSettings: () => void;
 }
 
-export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onSwitch, onToggleSidebar, onOpenByok, onOpenSettings }: SidebarProps) {
+// memo：sessions（SessionApi）引用已稳定化（审计#12），对方工作室的进度事件
+// 不再连带重渲染侧边栏会话列表。
+export const Sidebar = memo(function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onSwitch, onToggleSidebar, onOpenByok, onOpenSettings }: SidebarProps) {
   const { t } = useTranslation();
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -237,4 +239,4 @@ export function Sidebar({ activeView, collapsed, sessions, onActivateStudio, onS
       </aside>
     </TooltipProvider>
   );
-}
+});
