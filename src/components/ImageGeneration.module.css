@@ -1,26 +1,30 @@
-/* 生成中装饰动画（aicss.dev Image Generation 原版：点阵底 + 双椭圆光斑 mask 游走形变 +
-   呼吸 + 流光文字），主题映射到本项目 [data-theme]（深色为基准，浅色覆盖）。
+/* 生成中装饰动画（aicss.dev Image Generation 风格：点阵底 + 游走光斑 + 呼吸），
+   主题映射到本项目 [data-theme]（深色为基准，浅色覆盖）。
    尺寸适配时间线：画布占满所在网格格，max-height 与完成结果卡一致（45vh），
-   完成后替换为结果图不产生布局跳动。 */
+   完成后替换为结果图不产生布局跳动。审计#12：动画全部收敛为 transform/opacity。 */
 
 .igCanvas { position: relative; width: 100%; max-height: 45vh; aspect-ratio: 1 / 1; border-radius: 12px; background: #1f1f1f; overflow: hidden; }
 .igDots { position: absolute; inset: 2px; background-image: radial-gradient(circle, #a1a1a1 0.7px, transparent 1.3px); background-size: 11px 11px; background-repeat: space; opacity: 0.22; }
-.igGlow { position: absolute; inset: 2px; background-image: radial-gradient(circle, #f5f5f5 1.1px, transparent 1.6px); background-size: 11px 11px; background-repeat: space; -webkit-mask-image: radial-gradient(ellipse at center, #000 0%, transparent 60%), radial-gradient(ellipse at center, #000 0%, transparent 62%); mask-image: radial-gradient(ellipse at center, #000 0%, transparent 60%), radial-gradient(ellipse at center, #000 0%, transparent 62%); -webkit-mask-repeat: no-repeat, no-repeat; mask-repeat: no-repeat, no-repeat; -webkit-mask-size: 72% 62%, 52% 52%; mask-size: 72% 62%, 52% 52%; -webkit-mask-position: 16% 20%, 30% 32%; mask-position: 16% 20%, 30% 32%; animation: ig-morph 4.2s cubic-bezier(0.35, 1.55, 0.65, 1) infinite, ig-breathe 1.9s cubic-bezier(0.66, 0, 0.34, 1) infinite; }
-@keyframes ig-morph {
-  0% { -webkit-mask-size: 52% 46%, 40% 40%; mask-size: 52% 46%, 40% 40%; -webkit-mask-position: 16% 20%, 30% 32%; mask-position: 16% 20%, 30% 32%; }
-  25% { -webkit-mask-size: 46% 58%, 44% 38%; mask-size: 46% 58%, 44% 38%; -webkit-mask-position: 84% 16%, 66% 30%; mask-position: 84% 16%, 66% 30%; }
-  50% { -webkit-mask-size: 60% 44%, 38% 46%; mask-size: 60% 44%, 38% 46%; -webkit-mask-position: 82% 84%, 62% 68%; mask-position: 82% 84%, 62% 68%; }
-  75% { -webkit-mask-size: 48% 54%, 46% 40%; mask-size: 48% 54%, 46% 40%; -webkit-mask-position: 14% 82%, 34% 66%; mask-position: 14% 82%, 34% 66%; }
-  100% { -webkit-mask-size: 52% 46%, 40% 40%; mask-size: 52% 46%, 40% 40%; -webkit-mask-position: 16% 20%, 30% 32%; mask-position: 16% 20%, 30% 32%; }
+/* 审计#12：原 ig-morph 每帧动画 mask-size/mask-position（强制整卡重栅格化），
+   并行任务多时是进程 CPU 的主要来源（每任务约 3~5%）；改为 transform/opacity
+   合成器动画——光斑层内容静态，仅位移/缩放/透明度变化，不触发重绘。 */
+.igGlow { position: absolute; inset: 0; background: radial-gradient(ellipse 62% 55% at 50% 40%, rgba(245, 245, 245, 0.32), transparent 70%); animation: ig-float 5.2s ease-in-out infinite alternate, ig-breathe 1.9s cubic-bezier(0.66, 0, 0.34, 1) infinite; will-change: transform, opacity; }
+@keyframes ig-float {
+  0% { transform: translate(-6%, -5%) scale(1); }
+  50% { transform: translate(6%, 6%) scale(1.15); }
+  100% { transform: translate(-2%, 7%) scale(1.05); }
 }
 @keyframes ig-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
-.igRes { position: absolute; top: 8px; right: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #a3a3a3; background: rgba(26, 26, 26, 0.72); padding: 2px 7px; border-radius: 999px; backdrop-filter: blur(4px); }
-.igLabel { background: linear-gradient(90deg, #f5f5f5 0%, #f5f5f5 30%, rgba(245, 245, 245, 0.45) 45%, rgba(245, 245, 245, 0.45) 55%, #f5f5f5 70%, #f5f5f5 100%); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; animation: ig-shine 2.25s cubic-bezier(0.25, 0.1, 0.25, 1) infinite; font-weight: 550; font-size: 13px; }
-@keyframes ig-shine { 0%, 18% { background-position: 100% 0; } 82%, 100% { background-position: 0% 0; } }
+/* 审计#12：去掉 backdrop-filter——静态徽标也会让背后每帧重绘的光斑反复重模糊，
+   改用不透明底色。 */
+.igRes { position: absolute; top: 8px; right: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #a3a3a3; background: rgba(26, 26, 26, 0.85); padding: 2px 7px; border-radius: 999px; }
+/* 审计#12：流光由 background-position 逐帧动画（文字每帧重绘）改为静态渐变 +
+   透明度呼吸（合成器属性）。 */
+.igLabel { background: linear-gradient(90deg, #f5f5f5 0%, #f5f5f5 45%, rgba(245, 245, 245, 0.55) 55%, #f5f5f5 100%); -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; animation: ig-breathe 2.25s ease-in-out infinite; font-weight: 550; font-size: 13px; }
 
 /* 浅色主题（与全局 [data-theme="light"] 一致） */
 [data-theme="light"] .igCanvas { background: #fafafa; }
-[data-theme="light"] .igGlow { background-image: radial-gradient(circle, #0b0d12 1.1px, transparent 1.6px); }
+[data-theme="light"] .igGlow { background: radial-gradient(ellipse 62% 55% at 50% 40%, rgba(11, 13, 18, 0.10), transparent 70%); }
 [data-theme="light"] .igRes { color: #a1a1a1; background: rgba(255, 255, 255, 0.72); }
 [data-theme="light"] .igLabel { background: linear-gradient(90deg, #1a1a1a 0%, #1a1a1a 30%, rgba(26, 26, 26, 0.45) 45%, rgba(26, 26, 26, 0.45) 55%, #1a1a1a 70%, #1a1a1a 100%); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; }
 

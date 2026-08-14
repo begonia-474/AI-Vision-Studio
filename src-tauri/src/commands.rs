@@ -121,6 +121,9 @@ pub async fn generate(
         .map_err(|e| format!("读取密钥异常: {}", e))??
         .ok_or("未设置 API Key，请先在设置页填入")?;
 
+    // 审计#12 诊断：任务级分阶段计时（毫秒），定位慢任务时间去向（提交/轮询/下载/缩略图）。
+    let t_start = std::time::Instant::now();
+
     let _ = app.emit(
         "gen-progress",
         ProgressPayload {
@@ -229,6 +232,11 @@ pub async fn generate(
         fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &err)?;
         return Err(err);
     }
+    eprintln!(
+        "[gen] task={} phase=submit_done elapsed={:?}",
+        req.task_id,
+        t_start.elapsed()
+    );
 
     // 同步厂商：submit 已置 Succeeded，remote_urls 在 handle 内。
     // 异步厂商：submit 返回 Submitted + task_id，轮询至终态，结果 URL 在 snapshot.remote_urls。
@@ -250,6 +258,11 @@ pub async fn generate(
     };
     // 提交记录 + 终态轮询记录合并（按下标对应）
     http_log.extend(poll_log);
+    eprintln!(
+        "[gen] task={} phase=poll_done elapsed={:?}",
+        req.task_id,
+        t_start.elapsed()
+    );
 
     let _ = app.emit(
         "gen-progress",
@@ -293,9 +306,10 @@ pub async fn generate(
         }
     };
     eprintln!(
-        "[gen] task={} local_paths={}",
+        "[gen] task={} local_paths={} phase=download_done elapsed={:?}",
         req.task_id,
-        local_paths.len()
+        local_paths.len(),
+        t_start.elapsed()
     );
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
@@ -317,6 +331,11 @@ pub async fn generate(
         .collect()
         .await;
     let thumbnail_path = thumbs.first().and_then(|t| t.clone());
+    eprintln!(
+        "[gen] task={} phase=thumbs_done elapsed={:?}",
+        req.task_id,
+        t_start.elapsed()
+    );
 
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
