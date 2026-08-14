@@ -5,6 +5,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { open } from "@tauri-apps/plugin-dialog";
+import { toAssetUrl } from "../api";
 import { ModelSelectModal } from "./ModelSelectModal";
 import { ParamPanel } from "./Popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -98,19 +100,15 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
     ta.style.height = Math.min(ta.scrollHeight, 250) + "px";
   }, [api.prompt]);
 
-  // 本地选图：用 FileReader 转 data url 作为参考图（演示用；真实链路可改为落盘路径）。
-  const onPickRef = () => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.onchange = () => {
-      const f = input.files?.[0];
-      if (!f) return;
-      const reader = new FileReader();
-      reader.onload = () => api.addRef(String(reader.result));
-      reader.readAsDataURL(f);
-    };
-    input.click();
+  // 本地选图：系统文件对话框取绝对路径（审计#12：原先 FileReader 读成 base64 data URL，
+  // 数 MB 字符串驻留 React state 并绘入 <img> DOM，removeRef/切会话均不释放——
+  // 多张参考图可占数十 MB；改为只存路径，预览经 asset 协议渲染，后端收编时才读文件）。
+  const onPickRef = async () => {
+    const sel = await open({
+      multiple: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (typeof sel === "string" && sel) api.addRef(sel);
   };
 
   // 多任务并行：生成按钮始终可用，进行中的任务数用角标提示。
@@ -163,7 +161,11 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
           <div className="flex flex-wrap items-center gap-2.5">
             {api.refs.map((r, i) => (
               <div className="relative size-10 shrink-0 overflow-hidden rounded-full border border-border-4 shadow-[0_4px_12px_var(--shadow-xs)]" key={i}>
-                <img src={r} alt="" className="h-full w-full object-cover" />
+                <img
+                  src={r.startsWith("http") || r.startsWith("data:") ? r : toAssetUrl(r)}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
                 <button
                   className="absolute top-0.5 right-0.5 grid size-4 cursor-pointer place-items-center rounded-full border border-border-1 bg-btn-dark text-[9px] leading-none text-white"
                   aria-label={t("prompt.removeRef")}
