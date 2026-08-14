@@ -43,7 +43,8 @@ export default function App() {
   const sessions = effectiveStudio === "video" ? videoSession : imageSession;
 
   // 侧边栏点击会话 / 新建会话时，跳回该会话所属工作室。
-  const activateStudio = () => setActiveView(effectiveStudio);
+  // useCallback：引用稳定，配合 Sidebar memo（审计#12），避免每次渲染重建 props。
+  const activateStudio = useCallback(() => setActiveView(effectiveStudio), [effectiveStudio]);
 
   // 启动加载用户自添加模型 → 注册表 emitter 通知两个 studio 刷新列表
   useEffect(() => {

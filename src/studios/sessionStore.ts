@@ -606,19 +606,39 @@ export function useSessionStore(studio: Studio): SessionApi {
     [t],
   );
 
-  return {
-    sessions: state.sessions,
-    activeId: state.activeId,
-    results,
-    stats,
-    patchActive,
-    patchSession,
-    removeByHistoryId,
-    removeByResultId,
-    removeByTaskId,
-    createSession,
-    switchSession,
-    renameSession,
-    deleteSession,
-  };
+  // 审计#12：SessionApi 对象引用稳定化——原先每次渲染返回全新字面量，任何内部
+  // 状态变更都会改变所有消费方（工作室 / 侧边栏）的 props 引用，连带整树重渲染；
+  // 跨工作室的进度事件本不该引起对方工作室渲染。此处按 state 缓存，引用仅在真实
+  // 变化时更新（各操作函数本身已是 useCallback 稳定引用），配合工作室组件的 memo。
+  return useMemo(
+    () => ({
+      sessions: state.sessions,
+      activeId: state.activeId,
+      results,
+      stats,
+      patchActive,
+      patchSession,
+      removeByHistoryId,
+      removeByResultId,
+      removeByTaskId,
+      createSession,
+      switchSession,
+      renameSession,
+      deleteSession,
+    }),
+    [
+      state,
+      results,
+      stats,
+      patchActive,
+      patchSession,
+      removeByHistoryId,
+      removeByResultId,
+      removeByTaskId,
+      createSession,
+      switchSession,
+      renameSession,
+      deleteSession,
+    ],
+  );
 }
