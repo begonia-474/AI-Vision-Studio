@@ -41,6 +41,10 @@ export const generate = (req: GenRequest) =>
 
 export const listHistory = () => invoke<HistoryTask[]>("list_history");
 
+// 分页历史查询（图库渐进加载，审计#12：单次 payload 有界）
+export const listHistoryPage = (limit: number, offset: number) =>
+  invoke<HistoryTask[]>("list_history_page", { limit, offset });
+
 // ============ 会话（SQLite sessions 表，权威介质） ============
 export const listSessions = () => invoke<SessionRow[]>("list_sessions");
 

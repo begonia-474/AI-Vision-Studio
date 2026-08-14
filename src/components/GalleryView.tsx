@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { deleteHistories, ensureThumbnails, listHistory, onProgress, setStar, toAssetUrl } from "../api";
+import { deleteHistories, ensureThumbnails, listHistoryPage, onProgress, setStar, toAssetUrl } from "../api";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
@@ -217,13 +217,21 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   const searchRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  // 审计#12：图库由一次全量 list_history（上千行 × 大字段 JSON 的单次序列化峰值）
+  // 改为逐页拉满（每页 200 行，单次 payload 有界），筛选/排序语义不变（仍全量聚合）。
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const list = await listHistory();
+      const PAGE = 200;
+      const rows: HistoryTask[] = [];
+      for (let offset = 0; ; offset += PAGE) {
+        const page = await listHistoryPage(PAGE, offset);
+        rows.push(...page);
+        if (page.length < PAGE) break;
+      }
       if (aliveRef.current) {
-        setItems(list);
-        setSelected((prev) => new Set([...prev].filter((id) => list.some((x) => x.id === id))));
+        setItems(rows);
+        setSelected((prev) => new Set([...prev].filter((id) => rows.some((x) => x.id === id))));
       }
     } catch (e) {
       if (aliveRef.current) {
