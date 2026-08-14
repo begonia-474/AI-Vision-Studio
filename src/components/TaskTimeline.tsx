@@ -3,6 +3,11 @@
 //   loading → 生成中动画（点阵画布 + 阶段文案）；error → 红条错误；done → 结果图网格（批量 n 图）。
 // 新任务追加到底部并自动贴底滚动；用户上滚查看历史时停止跟随（聊天式直觉）。
 // 多任务并行：每个任务独立状态，进度事件按 taskId 路由（见 useStudio）。
+//
+// 审计#12（任务线重渲染卡顿的根修）：任务卡拆分为 TaskGroupCard memo 组件，
+// 组构建时对未变化任务的 items 数组复用上次引用，进度事件（phase/msg 变更）
+// 只重渲染受影响的任务卡，其余数百张卡整体跳过；贴底编排的布局签名由
+// O(n) 全量字符串拼接改为快照比较短路（progress 只改 phase/msg 时不再重跑）。
 
 import { memo, useEffect, useMemo, useRef } from "react";
 import type { TFunction } from "i18next";
@@ -42,6 +47,24 @@ interface TaskGroup {
   ar: string;
   phase?: string;
   items: ResultItem[];
+}
+
+interface TaskGroupCardProps {
+  studio: "image" | "video";
+  taskId: string;
+  status: ResultStatus;
+  at: number;
+  prompt: string;
+  model: string;
+  ar: string;
+  phase?: string;
+  items: ResultItem[];
+  onImageToVideo?: (src: string, prompt: string) => void;
+  onImageToImage?: (src: string, prompt: string) => void;
+  onDeleteTask: (taskId: string) => void;
+  onRegenerate: (taskId: string) => void;
+  onOpenDetail?: (item: ResultItem) => void;
+  onReEdit?: (item: ResultItem) => void;
 }
 
 const phaseLabel = (t: TFunction, phase?: string) => {
@@ -98,6 +121,248 @@ const FC_BASE =
   "h-[112px] w-24 shrink-0 overflow-hidden rounded-2xl border border-border-4 bg-chip shadow-[0_10px_30px_var(--shadow)] transition-all duration-300 hover:z-20 hover:scale-110 hover:rotate-0";
 const FC_POS = ["-rotate-12", "-rotate-4 -ml-4", "size-24 rounded-full rotate-6 -ml-4", "rotate-12 -ml-4"];
 
+const CARD_HOVER_BTN =
+  "pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]";
+const CARD_ARROW =
+  "-ml-1 w-0 overflow-hidden opacity-0 transition-all duration-150 group-hover/arrowbtn:ml-0 group-hover/arrowbtn:w-3 group-hover/arrowbtn:opacity-50";
+
+/** 单个任务卡（一组同 taskId 的结果卡）：memo + 组构建时的 items 引用复用，
+ *  进度事件只重渲染受影响的任务；props 均为原始值/稳定引用，浅比较即可跳过
+ *  未变化任务（审计#12）。渲染期派生值（时间文案/列数/比例）只在渲染时算一次。 */
+const TaskGroupCard = memo(function TaskGroupCard({
+  studio,
+  taskId,
+  status,
+  at,
+  prompt,
+  model,
+  ar,
+  phase,
+  items,
+  onImageToVideo,
+  onImageToImage,
+  onDeleteTask,
+  onRegenerate,
+  onOpenDetail,
+  onReEdit,
+}: TaskGroupCardProps) {
+  const { t } = useTranslation();
+  const timeLabel = new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const cols = gridCols(items.length, ar);
+  const aspect = mediaAspect(ar);
+  const resLabel = resolutionLabel(ar);
+  const phaseText = phaseLabel(t, phase);
+
+  return (
+    <div className="flex max-w-[1300px] flex-col items-start justify-end gap-4 p-1 md:flex-row md:gap-8">
+      {/* 左列：prompt 卡 + 模型徽章（krea 队列布局） */}
+      <div className="flex w-full justify-end lg:w-1/4">
+        <div className="group/metadata flex w-full flex-col items-end sm:w-fit">
+          {/* 提示词卡：用 div（非 button）保证文本可拖选复制；
+              滚动隔离靠内层 overflow-y-auto + overscroll-contain（滚轮在卡片内滚动、不带动时间线）；
+              拖选结束（存在选区）时不触发点击打开，避免复制时误跳转 */}
+          <div
+            className="w-fit min-w-48 max-w-96 cursor-pointer select-text rounded-xl bg-chip p-5 text-left text-sm leading-relaxed text-foreground transition-[background-color,scale] duration-200 ease-out active:scale-[0.995] hover:bg-hover"
+            role="button"
+            tabIndex={0}
+            title={t("common.open")}
+            onClick={() => {
+              const sel = window.getSelection();
+              if (sel && sel.toString().trim()) return;
+              const first = items.find((it) => it.url);
+              if (first?.url) window.open(first.url, "_blank");
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              const first = items.find((it) => it.url);
+              if (first?.url) window.open(first.url, "_blank");
+            }}
+          >
+            <div className="max-h-[200px] overflow-y-auto overscroll-contain [scrollbar-color:var(--scroll-thumb)_transparent] [scrollbar-width:thin] hover:[scrollbar-color:var(--scroll-thumb)_transparent]">
+              {prompt}
+            </div>
+          </div>
+          <div className="mt-2 flex w-full flex-wrap items-center justify-between gap-1.5 pl-1">
+            <div className="ml-1 flex flex-wrap justify-end gap-1.5">
+              <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-xs font-medium text-text-3">{model}</span>
+              <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-[11px] font-medium text-text-3">{ar}</span>
+              <span className="px-1 text-[11px] text-faint-2">{timeLabel}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 右列：结果网格 + 行级操作（krea 队列布局） */}
+      <div className="group relative w-full grow pt-2 md:pt-0 lg:w-2/3">
+        {status === "loading" && (
+          <div className="flex min-w-0 flex-col gap-2" aria-busy="true">
+            {/* 生成中动画：与完成网格同布局同比例（每格一块生成画布，max-h 45vh 对齐结果卡），
+                完成后原格替换为结果图，无布局跳动。提示词在左侧气泡，这里不再重复。 */}
+            <div className={cn("grid min-w-0", cols)}>
+              {items.map((it) => (
+                <ImageGeneration
+                  key={it.id}
+                  resolution={resLabel}
+                  ratio={aspect}
+                />
+              ))}
+            </div>
+            {phase && (
+              <div className="flex justify-end">
+                <ImageGenerationLabel text={phaseText} />
+              </div>
+            )}
+          </div>
+        )}
+        {status === "error" && (
+          <div className="min-w-0 rounded-md border border-[rgba(239,68,68,.25)] bg-[rgba(239,68,68,.06)] px-4 py-3.5 text-xs leading-relaxed break-words text-destructive" role="alert">
+            {items[0]?.error ?? t("common.generationFailed")}
+          </div>
+        )}
+        {status === "done" && (
+          <>
+            <div className={cn("grid min-w-0", cols)}>
+              {items.map((it) => (
+                <div
+                  className="group/image relative min-w-0 cursor-pointer overflow-hidden rounded-xl bg-card transition-transform duration-250 ease-[cubic-bezier(.19,0,0,1)] hover:scale-[1.01] active:scale-[0.99]"
+                  key={it.id}
+                  role="group"
+                  aria-label={t("result.cardGroup")}
+                  onClick={() => onOpenDetail?.(it)}
+                >
+                    {studio === "image" ? (
+                      <img
+                        src={it.url}
+                        alt=""
+                        loading="lazy"
+                        className="block w-full object-contain xl:max-h-[45vh]"
+                        style={{ aspectRatio: aspect }}
+                      />
+                    ) : (
+                      <>
+                        {/* 视频卡：img 保持 in-flow 撑起卡片高度（absolute 会让网格行塌陷为 0，视频不可见） */}
+                        <img
+                          src={it.url}
+                          alt=""
+                          className="block w-full object-contain xl:max-h-[45vh]"
+                          style={{ aspectRatio: aspect }}
+                        />
+                        <div className="absolute inset-0 grid place-items-center before:absolute before:inset-0 before:content-[''] before:bg-black/25">
+                          <IconPlay size={16} className="relative size-12 rounded-full border border-border-4 bg-btn-dark p-4 text-foreground backdrop-blur-[8px]" />
+                        </div>
+                      </>
+                    )}
+
+                    {/* hover 渐变遮罩 */}
+                    <div className="pointer-events-none absolute inset-x-0 top-0 h-24 rounded-t-xl bg-linear-to-b from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 rounded-b-xl bg-linear-to-t from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
+
+                    {/* 底部操作条：重新生成 / 编辑 / 以图生图 / 图生视频 + 在文件夹中显示
+                        （产物在本地，不做"下载"，与图库/详情面板约定一致）。点卡片本体打开作品详情。 */}
+                    <div className="absolute inset-x-1 bottom-1 z-10 flex items-end justify-between text-xs font-medium text-white opacity-0 transition-[translate,opacity] duration-150 ease-out translate-y-2 group-hover/image:translate-y-0 group-hover/image:opacity-100">
+                      <div className="pointer-events-none flex flex-col-reverse">
+                        <button
+                          className={CARD_HOVER_BTN}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRegenerate(taskId);
+                          }}
+                        >
+                          <IconRefresh size={12} />
+                          <span>{t("result.regenerate")}</span>
+                        </button>
+                        <button
+                          className={cn("group/arrowbtn", CARD_HOVER_BTN)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onReEdit?.(it);
+                          }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                          </svg>
+                          <span>{t("gallery.reEdit")}</span>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={CARD_ARROW}>
+                            <path d="M7 7h10v10" />
+                            <path d="M7 17 17 7" />
+                          </svg>
+                        </button>
+                        {studio === "image" && onImageToImage && (
+                          <button
+                            className={cn("group/arrowbtn", CARD_HOVER_BTN)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onImageToImage(it.path ?? it.url ?? "", prompt);
+                            }}
+                          >
+                            <IconImage size={15} />
+                            <span>{t("result.imgToImage")}</span>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={CARD_ARROW}>
+                              <path d="M7 7h10v10" />
+                              <path d="M7 17 17 7" />
+                            </svg>
+                          </button>
+                        )}
+                        {studio === "image" && onImageToVideo && (
+                          <button
+                            className={cn("group/arrowbtn", CARD_HOVER_BTN)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onImageToVideo(it.path ?? it.url ?? "", prompt);
+                            }}
+                          >
+                            <IconVideo size={15} />
+                            <span>{t("result.imgToVideo")}</span>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className={CARD_ARROW}>
+                              <path d="M7 7h10v10" />
+                              <path d="M7 17 17 7" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      <span className="flex-grow" />
+                      <button
+                        className={cn("min-w-[28px]", CARD_HOVER_BTN)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (it.path) void openPath(it.path, "reveal").catch(() => {});
+                        }}
+                      >
+                        <IconDownload size={14} />
+                        <span>{t("common.revealInFolder")}</span>
+                      </button>
+                    </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 行级操作栏（整行 hover 上浮）：在文件夹中显示 / 删除 */}
+            <div className="flex min-h-[28px] w-full flex-wrap items-center justify-end gap-1 text-xs font-medium text-text-3 transition-[translate,opacity] duration-150 ease-out translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100">
+              <button
+                className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-hover"
+                onClick={() => {
+                  const first = items.find((x) => x.path);
+                  if (first?.path) {
+                    void openPath(first.path, "reveal").catch(() => {});
+                  }
+                }}
+              >
+                <IconDownload size={12} /> {t("common.revealInFolder")}
+              </button>
+              <button
+                className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-red-500/15 hover:text-red-600"
+                onClick={() => onDeleteTask(taskId)}
+              >
+                <IconTrash size={14} /> {t("result.deleteTask")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
+
 // memo：折叠/展开动画期间（仅输入条高度变化）时间线 props 不变则跳过重渲染，
 // 避免几百张卡的 JSX 每帧重建导致卡顿。语言切换由 useTranslation 的
 // useSyncExternalStore 订阅驱动，不受 memo 影响。
@@ -117,6 +382,10 @@ export const TaskTimeline = memo(function TaskTimeline({
   const { t } = useTranslation();
 
   // 按 taskId 分组：一次提交（批量 n 图 / 单图）合并为一条时间线消息。
+  // 审计#12：未变化任务的 items 数组复用上次引用——sessionStore 只对受影响
+  // 任务生成新条目对象（其余条目引用不变），据此逐组判断相同则复用，
+  // 使 TaskGroupCard 的浅比较对未受影响任务直接跳过。
+  const itemsCacheRef = useRef<Map<string, ResultItem[]>>(new Map());
   const groups = useMemo(() => {
     const map = new Map<string, TaskGroup>();
     for (const it of results) {
@@ -137,6 +406,8 @@ export const TaskTimeline = memo(function TaskTimeline({
       g.items.push(it);
     }
     const list = [...map.values()];
+    const prevCache = itemsCacheRef.current;
+    const nextCache = new Map<string, ResultItem[]>();
     for (const g of list) {
       g.phase = g.items[0]?.phase;
       g.status = g.items.some((x) => x.status === "loading")
@@ -144,7 +415,16 @@ export const TaskTimeline = memo(function TaskTimeline({
         : g.items.some((x) => x.status === "error")
           ? "error"
           : "done";
+      const prev = prevCache.get(g.taskId);
+      const same =
+        prev !== undefined &&
+        prev.length === g.items.length &&
+        prev.every((p, i) => p === g.items[i]);
+      const items = same ? prev : g.items;
+      g.items = items;
+      nextCache.set(g.taskId, items);
     }
+    itemsCacheRef.current = nextCache;
     return list;
   }, [results]);
 
@@ -154,6 +434,10 @@ export const TaskTimeline = memo(function TaskTimeline({
   // 导致重启 / 切换会话后无法自动回到底部。
   const stick = useRef(true);
   const lastScrollHeight = useRef(0);
+  // 输入条预留高度缓存（上层直写 style.paddingBottom）。审计#12：原实现每次滚动都
+  // getComputedStyle（强制样式重算）；padding 只在布局变化（折叠/展开）时改变，
+  // 故仅在 scrollHeight 变化时刷新缓存，滚动热路径用缓存值。
+  const padCache = useRef(80);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -161,8 +445,10 @@ export const TaskTimeline = memo(function TaskTimeline({
       // 参照「内容末尾」（滚动区底部减去输入条预留）而非滚动区底部：预留随折叠动画伸缩时
       // 内容末尾固定不动，atBottom 判定不会被动画推远/拉近——否则展开把底部推远，
       // 继续滚动误判「离开底部」→ 折叠，形成「像没有最底部」的循环。
-      // 预留高度由上层直写 DOM（style.paddingBottom），这里实时读取。
-      const pad = parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      if (el.scrollHeight !== lastScrollHeight.current) {
+        padCache.current = parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      }
+      const pad = padCache.current;
       const near = el.scrollHeight - pad - el.scrollTop - el.clientHeight;
       // 滞回：已在底部时需上滚更远才判定离开，离开后回到底部附近即恢复跟随，
       // 避免停在阈值边缘时值翻转、折叠动画反复触发（卡顿源）。
@@ -189,17 +475,28 @@ export const TaskTimeline = memo(function TaskTimeline({
   // - 布局签名过滤：进度事件（phase/msg 更新）不改变卡片布局，跳过跟随——
   //   生成中任务每 3-5s 收到 gen-progress，results 引用变化会重跑本 effect，
   //   用户上滚停住（容差内 stick 残留 true）时会被进度事件拉回底部（"过几秒突然跳底"）。
+  //   审计#12：签名由 results 全量字符串拼接（O(n) 分配）改为快照比较短路——
+  //   只比较每条的 id/status/url（唯一能影响布局的字段），相同即跳过整个编排。
   // - 延迟补滚（图片加载/300ms 布局稳定）前实时校验贴底：图片可能加载数秒，
   //   期间用户已上滚——仅查 stick 会把已离开底部的用户拉回。
-  const lastLayoutKey = useRef("");
+  const layoutSnapRef = useRef<{ id: string; status: ResultStatus; url: string }[] | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const key = results
-      .map((r) => `${r.id}:${r.status}:${r.url ?? ""}:${r.taskId}:${r.prompt}:${r.ar}:${r.at}`)
-      .join("~");
-    if (key === lastLayoutKey.current) return;
-    lastLayoutKey.current = key;
+    const prev = layoutSnapRef.current;
+    let same = prev !== null && prev.length === results.length;
+    if (same && prev) {
+      for (let i = 0; i < results.length; i += 1) {
+        const r = results[i];
+        const p = prev[i];
+        if (p.id !== r.id || p.status !== r.status || p.url !== (r.url ?? "")) {
+          same = false;
+          break;
+        }
+      }
+    }
+    if (same) return;
+    layoutSnapRef.current = results.map((r) => ({ id: r.id, status: r.status, url: r.url ?? "" }));
     const scroll = () => {
       if (!stick.current) return;
       el.scrollTop = el.scrollHeight;
@@ -209,7 +506,7 @@ export const TaskTimeline = memo(function TaskTimeline({
     const raf = requestAnimationFrame(scroll);
     const nearBottom = () => {
       if (!stick.current) return false;
-      const pad = parseFloat(getComputedStyle(el).paddingBottom) || 0;
+      const pad = padCache.current;
       return el.scrollHeight - pad - el.scrollTop - el.clientHeight < 80;
     };
     const onLoad = () => {
@@ -251,244 +548,24 @@ export const TaskTimeline = memo(function TaskTimeline({
   return (
     <div className="mx-auto flex w-full max-w-[1300px] flex-col gap-[30px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
       {groups.map((g) => (
-        <div className="flex max-w-[1300px] flex-col items-start justify-end gap-4 p-1 md:flex-row md:gap-8" key={g.taskId}>
-          {/* 左列：prompt 卡 + 模型徽章（krea 队列布局） */}
-          <div className="flex w-full justify-end lg:w-1/4">
-            <div className="group/metadata flex w-full flex-col items-end sm:w-fit">
-              {/* 提示词卡：用 div（非 button）保证文本可拖选复制；
-                  滚动隔离靠内层 overflow-y-auto + overscroll-contain（滚轮在卡片内滚动、不带动时间线）；
-                  拖选结束（存在选区）时不触发点击打开，避免复制时误跳转 */}
-              <div
-                className="w-fit min-w-48 max-w-96 cursor-pointer select-text rounded-xl bg-chip p-5 text-left text-sm leading-relaxed text-foreground transition-[background-color,scale] duration-200 ease-out active:scale-[0.995] hover:bg-hover"
-                role="button"
-                tabIndex={0}
-                title={t("common.open")}
-                onClick={() => {
-                  const sel = window.getSelection();
-                  if (sel && sel.toString().trim()) return;
-                  const first = g.items.find((it) => it.url);
-                  if (first?.url) window.open(first.url, "_blank");
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
-                  const first = g.items.find((it) => it.url);
-                  if (first?.url) window.open(first.url, "_blank");
-                }}
-              >
-                <div className="max-h-[200px] overflow-y-auto overscroll-contain [scrollbar-color:var(--scroll-thumb)_transparent] [scrollbar-width:thin] hover:[scrollbar-color:var(--scroll-thumb)_transparent]">
-                  {g.prompt}
-                </div>
-              </div>
-              <div className="mt-2 flex w-full flex-wrap items-center justify-between gap-1.5 pl-1">
-                <div className="ml-1 flex flex-wrap justify-end gap-1.5">
-                  <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-xs font-medium text-text-3">{g.model}</span>
-                  <span className="flex w-fit items-center gap-1 rounded-lg bg-chip px-2 py-1 text-[11px] font-medium text-text-3">{g.ar}</span>
-                  <span className="px-1 text-[11px] text-faint-2">
-                    {new Date(g.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 右列：结果网格 + 行级操作（krea 队列布局） */}
-          <div className="group relative w-full grow pt-2 md:pt-0 lg:w-2/3">
-            {g.status === "loading" && (
-              <div className="flex min-w-0 flex-col gap-2" aria-busy="true">
-                {/* 生成中动画：与完成网格同布局同比例（每格一块生成画布，max-h 45vh 对齐结果卡），
-                    完成后原格替换为结果图，无布局跳动。提示词在左侧气泡，这里不再重复。 */}
-                <div className={cn("grid min-w-0", gridCols(g.items.length, g.ar))}>
-                  {g.items.map((it) => (
-                    <ImageGeneration
-                      key={it.id}
-                      resolution={resolutionLabel(g.ar)}
-                      ratio={mediaAspect(g.ar)}
-                    />
-                  ))}
-                </div>
-                {g.phase && (
-                  <div className="flex justify-end">
-                    <ImageGenerationLabel text={phaseLabel(t, g.phase)} />
-                  </div>
-                )}
-              </div>
-            )}
-            {g.status === "error" && (
-              <div className="min-w-0 rounded-md border border-[rgba(239,68,68,.25)] bg-[rgba(239,68,68,.06)] px-4 py-3.5 text-xs leading-relaxed break-words text-destructive" role="alert">
-                {g.items[0]?.error ?? t("common.generationFailed")}
-              </div>
-            )}
-            {g.status === "done" && (
-              <>
-                <div className={cn("grid min-w-0", gridCols(g.items.length, g.ar))}>
-                  {g.items.map((it) => (
-                    <div
-                      className="group/image relative min-w-0 cursor-pointer overflow-hidden rounded-xl bg-card transition-transform duration-250 ease-[cubic-bezier(.19,0,0,1)] hover:scale-[1.01] active:scale-[0.99]"
-                      key={it.id}
-                      role="group"
-                      aria-label={t("result.cardGroup")}
-                      onClick={() => onOpenDetail?.(it)}
-                    >
-                        {studio === "image" ? (
-                          <img
-                            src={it.url}
-                            alt=""
-                            loading="lazy"
-                            className="block w-full object-contain xl:max-h-[45vh]"
-                            style={{ aspectRatio: mediaAspect(g.ar) }}
-                          />
-                        ) : (
-                          <>
-                            {/* 视频卡：img 保持 in-flow 撑起卡片高度（absolute 会让网格行塌陷为 0，视频不可见） */}
-                            <img
-                              src={it.url}
-                              alt=""
-                              className="block w-full object-contain xl:max-h-[45vh]"
-                              style={{ aspectRatio: mediaAspect(g.ar) }}
-                            />
-                            <div className="absolute inset-0 grid place-items-center before:absolute before:inset-0 before:content-[''] before:bg-black/25">
-                              <IconPlay size={16} className="relative size-12 rounded-full border border-border-4 bg-btn-dark p-4 text-foreground backdrop-blur-[8px]" />
-                            </div>
-                          </>
-                        )}
-
-                        {/* hover 渐变遮罩 */}
-                        <div className="pointer-events-none absolute inset-x-0 top-0 h-24 rounded-t-xl bg-linear-to-b from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
-                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 rounded-b-xl bg-linear-to-t from-black/30 via-black/15 via-40% to-transparent opacity-0 transition-opacity duration-150 group-hover/image:opacity-100" />
-
-                        {/* 底部操作条：重新生成 / 编辑 / 以图生图 / 图生视频 + 在文件夹中显示
-                            （产物在本地，不做"下载"，与图库/详情面板约定一致）。点卡片本体打开作品详情。 */}
-                        <div className="absolute inset-x-1 bottom-1 z-10 flex items-end justify-between text-xs font-medium text-white opacity-0 transition-[translate,opacity] duration-150 ease-out translate-y-2 group-hover/image:translate-y-0 group-hover/image:opacity-100">
-                          <div className="pointer-events-none flex flex-col-reverse">
-                            <button
-                              className="pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRegenerate(g.taskId);
-                              }}
-                            >
-                              <IconRefresh size={12} />
-                              <span>{t("result.regenerate")}</span>
-                            </button>
-                            <button
-                              className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onReEdit?.(it);
-                              }}
-                            >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
-                              </svg>
-                              <span>{t("gallery.reEdit")}</span>
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth={1.5}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                className="-ml-1 w-0 overflow-hidden opacity-0 transition-all duration-150 group-hover/arrowbtn:ml-0 group-hover/arrowbtn:w-3 group-hover/arrowbtn:opacity-50"
-                              >
-                                <path d="M7 7h10v10" />
-                                <path d="M7 17 17 7" />
-                              </svg>
-                            </button>
-                            {studio === "image" && onImageToImage && (
-                              <button
-                                className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onImageToImage(it.path ?? it.url ?? "", g.prompt);
-                                }}
-                              >
-                                <IconImage size={15} />
-                                <span>{t("result.imgToImage")}</span>
-                                <svg
-                                  width="12"
-                                  height="12"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth={1.5}
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  className="-ml-1 w-0 overflow-hidden opacity-0 transition-all duration-150 group-hover/arrowbtn:ml-0 group-hover/arrowbtn:w-3 group-hover/arrowbtn:opacity-50"
-                                >
-                                  <path d="M7 7h10v10" />
-                                  <path d="M7 17 17 7" />
-                                </svg>
-                              </button>
-                            )}
-                            {studio === "image" && onImageToVideo && (
-                              <button
-                                className="group/arrowbtn pointer-events-auto flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onImageToVideo(it.path ?? it.url ?? "", g.prompt);
-                                }}
-                              >
-                                <IconVideo size={15} />
-                                <span>{t("result.imgToVideo")}</span>
-                                <svg
-                                  width="12"
-                                  height="12"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth={1.5}
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  className="-ml-1 w-0 overflow-hidden opacity-0 transition-all duration-150 group-hover/arrowbtn:ml-0 group-hover/arrowbtn:w-3 group-hover/arrowbtn:opacity-50"
-                                >
-                                  <path d="M7 7h10v10" />
-                                  <path d="M7 17 17 7" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <span className="flex-grow" />
-                          <button
-                            className="pointer-events-auto flex w-fit min-w-[28px] cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-[background-color,backdrop-filter] duration-100 hover:bg-black/40 hover:backdrop-blur-lg [filter:drop-shadow(0_0_4px_rgba(0,0,0,0.5))]"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (it.path) void openPath(it.path, "reveal").catch(() => {});
-                            }}
-                          >
-                            <IconDownload size={14} />
-                            <span>{t("common.revealInFolder")}</span>
-                          </button>
-                        </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* 行级操作栏（整行 hover 上浮）：在文件夹中显示 / 删除 */}
-                <div className="flex min-h-[28px] w-full flex-wrap items-center justify-end gap-1 text-xs font-medium text-text-3 transition-[translate,opacity] duration-150 ease-out translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100">
-                  <button
-                    className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-hover"
-                    onClick={() => {
-                      const first = g.items.find((x) => x.path);
-                      if (first?.path) {
-                        void openPath(first.path, "reveal").catch(() => {});
-                      }
-                    }}
-                  >
-                    <IconDownload size={12} /> {t("common.revealInFolder")}
-                  </button>
-                  <button
-                    className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-red-500/15 hover:text-red-600"
-                    onClick={() => onDeleteTask(g.taskId)}
-                  >
-                    <IconTrash size={14} /> {t("result.deleteTask")}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <TaskGroupCard
+          key={g.taskId}
+          studio={studio}
+          taskId={g.taskId}
+          status={g.status}
+          at={g.at}
+          prompt={g.prompt}
+          model={g.model}
+          ar={g.ar}
+          phase={g.phase}
+          items={g.items}
+          onImageToVideo={onImageToVideo}
+          onImageToImage={onImageToImage}
+          onDeleteTask={onDeleteTask}
+          onRegenerate={onRegenerate}
+          onOpenDetail={onOpenDetail}
+          onReEdit={onReEdit}
+        />
       ))}
     </div>
   );
