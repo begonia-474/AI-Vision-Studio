@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use base64::Engine;
 use futures_util::StreamExt;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tauri::Manager;
 use tokio::io::AsyncWriteExt;
 
@@ -39,12 +39,18 @@ pub fn init(app: &tauri::AppHandle) -> Result<(), String> {
     app.asset_protocol_scope()
         .allow_directory(&dir, true)
         .map_err(|e| e.to_string())?;
-    // 参考图收编目录 GC（审计#5）：启动时顺手清理过期副本。
+    // 审计#12：参考图收编目录 GC（审计#5）原先在 setup 主线程同步执行（整目录枚举 +
+    // 逐文件 metadata/删除），拖慢窗口拉起；已移入 run_startup_gc 后台线程，init 只做
+    // 目录解析 + asset scope 授权 + 建库（三者需在命令可用前完成）。
+    ensure_schema()
+}
+
+/// 启动期参考图 GC（后台线程执行）：清理 inputs 目录下超过保留期的收编副本。
+pub fn run_startup_gc() {
     let cleaned = gc_inputs(INPUTS_MAX_AGE_DAYS);
     if cleaned > 0 {
         eprintln!("[storage] 参考图 GC：清理 {} 个过期文件", cleaned);
     }
-    ensure_schema()
 }
 
 /// 参考图收编副本保留期（天）。副本仅用于"重新生成/跨工作室跳转"复用，属可再生数据：
@@ -101,13 +107,30 @@ pub fn asset_root() -> PathBuf {
 }
 
 /// 当日产物目录：outputs\YYYY\MM\DD（不存在时创建）。
+/// 审计#12：按日期缓存，同日多文件下载不再重复 create_dir_all 与日期计算；跨天自动失效。
+static TODAY_DIR: OnceLock<std::sync::Mutex<(String, PathBuf)>> = OnceLock::new();
+
 fn today_output_dir() -> Result<PathBuf, String> {
     let now = chrono::Local::now();
+    let key = now.format("%Y-%m-%d").to_string();
+    if let Some(lock) = TODAY_DIR.get() {
+        if let Ok(g) = lock.lock() {
+            if g.0 == key {
+                return Ok(g.1.clone());
+            }
+        }
+    }
     let dir = asset_root()
         .join(now.format("%Y").to_string())
         .join(now.format("%m").to_string())
         .join(now.format("%d").to_string());
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let lock = TODAY_DIR.get_or_init(|| std::sync::Mutex::new((key.clone(), dir.clone())));
+    if let Ok(mut g) = lock.lock() {
+        if g.0 != key {
+            *g = (key, dir.clone());
+        }
+    }
     Ok(dir)
 }
 
@@ -646,7 +669,10 @@ pub fn insert_task(h: HistoryInsert) -> Result<i64, String> {
 pub fn list_sessions() -> Result<Vec<SessionRow>, String> {
     let conn = open_conn()?;
     let mut stmt = conn
-        .prepare("SELECT id, title, name_manually_edited, created_at, updated_at FROM sessions")
+        // 审计#12：前端 sortByRecent 与 idx_sessions_updated 索引对应，查询端直接排序走索引。
+        .prepare(
+            "SELECT id, title, name_manually_edited, created_at, updated_at FROM sessions ORDER BY updated_at DESC",
+        )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
@@ -778,33 +804,42 @@ pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
     Ok(out)
 }
 
-/// 删除任务行，并清理本地产物文件与缩略图（文件不存在时忽略错误）。
-pub fn delete_task(id: i64) -> Result<(), String> {
+/// 批量删除任务（图库批量删除）：审计#12——原先逐条 delete_task 各自独立连接 +
+/// 逐条 autocommit（每次 fsync），批量删除多次 fsync 拖慢；改为单连接单事务：
+/// 行删除一次提交，文件删除在提交后统一执行（不存在时忽略）。
+pub fn delete_tasks(ids: &[i64]) -> Result<(), String> {
     let conn = open_conn()?;
-    let local_json: String = conn
-        .query_row(
-            "SELECT local_paths_json FROM tasks WHERE id=?1",
-            params![id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let thumb: Option<String> = conn
-        .query_row(
-            "SELECT thumbnail_path FROM tasks WHERE id=?1",
-            params![id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM tasks WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-
-    if let Ok(paths) = serde_json::from_str::<Vec<String>>(&local_json) {
-        for p in paths {
-            let _ = fs::remove_file(p);
+    let mut files: Vec<String> = Vec::new();
+    let mut thumbs: Vec<String> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT local_paths_json, thumbnail_path FROM tasks WHERE id=?1")
+            .map_err(|e| e.to_string())?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        for id in ids {
+            let row = stmt
+                .query_row(params![id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if let Some((local_json, thumb)) = row {
+                if let Ok(paths) = serde_json::from_str::<Vec<String>>(&local_json) {
+                    files.extend(paths);
+                }
+                if let Some(t) = thumb {
+                    thumbs.push(t);
+                }
+            }
+            tx.execute("DELETE FROM tasks WHERE id=?1", params![id])
+                .map_err(|e| e.to_string())?;
         }
+        tx.commit().map_err(|e| e.to_string())?;
     }
-    if let Some(t) = thumb {
+    for p in files {
+        let _ = fs::remove_file(p);
+    }
+    for t in thumbs {
         let _ = fs::remove_file(t);
     }
     Ok(())
@@ -827,7 +862,7 @@ pub fn set_starred(id: i64, starred: bool) -> Result<(), String> {
 // 结构与旧 keyring 数据不互通，首次使用需重新填入。
 
 /// { "api_keys": { providerId: key }, "workspaces": { providerId: workspaceId } }
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 struct KeyFile {
     api_keys: std::collections::HashMap<String, String>,
     workspaces: std::collections::HashMap<String, String>,
@@ -838,7 +873,12 @@ fn keys_path() -> PathBuf {
 }
 
 /// 串行化 keys.json 读写（保存路径：临时文件 + 原子重命名，避免写一半损坏）。
-static KEYS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// 审计#12：由 Mutex 改为 RwLock——写仍互斥（读-改-写原子），读并发不再互相阻塞；
+/// 配合 KeyFile 内存缓存，读路径（generate 取 key / dashscope base_url / 掩码回显）
+/// 命中缓存时零磁盘 IO。
+static KEYS_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+/// keys.json 已解析内容的进程内缓存；写操作成功后同步刷新，读操作直接复用。
+static KEYS_CACHE: std::sync::RwLock<Option<KeyFile>> = std::sync::RwLock::new(None);
 
 fn load_key_file() -> Result<KeyFile, String> {
     match fs::read(keys_path()) {
@@ -846,6 +886,18 @@ fn load_key_file() -> Result<KeyFile, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(KeyFile::default()),
         Err(e) => Err(format!("读取 keys.json 失败: {}", e)),
     }
+}
+
+/// 读路径：缓存命中直接返回，未命中读盘后填充缓存。
+fn load_key_file_cached() -> Result<KeyFile, String> {
+    if let Some(k) = KEYS_CACHE.read().unwrap().as_ref() {
+        return Ok(k.clone());
+    }
+    let k = load_key_file()?;
+    if let Ok(mut g) = KEYS_CACHE.write() {
+        *g = Some(k.clone());
+    }
+    Ok(k)
 }
 
 fn save_key_file(keys: &KeyFile) -> Result<(), String> {
@@ -864,46 +916,55 @@ fn save_key_file(keys: &KeyFile) -> Result<(), String> {
     fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
+/// 写路径：落盘成功后同步刷新缓存，后续读零 IO。
+fn save_key_file_cached(keys: &KeyFile) -> Result<(), String> {
+    save_key_file(keys)?;
+    if let Ok(mut g) = KEYS_CACHE.write() {
+        *g = Some(keys.clone());
+    }
+    Ok(())
+}
+
 pub fn save_key(provider_id: &str, api_key: &str) -> Result<(), String> {
-    let _guard = KEYS_LOCK.lock().unwrap();
-    let mut keys = load_key_file()?;
+    let _guard = KEYS_LOCK.write().unwrap();
+    let mut keys = load_key_file_cached()?;
     if api_key.trim().is_empty() {
         keys.api_keys.remove(provider_id);
     } else {
         keys.api_keys
             .insert(provider_id.to_string(), api_key.trim().to_string());
     }
-    save_key_file(&keys)
+    save_key_file_cached(&keys)
 }
 
 pub fn get_key(provider_id: &str) -> Result<Option<String>, String> {
-    let _guard = KEYS_LOCK.lock().unwrap();
-    Ok(load_key_file()?.api_keys.get(provider_id).cloned())
+    let _guard = KEYS_LOCK.read().unwrap();
+    Ok(load_key_file_cached()?.api_keys.get(provider_id).cloned())
 }
 
 pub fn delete_key(provider_id: &str) -> Result<(), String> {
-    let _guard = KEYS_LOCK.lock().unwrap();
-    let mut keys = load_key_file()?;
+    let _guard = KEYS_LOCK.write().unwrap();
+    let mut keys = load_key_file_cached()?;
     keys.api_keys.remove(provider_id);
-    save_key_file(&keys)
+    save_key_file_cached(&keys)
 }
 
 /// WorkspaceId（业务空间专属域名），为空串时清除。
 pub fn save_workspace(provider_id: &str, workspace_id: &str) -> Result<(), String> {
-    let _guard = KEYS_LOCK.lock().unwrap();
-    let mut keys = load_key_file()?;
+    let _guard = KEYS_LOCK.write().unwrap();
+    let mut keys = load_key_file_cached()?;
     if workspace_id.trim().is_empty() {
         keys.workspaces.remove(provider_id);
     } else {
         keys.workspaces
             .insert(provider_id.to_string(), workspace_id.trim().to_string());
     }
-    save_key_file(&keys)
+    save_key_file_cached(&keys)
 }
 
 pub fn get_workspace(provider_id: &str) -> Result<Option<String>, String> {
-    let _guard = KEYS_LOCK.lock().unwrap();
-    Ok(load_key_file()?.workspaces.get(provider_id).cloned())
+    let _guard = KEYS_LOCK.read().unwrap();
+    Ok(load_key_file_cached()?.workspaces.get(provider_id).cloned())
 }
 
 // —— 用户自添加模型 ——

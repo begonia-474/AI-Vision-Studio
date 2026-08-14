@@ -18,20 +18,45 @@ use crate::storage;
 ///   —— 响应 output.task_id；轮询 GET /api/v1/tasks/{id} → output.task_status + output.video_url
 const BASE_URL: &str = "https://dashscope.aliyuncs.com";
 
+/// 业务空间 base URL 进程内缓存（审计#12）：WorkspaceId 只在用户改设置时变化，
+/// 原先每次网络调用（视频轮询 5s/次 × 最长 60 分钟 ≈ 720 次）都 spawn_blocking 读
+/// keys.json 并抢全局 KEYS_LOCK；改为缓存 + 写时失效（save/清除 workspace 时调用
+/// invalidate_base_url_cache），轮询热循环降为常量。
+static BASE_URL_CACHE: std::sync::OnceLock<std::sync::RwLock<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn base_url_cache() -> &'static std::sync::RwLock<Option<String>> {
+    BASE_URL_CACHE.get_or_init(|| std::sync::RwLock::new(None))
+}
+
+/// workspace 变更后失效缓存（下次网络调用重新解析，见 commands::save_workspace_id）。
+pub fn invalidate_base_url_cache() {
+    if let Ok(mut g) = base_url_cache().write() {
+        *g = None;
+    }
+}
+
 /// 当前生效的 base URL：优先业务空间专属域名（北京），未配置 WorkspaceId 时回退旧域名。
-/// keys.json 读取是同步文件 IO，丢阻塞线程池避免占 tokio worker（审计#4）。
+/// 缓存命中零 IO；未命中时 keys.json 读取是同步文件 IO，丢阻塞线程池避免占 tokio worker（审计#4）。
 async fn base_url() -> String {
+    if let Some(cached) = base_url_cache().read().ok().and_then(|g| g.clone()) {
+        return cached;
+    }
     let ws = tokio::task::spawn_blocking(move || storage::get_workspace(PROVIDER_ID))
         .await
         .ok()
         .and_then(|r| r.ok())
         .and_then(|o| o);
-    match ws {
+    let url = match ws {
         Some(ws) if !ws.trim().is_empty() => {
             format!("https://{}.cn-beijing.maas.aliyuncs.com", ws.trim())
         }
         _ => BASE_URL.to_string(),
+    };
+    if let Ok(mut g) = base_url_cache().write() {
+        *g = Some(url.clone());
     }
+    url
 }
 const DEFAULT_IMAGE_MODEL: &str = "wan2.6-t2i"; // t2i 文生图
 const DEFAULT_IMAGE_EDIT_MODEL: &str = "wan2.6-image"; // i2i 图像编辑
