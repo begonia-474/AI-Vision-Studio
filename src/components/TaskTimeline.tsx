@@ -12,6 +12,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { IconDownload, IconImage, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -545,28 +546,56 @@ export const TaskTimeline = memo(function TaskTimeline({
     );
   }
 
+  // 审计#12：时间线窗口化渲染——任务多时 DOM 节点数与布局成本随历史线性增长；
+  // 用 @tanstack/react-virtual 只挂载视口 ± overscan 的任务卡，卡片高度动态测量，
+  // 贴底滚动 / 滚动跟随逻辑不变（虚拟器以总高度撑起滚动区，scrollHeight 语义一致）。
+  const virtualizer = useVirtualizer({
+    count: groups.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 420,
+    overscan: 6,
+  });
+
   return (
-    <div className="mx-auto flex w-full max-w-[1300px] flex-col gap-[30px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
-      {groups.map((g) => (
-        <TaskGroupCard
-          key={g.taskId}
-          studio={studio}
-          taskId={g.taskId}
-          status={g.status}
-          at={g.at}
-          prompt={g.prompt}
-          model={g.model}
-          ar={g.ar}
-          phase={g.phase}
-          items={g.items}
-          onImageToVideo={onImageToVideo}
-          onImageToImage={onImageToImage}
-          onDeleteTask={onDeleteTask}
-          onRegenerate={onRegenerate}
-          onOpenDetail={onOpenDetail}
-          onReEdit={onReEdit}
-        />
-      ))}
+    <div className="mx-auto w-full max-w-[1300px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map((vi) => {
+          const g = groups[vi.index];
+          return (
+            <div
+              key={g.taskId}
+              data-index={vi.index}
+              ref={virtualizer.measureElement}
+              className="pb-[30px]"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vi.start}px)`,
+              }}
+            >
+              <TaskGroupCard
+                studio={studio}
+                taskId={g.taskId}
+                status={g.status}
+                at={g.at}
+                prompt={g.prompt}
+                model={g.model}
+                ar={g.ar}
+                phase={g.phase}
+                items={g.items}
+                onImageToVideo={onImageToVideo}
+                onImageToImage={onImageToImage}
+                onDeleteTask={onDeleteTask}
+                onRegenerate={onRegenerate}
+                onOpenDetail={onOpenDetail}
+                onReEdit={onReEdit}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 });
