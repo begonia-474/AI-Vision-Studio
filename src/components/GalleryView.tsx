@@ -52,10 +52,43 @@ interface GalleryEntry {
   item: HistoryTask;
   /** 该图在任务 local_paths 中的下标（详情面板按此显示对应张） */
   index: number;
+  /** 归一化缓存中的日期分组键（审计#12：随条目携带，分组不再重复 dayKey） */
+  day: string;
   thumbnail?: string;
   /** 缩略图缺失（旧数据）时回退显示的原图 URL */
   fallback?: string;
 }
+
+/** 条目标准化缓存（审计#12）：原先 visible/sorted/entries/groups/resOptions/ratioOptions
+ *  六条 useMemo 链各自对每条历史重复 JSON.parse 与 Date/尺寸推导（996 条时每次
+ *  刷新数十万次解析）；此处按 id 单遍解析，所有派生链共用。 */
+interface NormEntry {
+  item: HistoryTask;
+  paths: string[];
+  params: Record<string, unknown> | null;
+  day: string;
+  ts: number;
+  res: string | null;
+  ratio: string | null;
+}
+
+/** 「重新编辑」：从数据库 params_json 还原参数快照（model 字段即 ModelDef.id）。
+ *  与时间线入口共用 jumpFromParams，保证图库/时间线回填同源。审计#12：改为消费
+ *  NormEntry（解析结果），避免再次 JSON.parse。 */
+const buildReEditFrom = (norm: NormEntry): StudioJump & { studio: "image" | "video" } => {
+  const it = norm.item;
+  const params = norm.params ?? {};
+  const first = norm.paths[0];
+  // 参考图优先取数据库 params_json.references（i2i/i2v 都保留原参考图，与时间线同源）；
+  // 旧数据无该字段时按能力回退：i2i 用第一张产物当参考图，i2v 无参考图（按 t2v 生成）。
+  const rawRefs = Array.isArray(params.references) ? params.references : undefined;
+  const refs = rawRefs
+    ? rawRefs.filter((r): r is string => typeof r === "string" && r.length > 0)
+    : it.capability === "i2i" && first
+      ? [toAssetUrl(first)]
+      : undefined;
+  return jumpFromParams({ prompt: it.prompt, model: it.model }, params, isImage(it), refs);
+};
 
 // 缩略图命名约定：thumbs 目录 `{stem}.thumb.webp`（后端 make_thumbnail 输出，镜像产物日期子路径
 // outputs\YYYY\MM\DD → thumbs\YYYY\MM\DD；旧平铺数据回退 thumbs 根），
@@ -92,9 +125,11 @@ const dateLabel = (t: TFunction, key: string): string => {
   return new Date(`${key}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
-// 分辨率 / 比例（来自 params.size "WxH"）
-const sizeOf = (it: HistoryTask): { w: number; h: number } | null => {
-  const s = paramsOf(it)?.size;
+// 分辨率 / 比例（来自 params.size "WxH"）。审计#12：原 sizeOf/resOf/ratioOf 各自
+// 对同一任务反复 JSON.parse params_json；改为按已解析 params 入参的纯函数，
+// 解析统一由 normCache 单遍完成。
+const sizeFromParams = (params: Record<string, unknown> | null): { w: number; h: number } | null => {
+  const s = params?.size;
   if (typeof s !== "string") return null;
   const m = /^(\d+)\s*[xX*]\s*(\d+)$/.exec(s.trim());
   if (!m) return null;
@@ -102,9 +137,7 @@ const sizeOf = (it: HistoryTask): { w: number; h: number } | null => {
   const h = Number(m[2]);
   return w > 0 && h > 0 ? { w, h } : null;
 };
-const resOf = (it: HistoryTask): string | null => {
-  const s = sizeOf(it);
-  if (!s) return null;
+const resFromSize = (s: { w: number; h: number }): string => {
   const max = Math.max(s.w, s.h);
   if (max <= 1024) return "1K";
   if (max <= 2048) return "2K";
@@ -112,11 +145,13 @@ const resOf = (it: HistoryTask): string | null => {
   return "8K";
 };
 const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-const ratioOf = (it: HistoryTask): string | null => {
+const ratioFromParams = (
+  params: Record<string, unknown> | null,
+  s: { w: number; h: number } | null,
+): string | null => {
   // 优先提交时声明的 aspect_ratio（对所有模型准确）；旧数据缺失时按像素 gcd 推导。
-  const ar = paramsOf(it)?.aspect_ratio;
+  const ar = params?.aspect_ratio;
   if (typeof ar === "string" && ar) return ar;
-  const s = sizeOf(it);
   if (!s) return null;
   const g = gcd(s.w, s.h);
   return `${s.w / g}:${s.h / g}`;
@@ -173,7 +208,11 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   const [searchOpen, setSearchOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<"filter" | "time" | "sort" | null>(null);
   const [canvasOpen, setCanvasOpen] = useState(false);
-  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // 审计#12：框选拖动原先每帧 setState（整墙重渲染）；改为 ref 保存拖拽矩形 +
+  // 直写 fixed overlay 的 style（不触发任何 React 渲染），pointerup 时一次性求交选中
+  // （与 ImageStudio 输入条高度直写 DOM 同一先例）。
+  const marqueeRef = useRef<HTMLDivElement | null>(null);
+  const marqueeDragRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const aliveRef = useRef(true);
   const searchRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -195,13 +234,24 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     }
   }, []);
 
-  // 挂载时加载；生成结束（done / failed）后自动刷新
+  // 审计#12：图库打开期间后台任务完成事件可能密集（并行任务各自 done），每次
+  // 都全量 listHistory + 重建标准化缓存（996 条）；用 1.2s 尾沿收敛合并刷新。
+  const refreshTimerRef = useRef<number | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimerRef.current != null) return;
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void refresh();
+    }, 1200);
+  }, [refresh]);
+
+  // 挂载时加载；生成结束（done / failed）后收敛刷新
   useEffect(() => {
     aliveRef.current = true;
     refresh();
     let un: (() => void) | undefined;
     onProgress((p) => {
-      if (p.phase === "done" || p.phase === "failed") refresh();
+      if (p.phase === "done" || p.phase === "failed") scheduleRefresh();
     }).then((u) => {
       // 竞态防护：listen 注册完成前若已卸载，立即注销，避免监听器残留
       if (!aliveRef.current) {
@@ -213,8 +263,12 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     return () => {
       aliveRef.current = false;
       un?.();
+      if (refreshTimerRef.current != null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
-  }, [refresh]);
+  }, [refresh, scheduleRefresh]);
 
   // 旧数据补缩略图：后台生成缺失缩略图，完成后刷新列表让网格切到缩略图
   useEffect(() => {
@@ -251,45 +305,64 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   }, []);
 
   const q = query.trim().toLowerCase();
+
+  // 审计#12：条目一次标准化——visible/sorted/entries/groups/resOptions/ratioOptions
+  // 六条 useMemo 链原先各自对每条历史重复 JSON.parse（local_paths_json/params_json）
+  // 与 Date/尺寸推导（996 条时每次刷新数十万次解析）；此处按 id 单遍解析缓存，
+  // 所有派生链共用，逐条消费时零解析。
+  const normCache = useMemo(() => {
+    const m = new Map<number, NormEntry>();
+    for (const it of items) {
+      const params = paramsOf(it);
+      const s = sizeFromParams(params);
+      m.set(it.id, {
+        item: it,
+        paths: localPaths(it),
+        params,
+        day: dayKey(it.created_at),
+        ts: Date.parse(it.created_at),
+        res: s ? resFromSize(s) : null,
+        ratio: ratioFromParams(params, s),
+      });
+    }
+    return m;
+  }, [items]);
+  const norms = useMemo(() => [...normCache.values()], [normCache]);
+
   const visible = useMemo(
     () =>
-      items.filter((it) => {
+      norms.filter((n) => {
+        const it = n.item;
         if (it.status !== "succeeded") return false; // 图库只展示成功产物（running/failed 行仅时间线可见）
         if (type !== "all" && isImage(it) !== (type === "image")) return false;
         if (starredOnly && !it.starred) return false;
-        if (range.start && dayKey(it.created_at) < range.start) return false;
-        if (range.end && dayKey(it.created_at) > range.end) return false;
-        if (resSel.size > 0) {
-          const r = resOf(it);
-          if (!r || !resSel.has(r)) return false;
-        }
-        if (ratioSel.size > 0) {
-          const r = ratioOf(it);
-          if (!r || !ratioSel.has(r)) return false;
-        }
+        if (range.start && n.day < range.start) return false;
+        if (range.end && n.day > range.end) return false;
+        if (resSel.size > 0 && (!n.res || !resSel.has(n.res))) return false;
+        if (ratioSel.size > 0 && (!n.ratio || !ratioSel.has(n.ratio))) return false;
         if (q) {
-          const hay = `${it.prompt} ${it.model} ${it.provider}`.toLowerCase();
+          const hay = (it.prompt + " " + it.model + " " + it.provider).toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
       }),
-    [items, type, starredOnly, range, resSel, ratioSel, q],
+    [norms, type, starredOnly, range, resSel, ratioSel, q],
   );
 
   const sorted = useMemo(
     () =>
-      [...visible].sort((a, b) => {
-        const diff = Date.parse(a.created_at) - Date.parse(b.created_at);
-        return sortOrder === "newest" ? -diff : diff;
-      }),
+      [...visible].sort((a, b) =>
+        sortOrder === "newest" ? b.ts - a.ts : a.ts - b.ts,
+      ),
     [visible, sortOrder],
   );
 
   // 一次批量生成可能包含多个文件，图库按单张结果铺开，但收藏/删除仍作用于原任务。
   const entries = useMemo<GalleryEntry[]>(
     () =>
-      sorted.flatMap((it) => {
-        const paths = localPaths(it);
+      sorted.flatMap((n) => {
+        const it = n.item;
+        const paths = n.paths;
         const count = Math.max(paths.length, 1);
         return Array.from({ length: count }, (_, index) => {
           const image = isImage(it);
@@ -301,9 +374,10 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
               : thumbOf(paths[index] ?? "")
             : undefined;
           return {
-            key: `${it.id}-${index}`,
+            key: it.id + "-" + index,
             item: it,
             index,
+            day: n.day,
             thumbnail: thumb ? toAssetUrl(thumb) : undefined,
             fallback: image && paths[index] ? toAssetUrl(paths[index]) : undefined,
           };
@@ -315,35 +389,28 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   const groups = useMemo(() => {
     const map = new Map<string, GalleryEntry[]>();
     for (const entry of entries) {
-      const key = dayKey(entry.item.created_at);
-      const group = map.get(key);
+      const group = map.get(entry.day);
       if (group) group.push(entry);
-      else map.set(key, [entry]);
+      else map.set(entry.day, [entry]);
     }
     return [...map.entries()].map(([key, items]) => ({ key, items }));
   }, [entries]);
 
-  // 筛选面板的可选分辨率 / 比例（来自全部条目，随数据变化）
+  // 筛选面板的可选分辨率 / 比例（来自全部条目，随数据变化；消费 normCache 不再重复解析）
   const resOptions = useMemo(() => {
     const set = new Set<string>();
-    items.forEach((it) => {
-      const r = resOf(it);
-      if (r) set.add(r);
-    });
+    for (const n of norms) if (n.res) set.add(n.res);
     return [...set].sort((a, b) => Number(a.replace("K", "")) - Number(b.replace("K", "")));
-  }, [items]);
+  }, [norms]);
   const ratioOptions = useMemo(() => {
     const set = new Set<string>();
-    items.forEach((it) => {
-      const r = ratioOf(it);
-      if (r) set.add(r);
-    });
+    for (const n of norms) if (n.ratio) set.add(n.ratio);
     return [...set].sort((a, b) => {
       const [aw, ah] = a.split(":").map(Number);
       const [bw, bh] = b.split(":").map(Number);
       return bw / bh - aw / ah;
     });
-  }, [items]);
+  }, [norms]);
 
   const providerName = useCallback((it: HistoryTask) => providerDisplayName(it.provider, t), [t]);
 
@@ -355,7 +422,8 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
       return next;
     });
 
-  const toggleStar = async (it: HistoryTask) => {
+  // useCallback：detailSources 的 useMemo 依赖它（审计#12），引用必须稳定。
+  const toggleStar = useCallback(async (it: HistoryTask) => {
     const next = !it.starred;
     setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, starred: next } : x)));
     try {
@@ -363,7 +431,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     } catch {
       setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, starred: !next } : x)));
     }
-  };
+  }, []);
 
   // 删除确认（AGENTS.md：占位提示一律用 Dialog，禁原生 confirm）
   const [confirmDel, setConfirmDel] = useState<{ ids: number[]; n: number } | null>(null);
@@ -387,20 +455,21 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     }
   };
 
-  const removeOne = (it: HistoryTask) => {
+  // useCallback：同上（审计#12），供 detailSources useMemo 依赖。
+  const removeOne = useCallback((it: HistoryTask) => {
     setConfirmDel({ ids: [it.id], n: 1 });
-  };
+  }, []);
 
   const removeSelected = () => {
     if (selected.size === 0) return;
     setConfirmDel({ ids: [...selected], n: selected.size });
   };
 
-  // 下载 = 在文件管理器中定位第一个产物
+  // 下载 = 在文件管理器中定位第一个产物（审计#12：消费 normCache，不再重复解析）
   const downloadSelected = async () => {
     const targets = items.filter((x) => selected.has(x.id));
     for (const it of targets) {
-      const p = localPaths(it)[0] ?? it.thumbnail_path;
+      const p = normCache.get(it.id)?.paths[0] ?? it.thumbnail_path;
       if (p) {
         try {
           await openPath(p, "reveal");
@@ -460,9 +529,10 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     setDetailKey(entry.key);
   };
 
-  const closeDetail = () => {
+  // useCallback：同上（审计#12），供 detailSources useMemo 依赖。
+  const closeDetail = useCallback(() => {
     setDetailKey(null);
-  };
+  }, []);
 
   const goDetail = (delta: number) => {
     if (detailIdx == null || detailIdx < 0) return;
@@ -471,81 +541,94 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
     setDetailKey(entries[next].key);
   };
 
-  // 详情数据源：由历史任务标准化而来（收藏/删除/跳转绑定原任务）
-  const detailSources = entries.map((entry): DetailSource => {
-    const it = entry.item;
-    const paths = localPaths(it);
-    const params = paramsOf(it);
-    const size = typeof params?.size === "string" ? params.size : undefined;
-    const image = isImage(it);
-    return {
-      key: entry.key,
-      image,
-      prompt: it.prompt,
-      model: it.model,
-      tool: providerName(it),
-      createdAt: it.created_at,
-      paths,
-      pathIndex: entry.index,
-      thumbnailPath: it.thumbnail_path ?? undefined,
-      size,
-      ratio: size ? (ratioOf(it) ?? undefined) : undefined,
-      quality: typeof params?.quality === "string" ? params.quality : undefined,
-      duration: typeof params?.duration === "string" ? params.duration : undefined,
-      format: typeof params?.output_format === "string" ? params.output_format : undefined,
-      n: typeof params?.n === "number" ? params.n : undefined,
-      params: freeParams(params ?? {}),
-      loras: parseLoras(params?.loras),
-      starred: it.starred,
-      onToggleStar: () => toggleStar(it),
-      onDelete: () => removeOne(it),
-      onImageToVideo: (src, prompt) => {
-        closeDetail();
-        onImageToVideo?.(src, prompt);
-      },
-      onImageToImage: (src, prompt) => {
-        closeDetail();
-        onImageToImage?.(src, prompt);
-      },
-      onReEdit: () => {
-        closeDetail();
-        onReEdit?.(buildReEdit(it));
-      },
-    };
-  });
-
-  // 「重新编辑」：从数据库 params_json 还原参数快照（model 字段即 ModelDef.id）。
-  // 与时间线入口共用 jumpFromParams，保证图库/时间线回填同源。
-  const buildReEdit = (it: HistoryTask): StudioJump & { studio: "image" | "video" } => {
-    const params = paramsOf(it) ?? {};
-    const first = localPaths(it)[0];
-    // 参考图优先取数据库 params_json.references（i2i/i2v 都保留原参考图，与时间线同源）；
-    // 旧数据无该字段时按能力回退：i2i 用第一张产物当参考图，i2v 无参考图（按 t2v 生成）。
-    const rawRefs = Array.isArray(params.references) ? params.references : undefined;
-    const refs = rawRefs
-      ? rawRefs.filter((r): r is string => typeof r === "string" && r.length > 0)
-      : it.capability === "i2i" && first
-        ? [toAssetUrl(first)]
-        : undefined;
-    return jumpFromParams({ prompt: it.prompt, model: it.model }, params, isImage(it), refs);
-  };
+  // 详情数据源：由历史任务标准化而来（收藏/删除/跳转绑定原任务）。
+  // 审计#12：原先每次渲染都全量 entries.map + 每条多次 JSON.parse，详情框关闭也在跑
+  // （996 条时拖慢所有交互）；改为按 detailKey 门控的 useMemo——仅打开详情时计算一次，
+  // 且消费 normCache 零解析。
+  const detailSources = useMemo<DetailSource[]>(() => {
+    if (detailKey == null) return [];
+    return entries.map((entry): DetailSource => {
+      const it = entry.item;
+      const norm = normCache.get(it.id)!;
+      const paths = norm.paths;
+      const params = norm.params;
+      const size = typeof params?.size === "string" ? params.size : undefined;
+      const image = isImage(it);
+      return {
+        key: entry.key,
+        image,
+        prompt: it.prompt,
+        model: it.model,
+        tool: providerName(it),
+        createdAt: it.created_at,
+        paths,
+        pathIndex: entry.index,
+        thumbnailPath: it.thumbnail_path ?? undefined,
+        size,
+        ratio: size ? (norm.ratio ?? undefined) : undefined,
+        quality: typeof params?.quality === "string" ? params.quality : undefined,
+        duration: typeof params?.duration === "string" ? params.duration : undefined,
+        format: typeof params?.output_format === "string" ? params.output_format : undefined,
+        n: typeof params?.n === "number" ? params.n : undefined,
+        params: freeParams(params ?? {}),
+        loras: parseLoras(params?.loras),
+        starred: it.starred,
+        onToggleStar: () => toggleStar(it),
+        onDelete: () => removeOne(it),
+        onImageToVideo: (src, prompt) => {
+          closeDetail();
+          onImageToVideo?.(src, prompt);
+        },
+        onImageToImage: (src, prompt) => {
+          closeDetail();
+          onImageToImage?.(src, prompt);
+        },
+        onReEdit: () => {
+          closeDetail();
+          onReEdit?.(buildReEditFrom(norm));
+        },
+      };
+    });
+  }, [detailKey, entries, normCache, providerName, toggleStar, removeOne, closeDetail, onImageToVideo, onImageToImage, onReEdit]);
 
   // ===== 框选（仅管理模式）=====
+  // 审计#12：拖动过程零 setState——overlay 位置经 ref 直写 style。
+  const paintMarquee = () => {
+    const d = marqueeDragRef.current;
+    const el = marqueeRef.current;
+    if (!d || !el) return;
+    el.style.left = String(Math.min(d.x0, d.x1)) + "px";
+    el.style.top = String(Math.min(d.y0, d.y1)) + "px";
+    el.style.width = String(Math.abs(d.x1 - d.x0)) + "px";
+    el.style.height = String(Math.abs(d.y1 - d.y0)) + "px";
+    el.style.display = "block";
+  };
+  const hideMarquee = () => {
+    marqueeDragRef.current = null;
+    if (marqueeRef.current) marqueeRef.current.style.display = "none";
+  };
   const onGridPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!manage || e.button !== 0) return;
     if ((e.target as HTMLElement).closest("[data-gid]")) return;
-    setMarquee({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY });
+    marqueeDragRef.current = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY };
+    paintMarquee();
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onGridPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    setMarquee((m) => (m ? { ...m, x1: e.clientX, y1: e.clientY } : m));
+    const d = marqueeDragRef.current;
+    if (!d) return;
+    d.x1 = e.clientX;
+    d.y1 = e.clientY;
+    paintMarquee();
   };
   const onGridPointerUp = () => {
-    if (!marquee) return;
-    const x0 = Math.min(marquee.x0, marquee.x1);
-    const x1 = Math.max(marquee.x0, marquee.x1);
-    const y0 = Math.min(marquee.y0, marquee.y1);
-    const y1 = Math.max(marquee.y0, marquee.y1);
+    const d = marqueeDragRef.current;
+    hideMarquee();
+    if (!d) return;
+    const x0 = Math.min(d.x0, d.x1);
+    const x1 = Math.max(d.x0, d.x1);
+    const y0 = Math.min(d.y0, d.y1);
+    const y1 = Math.max(d.y0, d.y1);
     if (x1 - x0 > 2 || y1 - y0 > 2) {
       const els = scrollRef.current?.querySelectorAll<HTMLElement>("[data-gid]") ?? [];
       const added: number[] = [];
@@ -561,7 +644,6 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         });
       }
     }
-    setMarquee(null);
   };
 
   const batchBtn =
@@ -797,7 +879,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         onPointerDown={onGridPointerDown}
         onPointerMove={onGridPointerMove}
         onPointerUp={onGridPointerUp}
-        onPointerCancel={() => setMarquee(null)}
+        onPointerCancel={hideMarquee}
       >
         {loading ? (
           <div className="grid min-h-[50vh] place-items-center text-[#9ca3af]">
@@ -915,17 +997,11 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         )}
       </div>
 
-      {marquee && (
-        <div
-          className="pointer-events-none fixed z-[60] border border-[#2563eb] bg-[#2563eb]/10"
-          style={{
-            left: Math.min(marquee.x0, marquee.x1),
-            top: Math.min(marquee.y0, marquee.y1),
-            width: Math.abs(marquee.x1 - marquee.x0),
-            height: Math.abs(marquee.y1 - marquee.y0),
-          }}
-        />
-      )}
+      {/* 框选 overlay：固定渲染、默认隐藏，拖动期经 ref 直写 style（审计#12，零 setState） */}
+      <div
+        ref={marqueeRef}
+        className="pointer-events-none fixed z-[60] hidden border border-[#2563eb] bg-[#2563eb]/10"
+      />
 
       {detailIdx != null && detailIdx >= 0 && (
         <DetailPanel
