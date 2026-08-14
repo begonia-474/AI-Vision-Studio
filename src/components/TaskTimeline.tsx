@@ -8,11 +8,16 @@
 // 组构建时对未变化任务的 items 数组复用上次引用，进度事件（phase/msg 变更）
 // 只重渲染受影响的任务卡，其余数百张卡整体跳过；贴底编排的布局签名由
 // O(n) 全量字符串拼接改为快照比较短路（progress 只改 phase/msg 时不再重跑）。
+//
+// 回退记录（审计#12）：曾引入 @tanstack/react-virtual 窗口化渲染，实测引入三处回归
+// ——切会话滚动位置落到会话顶部、卡片纵向重叠（动态测量在贴底滚动场景下的定位漂移）、
+// 空会话首次生成触发 hooks 顺序变化白屏（useVirtualizer 位于空状态早退之后）。
+// 本文件所有 hooks 必须保持在空状态早退之前；重渲染风暴已由组级 memo 消除，
+// 窗口化的 DOM 数量收益不抵滚动交互回归风险，故回退为全量渲染。
 
 import { memo, useEffect, useMemo, useRef } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { IconDownload, IconImage, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
@@ -546,73 +551,28 @@ export const TaskTimeline = memo(function TaskTimeline({
     );
   }
 
-  // 审计#12：时间线窗口化渲染——任务多时 DOM 节点数与布局成本随历史线性增长；
-  // 用 @tanstack/react-virtual 只挂载视口 ± overscan 的任务卡，卡片高度动态测量，
-  // 贴底滚动 / 滚动跟随逻辑不变（虚拟器以总高度撑起滚动区，scrollHeight 语义一致）。
-  const virtualizer = useVirtualizer({
-    count: groups.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 420,
-    overscan: 6,
-  });
-
-  // 审计#12 补充：工作室视图经 CSS hidden 切换（display:none），隐藏期间新进度事件
-  // 会让虚拟项以 0 高度被测量、滚动位置被钳到顶部；恢复可见时重测全部项并恢复贴底。
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((e) => e.isIntersecting)) return;
-        virtualizer.measure();
-        if (stick.current) el.scrollTop = el.scrollHeight;
-      },
-      { threshold: 0 },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [scrollRef, virtualizer]);
-
   return (
-    <div className="mx-auto w-full max-w-[1300px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
-      <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
-        {virtualizer.getVirtualItems().map((vi) => {
-          const g = groups[vi.index];
-          return (
-            <div
-              key={g.taskId}
-              data-index={vi.index}
-              ref={virtualizer.measureElement}
-              className="pb-[30px]"
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                transform: `translateY(${vi.start}px)`,
-              }}
-            >
-              <TaskGroupCard
-                studio={studio}
-                taskId={g.taskId}
-                status={g.status}
-                at={g.at}
-                prompt={g.prompt}
-                model={g.model}
-                ar={g.ar}
-                phase={g.phase}
-                items={g.items}
-                onImageToVideo={onImageToVideo}
-                onImageToImage={onImageToImage}
-                onDeleteTask={onDeleteTask}
-                onRegenerate={onRegenerate}
-                onOpenDetail={onOpenDetail}
-                onReEdit={onReEdit}
-              />
-            </div>
-          );
-        })}
-      </div>
+    <div className="mx-auto flex w-full max-w-[1300px] flex-col gap-[30px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
+      {groups.map((g) => (
+        <TaskGroupCard
+          key={g.taskId}
+          studio={studio}
+          taskId={g.taskId}
+          status={g.status}
+          at={g.at}
+          prompt={g.prompt}
+          model={g.model}
+          ar={g.ar}
+          phase={g.phase}
+          items={g.items}
+          onImageToVideo={onImageToVideo}
+          onImageToImage={onImageToImage}
+          onDeleteTask={onDeleteTask}
+          onRegenerate={onRegenerate}
+          onOpenDetail={onOpenDetail}
+          onReEdit={onReEdit}
+        />
+      ))}
     </div>
   );
 });
