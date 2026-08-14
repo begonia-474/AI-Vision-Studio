@@ -88,7 +88,7 @@ npm run tauri build  # 打包安装包
 
 ## 技术栈
 
-[Tauri 2](https://tauri.app)（Rust 后端 + 系统 WebView）· React 19 + TypeScript + Vite 7 · [shadcn/ui](https://ui.shadcn.com)（Tailwind v4）· react-i18next · SQLite
+[Tauri 2](https://tauri.app)（Rust 后端 + 系统 WebView）· React 19 + TypeScript + Vite 7 · [shadcn/ui](https://ui.shadcn.com)（Tailwind v4）· react-i18next · [@tanstack/react-virtual](https://tanstack.com/virtual)（时间线窗口化）· SQLite
 
 ## 贡献
 

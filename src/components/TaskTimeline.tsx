@@ -556,6 +556,23 @@ export const TaskTimeline = memo(function TaskTimeline({
     overscan: 6,
   });
 
+  // 审计#12 补充：工作室视图经 CSS hidden 切换（display:none），隐藏期间新进度事件
+  // 会让虚拟项以 0 高度被测量、滚动位置被钳到顶部；恢复可见时重测全部项并恢复贴底。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        virtualizer.measure();
+        if (stick.current) el.scrollTop = el.scrollHeight;
+      },
+      { threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [scrollRef, virtualizer]);
+
   return (
     <div className="mx-auto w-full max-w-[1300px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
       <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>

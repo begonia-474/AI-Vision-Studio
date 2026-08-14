@@ -33,6 +33,7 @@
 - 产物下载、缩略图生成由 `commands` 层调用 `storage` 完成，provider 与本地存储解耦
 - 任务进度由后端 `gen-progress` 事件推送，前端 `TaskTimeline` 按 taskId 写入对应卡片
 - 会话与生成历史全部以 SQLite 为唯一权威（sessions 表 + tasks 表，提交即落库、终态回写），前端无 localStorage 业务数据——清理 WebView 缓存不影响任何会话；孤儿任务按归属自动重建会话
+- 性能（审计#12）：时间线用 @tanstack/react-virtual 窗口化渲染（任务卡组级 memo + items 引用复用，进度事件只重渲染受影响任务）；图库条目一次标准化解析缓存、详情源按需懒计算、历史经 `list_history_page` 分页拉取；后端 generate 受全局信号量限流（上限 4，volcark 单图扇出 `buffer_unordered(4)`）、缩略图/下载受控并发（上限 3）；`KEYS_LOCK` 为读写锁 + 内存缓存（读命中零磁盘 IO），dashscope 业务空间 base_url 进程内缓存并随 workspace 变更失效；启动 inputs GC 在后台线程执行
 
 ## 开发环境要求
 

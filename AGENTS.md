@@ -57,7 +57,7 @@ cd src-tauri && cargo test                  # 后端单测（storage 层）
 
 ## 密钥与环境
 
-- **密钥存储**：`keys.json`（数据根目录内）明文 JSON `{ api_keys, workspaces }`；Unix 0600、原子写（tmp + rename）、`KEYS_LOCK` 全局互斥串行；读写走 `spawn_blocking`。不要把 Key 写进 SQLite、日志或任何诊断输出。
+- **密钥存储**：`keys.json`（数据根目录内）明文 JSON `{ api_keys, workspaces }`；Unix 0600、原子写（tmp + rename）、`KEYS_LOCK` 读写锁（写互斥、读并发）+ 内存缓存（审计#12，读命中零磁盘 IO，写后刷新缓存）；读写走 `spawn_blocking`。不要把 Key 写进 SQLite、日志或任何诊断输出。
 - **密钥不出后端**：`get_api_key` 只回显掩码（首尾 4 位；≤8 字符统一 `****`，见 `mask_key`）；前端按"是否已设置"消费，不得设计"查看完整密钥"功能。
 - **输入校验在命令入口**：WorkspaceId 仅允许字母/数字/连字符（构成专属域名 `https://{ws}.cn-beijing.maas.aliyuncs.com`），非法输入直接 `Err` 拒绝，不静默清洗。
 - **绝不提交凭据**：`.env`、`config/`、`.data/` 已 ignore；`keys.json` 位于数据目录、不入库不进版本库。本仓库无环境变量依赖，新增 `.env` 用法必须同时写文档。
