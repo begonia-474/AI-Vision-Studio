@@ -768,34 +768,55 @@ pub fn update_task_result(
     Ok(())
 }
 
+/// 历史查询的共享列与行映射（审计#12：remote_urls_json 移出 DTO，不再搬运）。
+const HISTORY_COLS: &str = "id, provider, model, capability, prompt, params_json, status, created_at, local_paths_json, starred, thumbnail_path, session_id, error";
+
+fn history_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryTaskDto> {
+    let starred: i64 = row.get(9)?;
+    Ok(HistoryTaskDto {
+        id: row.get(0)?,
+        provider: row.get(1)?,
+        model: row.get(2)?,
+        capability: row.get(3)?,
+        prompt: row.get(4)?,
+        params_json: row.get(5)?,
+        status: row.get(6)?,
+        created_at: row.get(7)?,
+        local_paths_json: row.get(8)?,
+        starred: starred != 0,
+        thumbnail_path: row.get(10)?,
+        session_id: row.get(11)?,
+        error: row.get(12)?,
+    })
+}
+
 pub fn query_all() -> Result<Vec<HistoryTaskDto>, String> {
     let conn = open_conn()?;
     let mut stmt = conn
-        .prepare(
-            "SELECT id, provider, model, capability, prompt, params_json, status, created_at, local_paths_json, remote_urls_json, starred, thumbnail_path, session_id, error
-             FROM tasks ORDER BY created_at DESC",
-        )
+        .prepare(&format!(
+            "SELECT {HISTORY_COLS} FROM tasks ORDER BY created_at DESC"
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], history_row).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// 分页历史查询（图库渐进加载）：ORDER BY created_at DESC 走 idx_tasks_created 索引。
+/// 审计#12：图库原先一次全量 invoke（上千行 × 大字段 JSON 的序列化峰值）；
+/// 改为 LIMIT/OFFSET 分页，单次 payload 有界，图库前端逐页拉满。
+pub fn query_page(limit: i64, offset: i64) -> Result<Vec<HistoryTaskDto>, String> {
+    let conn = open_conn()?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {HISTORY_COLS} FROM tasks ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| {
-            let starred: i64 = row.get(10)?;
-            Ok(HistoryTaskDto {
-                id: row.get(0)?,
-                provider: row.get(1)?,
-                model: row.get(2)?,
-                capability: row.get(3)?,
-                prompt: row.get(4)?,
-                params_json: row.get(5)?,
-                status: row.get(6)?,
-                created_at: row.get(7)?,
-                local_paths_json: row.get(8)?,
-                remote_urls_json: row.get(9)?,
-                starred: starred != 0,
-                thumbnail_path: row.get(11)?,
-                session_id: row.get(12)?,
-                error: row.get(13)?,
-            })
-        })
+        .query_map(params![limit, offset], history_row)
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for r in rows {

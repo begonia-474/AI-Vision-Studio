@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::json;
 
 use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
@@ -324,39 +325,34 @@ impl VolcArkProvider {
         }
 
         // 并行发起（组图为单次请求；单图模式并发 N 个）。
-        let mut handles = Vec::with_capacity(loops);
-        for _ in 0..loops {
+        // 审计#12：原先每张一个 tokio::spawn——单任务内并发无上限（N 大时打爆连接池、
+        // 失败早退还会遗留后台任务）；改为受控并发流（上限 4、保持结果顺序、不新建任务）。
+        let futs = (0..loops).map(|_| {
             let client = self.client.clone();
             let key = api_key.to_string();
             let body = payload.clone();
-            handles.push(tokio::spawn(async move {
-                Self::image_generate_once(client, key, body).await
-            }));
-        }
+            Self::image_generate_once(client, key, body)
+        });
+        let results: Vec<Result<(Vec<String>, HttpRecord), String>> =
+            futures_util::stream::iter(futs)
+                .buffer_unordered(4)
+                .collect()
+                .await;
 
         let mut urls = Vec::new();
         let mut http_log = Vec::new();
-        for h in handles {
-            match h.await {
-                Ok(Ok((mut u, rec))) => {
+        for r in results {
+            match r {
+                Ok((mut u, rec)) => {
                     urls.append(&mut u);
                     http_log.push(rec);
                 }
-                Ok(Err(msg)) => {
+                Err(msg) => {
                     return Ok(TaskHandle {
                         task_id: String::new(),
                         phase: TaskPhase::Failed,
                         remote_urls: vec![],
                         error: Some(msg),
-                        http_log,
-                    });
-                }
-                Err(e) => {
-                    return Ok(TaskHandle {
-                        task_id: String::new(),
-                        phase: TaskPhase::Failed,
-                        remote_urls: vec![],
-                        error: Some(format!("请求任务异常: {}", e)),
                         http_log,
                     });
                 }

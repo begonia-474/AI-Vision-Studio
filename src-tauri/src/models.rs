@@ -86,7 +86,8 @@ pub struct HistoryTaskDto {
     pub status: String,
     pub created_at: String,
     pub local_paths_json: String,
-    pub remote_urls_json: Option<String>,
+    /// 审计#12：remote_urls_json 从 DTO 移除——前端从未消费该字段（仅入库留档），
+    /// 全量查询不再搬运这列，减少图库/启动回灌的序列化体积。
     pub starred: bool,
     pub thumbnail_path: Option<String>,
     /// 所属会话 ID（旧记录为 NULL，仅出现在图库，不归属任何会话）。

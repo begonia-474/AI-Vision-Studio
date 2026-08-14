@@ -99,7 +99,7 @@ export interface HistoryTask {
   status: string;
   created_at: string;
   local_paths_json: string;
-  remote_urls_json: string | null;
+  /** 审计#12：remote_urls_json 已从 DTO 移除（前端从未消费，仅入库留档） */
   starred: boolean;
   thumbnail_path: string | null;
   /** 所属会话 ID（旧记录为 null，仅出现在图库） */

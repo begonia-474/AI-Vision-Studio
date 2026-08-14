@@ -46,6 +46,7 @@ pub fn run() {
             commands::get_workspace_id,
             commands::generate,
             commands::list_history,
+            commands::list_history_page,
             commands::list_sessions,
             commands::upsert_session,
             commands::delete_session,
