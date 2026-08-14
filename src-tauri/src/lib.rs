@@ -24,6 +24,13 @@ pub fn run() {
             // 启动即完成，避免首条命令才建表带来的延迟与并发问题。
             if let Err(e) = storage::init(app.handle()) {
                 eprintln!("警告：初始化存储失败: {}", e);
+            } else {
+                // 审计#12：inputs 参考图 GC（整目录枚举 + 逐文件 metadata/删除）原先同步
+                // 阻塞窗口拉起，改为后台线程执行（目录与 schema 已在 init 内就绪）。
+                std::thread::Builder::new()
+                    .name("storage-startup-gc".into())
+                    .spawn(storage::run_startup_gc)
+                    .map_err(|e| format!("启动参考图 GC 线程失败: {e}"))?;
             }
             Ok(())
         })

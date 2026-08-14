@@ -3,11 +3,13 @@
 
 use tauri::{AppHandle, Emitter, State};
 
+use futures_util::StreamExt;
+
 use crate::models::{
     GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, ProgressPayload, ProviderInfoDto,
     SessionRow, TaskHandle, TaskPhase, UserModelRow,
 };
-use crate::providers::{all_providers, get_provider, sanitize_body, GenerationProvider};
+use crate::providers::{all_providers, dashscope, get_provider, sanitize_body, GenerationProvider};
 use crate::storage;
 
 #[tauri::command]
@@ -65,9 +67,15 @@ pub async fn save_workspace_id(provider_id: String, workspace_id: String) -> Res
         return Err("WorkspaceId 只能包含字母、数字与连字符".to_string());
     }
     let ws = ws.to_string();
-    tokio::task::spawn_blocking(move || storage::save_workspace(&provider_id, &ws))
+    let pid = provider_id.clone();
+    tokio::task::spawn_blocking(move || storage::save_workspace(&pid, &ws))
         .await
-        .map_err(|e| format!("保存 WorkspaceId 异常: {}", e))?
+        .map_err(|e| format!("保存 WorkspaceId 异常: {}", e))??;
+    // 审计#12：workspace 变更使 dashscope 的 base_url 缓存失效，下次请求即用新域名。
+    if provider_id == dashscope::PROVIDER_ID {
+        dashscope::invalidate_base_url_cache();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -248,16 +256,23 @@ pub async fn generate(
     );
 
     // 诊断日志：多张并行时确认厂商返回的 URL 是否独立（若出现重复 URL 则是服务端幂等去重）。
+    // 审计#12：收敛为计数 + 去重数，不再打印完整 URL 数组（并行任务时刷屏）。
+    let unique_urls = remote_urls
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     eprintln!(
-        "[gen] task={} n={} capability={} remote_urls({}) = {:?}",
+        "[gen] task={} n={} capability={} remote_urls={} (unique={})",
         req.task_id,
         req.n,
         req.capability,
         remote_urls.len(),
-        remote_urls,
+        unique_urls,
     );
 
-    let local_paths = match download_all(client.inner(), &remote_urls, &model).await {
+    let local_paths = match download_all(client.inner().clone(), &remote_urls, model.clone()).await
+    {
         Ok(paths) => paths,
         Err((e, partial)) => {
             fail_generation(
@@ -272,10 +287,9 @@ pub async fn generate(
         }
     };
     eprintln!(
-        "[gen] task={} local_paths({}) = {:?}",
+        "[gen] task={} local_paths={}",
         req.task_id,
-        local_paths.len(),
-        local_paths,
+        local_paths.len()
     );
 
     // 图库缩略图：仅图像产物生成（视频无首帧能力，前端用占位卡）。
@@ -284,17 +298,19 @@ pub async fn generate(
     // thumbnail_path 字段存第一张（详情/兼容旧逻辑用）。
     // 原图文件保持下载原样，不做任何重编码。
     // 解码+编码是 CPU 密集，走阻塞线程池（ensure_thumbnails 同款模式）。
-    let thumbnail_path = match local_paths.first().filter(|p| storage::is_image_path(p)) {
-        Some(p) => make_thumbnail_blocking(p).await,
-        None => None,
-    };
-    for p in local_paths
+    // 审计#12：缩略图彼此独立，原先逐张 await 串行（2K/4K 解码+编码累加耗时）；
+    // 改为受控并发（上限 3，buffer_unordered 保持产物顺序，首张仍为 thumbnail_path）。
+    let image_paths: Vec<String> = local_paths
         .iter()
-        .skip(1)
         .filter(|p| storage::is_image_path(p))
-    {
-        let _ = make_thumbnail_blocking(p).await;
-    }
+        .cloned()
+        .collect();
+    let thumb_futs = image_paths.into_iter().map(make_thumbnail_blocking);
+    let thumbs: Vec<Option<String>> = futures_util::stream::iter(thumb_futs)
+        .buffer_unordered(3)
+        .collect()
+        .await;
+    let thumbnail_path = thumbs.first().and_then(|t| t.clone());
 
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
@@ -481,36 +497,54 @@ async fn poll_to_finish(
     }
 }
 
-/// 逐个下载产物，单 URL 重试 3 次（结果 URL 的 GET 幂等，瞬时失败重试不产生额外费用）；
+/// 下载产物，单 URL 重试 3 次（结果 URL 的 GET 幂等，瞬时失败重试不产生额外费用）；
 /// 任一 URL 连续失败返回 Err，且携带已下载的部分路径供调用方统一清理。
+/// 审计#12：多产物下载彼此独立，原先串行（多图/视频批量总时长线性累加）；改为受控
+/// 并发（上限 3，buffer_unordered 保持产物顺序），失败语义不变。client/model 值传入，
+/// 每项 future 完全拥有输入数据（reqwest::Client 为 Arc 廉价克隆），消除闭包借用问题。
 async fn download_all(
-    client: &reqwest::Client,
+    client: reqwest::Client,
     remote_urls: &[String],
-    model: &str,
+    model: String,
 ) -> Result<Vec<String>, (String, Vec<String>)> {
-    let mut local_paths = Vec::new();
-    for url in remote_urls {
-        let mut last_err = String::new();
-        let mut ok = false;
-        for attempt in 0..3u64 {
-            match storage::save_remote(client, url, model).await {
-                Ok(p) => {
-                    local_paths.push(p);
-                    ok = true;
-                    break;
+    let futs = remote_urls.iter().cloned().map(move |url| {
+        let client = client.clone();
+        let model = model.clone();
+        async move {
+            let mut last_err = String::new();
+            for attempt in 0..3u64 {
+                match storage::save_remote(&client, &url, &model).await {
+                    Ok(p) => return Ok::<String, String>(p),
+                    Err(e) => {
+                        last_err = e;
+                        tokio::time::sleep(std::time::Duration::from_millis(1000 * (attempt + 1)))
+                            .await;
+                    }
                 }
-                Err(e) => {
-                    last_err = e;
-                    tokio::time::sleep(std::time::Duration::from_millis(1000 * (attempt + 1)))
-                        .await;
+            }
+            Err(format!("下载失败: {}", last_err))
+        }
+    });
+    let results: Vec<Result<String, String>> = futures_util::stream::iter(futs)
+        .buffer_unordered(3)
+        .collect()
+        .await;
+    let mut local_paths = Vec::new();
+    let mut first_err: Option<String> = None;
+    for r in results {
+        match r {
+            Ok(p) => local_paths.push(p),
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
                 }
             }
         }
-        if !ok {
-            return Err((format!("下载失败: {}", last_err), local_paths));
-        }
     }
-    Ok(local_paths)
+    match first_err {
+        Some(e) => Err((e, local_paths)),
+        None => Ok(local_paths),
+    }
 }
 
 /// 失败路径尽力清理本次任务已产生的文件（参考图收编副本 / 已下载产物），
@@ -522,8 +556,9 @@ fn cleanup_files(paths: &[String]) {
 }
 
 /// 生成单张缩略图（图像解码+编码 CPU 密集）：在阻塞线程池执行，避免占 tokio 工作线程。
-async fn make_thumbnail_blocking(p: &str) -> Option<String> {
-    let p = p.to_string();
+/// 审计#12：形参改值传入（String）——并发流里每项的 future 完全拥有输入数据，
+/// 消除「FnOnce 不够泛化」的闭包借用问题。
+async fn make_thumbnail_blocking(p: String) -> Option<String> {
     tokio::task::spawn_blocking(move || storage::make_thumbnail(&p))
         .await
         .ok()
@@ -572,14 +607,10 @@ pub async fn set_star(id: i64, starred: bool) -> Result<(), String> {
 #[tauri::command]
 pub async fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
     // 文件删除（大视频可达数百 MB）丢阻塞线程池，避免卡住主线程/UI。
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        for id in ids {
-            storage::delete_task(id)?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("删除任务异常: {}", e))?
+    // 审计#12：批量删除走单连接单事务（原先逐条独立连接 + 逐条 fsync）。
+    tokio::task::spawn_blocking(move || storage::delete_tasks(&ids))
+        .await
+        .map_err(|e| format!("删除任务异常: {}", e))?
 }
 
 /// 补全历史任务缺失的缩略图（旧数据仅第一张有）。
