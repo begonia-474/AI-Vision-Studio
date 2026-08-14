@@ -6,7 +6,7 @@
 
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { toAssetUrl } from "../api";
+
 import { IconChevron } from "../lib/icons";
 import { PromptComposer } from "../components/PromptComposer";
 import { TaskTimeline } from "../components/TaskTimeline";
@@ -97,7 +97,8 @@ export const ImageStudio = memo(function ImageStudio({ session, onImageToVideo, 
             },
             onImageToImage: (src, prompt) => {
               setDetailIdx(null);
-              api.applyJump({ prompt, refs: [toAssetUrl(src)] });
+              // 审计#12：src 为详情面板提供的本地产物路径，直接入 refs（通路统一为路径）。
+              api.applyJump({ prompt, refs: [src] });
             },
             onReEdit: () => {
               setDetailIdx(null);
@@ -200,7 +201,9 @@ export const ImageStudio = memo(function ImageStudio({ session, onImageToVideo, 
   // （api.applyJump 仅随模型选择变化，输入过程恒稳定）。
   const handleImageToImage = useCallback(
     (src: string, prompt: string) => {
-      api.applyJump({ prompt, refs: [toAssetUrl(src)] });
+      // 审计#12：参考图数据通路统一为本地路径（不再存 base64 data URL），
+      // 预览经 asset 协议渲染，后端收编时才读文件。
+      api.applyJump({ prompt, refs: [src] });
       // 回填后滚回底部让输入条展开，提示词/参考图立即可见可改
       const el = streamRef.current;
       if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
