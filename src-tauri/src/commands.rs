@@ -12,14 +12,11 @@ use crate::models::{
 use crate::providers::{all_providers, dashscope, get_provider, sanitize_body, GenerationProvider};
 use crate::storage;
 
-/// 并发生成上限（审计#12）：原先 generate 无并发上限，任务数 × 每任务请求数可能打爆
-/// 连接池；全局信号量把同时进行的生成任务封顶（许可覆盖提交+轮询+下载全生命周期），
-/// 超限任务在命令入口排队等待。
-static GENERATE_SEM: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
-
-fn generate_sem() -> &'static tokio::sync::Semaphore {
-    GENERATE_SEM.get_or_init(|| tokio::sync::Semaphore::new(4))
-}
+// 审计#12 修正：曾在此引入全局生成并发信号量（上限 4，许可覆盖提交+轮询+下载全生命周期）。
+// 实测发现这是队头阻塞——视频任务轮询最长 60 分钟，4 个视频任务可把许可占满一小时，
+// 期间后续任务连提交都轮不到。轮询本身是 3~5s 一次的轻量短请求，不应计入并发预算；
+// 真正需要约束的是单任务内扇出（volcark 单图提交 buffer_unordered(4)、下载 buffer_unordered(3)），
+// 已单独受限。故任务级并发不设全局上限。
 
 #[tauri::command]
 pub fn list_providers() -> Vec<ProviderInfoDto> {
@@ -123,13 +120,6 @@ pub async fn generate(
         .await
         .map_err(|e| format!("读取密钥异常: {}", e))??
         .ok_or("未设置 API Key，请先在设置页填入")?;
-
-    // 审计#12：全局限流——先取许可再进入网络流程（未设 Key 直接报错，不占用排队名额）。
-    // 许可持有至任务终态（提交/轮询/下载/写库全部完成），保证同时生成任务数有上界。
-    let _permit = generate_sem()
-        .acquire()
-        .await
-        .map_err(|_| "生成服务繁忙，请稍后再试".to_string())?;
 
     let _ = app.emit(
         "gen-progress",
