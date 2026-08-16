@@ -173,14 +173,17 @@ pub async fn generate(
         // 生图模式（single/group）：重新编辑/重新生成时恢复组图任务需要它
         "mode": req.mode,
         "output_format": req.output_format,
+        "optimize_prompt_mode": req.optimize_prompt_mode,
+        "background": req.background,
+        "web_search": req.web_search,
         // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
         "references": collected_refs,
     });
     // 魔搭自由参数快照（steps/guidance/seed/negative_prompt/loras 等）原样并入
     // params_json：详情页/图库按 params_json 消费完整参数，重新编辑时回填弹层。
-    // 结构化字段（size/n/aspect_ratio/quality/duration/mode/output_format/references）
-    // 以顶部 json! 为准——用户自建模型声明同名 key 时跳过，防止污染快照。
-    // 注意：与前端 src/studios/sessionStore.ts 的 STRUCTURED_PARAM_KEYS 保持同步。
+    // 结构化字段（size/n/aspect_ratio/quality/duration/mode/output_format/optimize_prompt_mode/
+    // background/web_search/references）以顶部 json! 为准——用户自建模型声明同名 key 时跳过，
+    // 防止污染快照。注意：与前端 src/studios/sessionStore.ts 的 STRUCTURED_PARAM_KEYS 保持同步。
     const STRUCTURED_PARAM_KEYS: &[&str] = &[
         "size",
         "n",
@@ -189,6 +192,9 @@ pub async fn generate(
         "duration",
         "mode",
         "output_format",
+        "optimize_prompt_mode",
+        "background",
+        "web_search",
         "references",
     ];
     if let Some(map) = req

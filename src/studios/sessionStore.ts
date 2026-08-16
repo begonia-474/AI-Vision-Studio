@@ -45,6 +45,9 @@ export interface ResultItem {
   modelId?: string;
   quality?: string;
   format?: string; // 图像输出格式（png/jpeg）
+  optimizePromptMode?: string; // Seedream 5.0 pro 提示词优化（standard/fast）
+  background?: string; // Seedream 5.0 pro 透明通道（transparent/opaque）
+  webSearch?: boolean; // Seedream 5.0 lite 联网搜索
   duration?: string;
   refs?: string[];
   loras?: LoraEntry[]; // 重新生成参数快照：LoRA 列表（魔搭用户自添加模型）
@@ -109,8 +112,8 @@ function historyParams(item: HistoryTask): Record<string, unknown> {
 }
 
 /// 已结构化消费的 params_json 键（size/n/aspect_ratio/quality/duration/output_format/
-/// references/loras 分别落入 ResultItem 对应字段），剩余键（魔搭自由参数 steps/
-/// guidance/seed/negative_prompt 等）原样返回，供详情页展示。
+/// optimize_prompt_mode/background/web_search/references/loras 分别落入 ResultItem 对应字段），
+/// 剩余键（魔搭自由参数 steps/guidance/seed/negative_prompt 等）原样返回，供详情页展示。
 const STRUCTURED_PARAM_KEYS = new Set([
   "size",
   "n",
@@ -118,6 +121,9 @@ const STRUCTURED_PARAM_KEYS = new Set([
   "quality",
   "duration",
   "output_format",
+  "optimize_prompt_mode",
+  "background",
+  "web_search",
   "references",
   "loras",
   "mode",
@@ -157,6 +163,9 @@ export function jumpFromParams(
     n: typeof params.n === "number" ? params.n : undefined,
     mode: params.mode === "single" || params.mode === "group" ? params.mode : undefined,
     format: typeof params.output_format === "string" ? params.output_format : undefined,
+    optimizePromptMode: typeof params.optimize_prompt_mode === "string" ? params.optimize_prompt_mode : undefined,
+    background: typeof params.background === "string" ? params.background : undefined,
+    webSearch: typeof params.web_search === "boolean" ? params.web_search : undefined,
     size: typeof params.size === "string" ? params.size : undefined,
     params: jumpParams(freeParams(params)),
     refs,
@@ -209,6 +218,10 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     : undefined;
   const modelId = item.model;
   const format = typeof params.output_format === "string" ? params.output_format : undefined;
+  const optimizePromptMode =
+    typeof params.optimize_prompt_mode === "string" ? params.optimize_prompt_mode : undefined;
+  const background = typeof params.background === "string" ? params.background : undefined;
+  const webSearch = typeof params.web_search === "boolean" ? params.web_search : undefined;
   const n = typeof params.n === "number" ? params.n : undefined;
 
   return localPaths.map((path, index) => ({
@@ -227,6 +240,9 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     quality,
     duration,
     format,
+    optimizePromptMode,
+    background,
+    webSearch,
     n,
     refs: refList,
     loras: parseLoras(params.loras),

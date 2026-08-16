@@ -106,7 +106,12 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
   const onPickRef = async () => {
     const sel = await open({
       multiple: false,
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      filters: [
+        {
+          name: "Images",
+          extensions: ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "heic", "heif"],
+        },
+      ],
     });
     if (typeof sel === "string" && sel) api.addRef(sel);
   };

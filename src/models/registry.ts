@@ -21,16 +21,18 @@ export type Capability = "t2i" | "i2i" | "t2v" | "i2v" | "r2v";
 // 哩布风格：弹层内容按模型声明式渲染，不同模型呈现不同分区。
 // title 为 i18n key；options 缺省时按 key 取模型字段（quality→qualities，batch→1..min(maxRef,4)）。
 // 生图模式（mode）：单图=1 张（API 无 n 参数），组图=sequential auto + max_images（张数区）。
-export type ParamKey = "ar" | "quality" | "duration" | "batch" | "mode" | "format";
+export type ParamKey = "ar" | "quality" | "duration" | "batch" | "mode" | "format" | "optimize" | "background" | "web_search";
 
 export type ParamSectionDef =
   | {
       type: "segmented";
-      key: "quality" | "batch" | "mode" | "format";
+      key: "quality" | "batch" | "mode" | "format" | "optimize" | "background" | "web_search";
       title: string;
       options?: string[]; // 缺省 quality→model.qualities，batch→1..min(maxRef,4)，mode→[single,group]，format→model.formats
       /** 选项为 i18n key，渲染时经 t() 转换（如生图模式的单图/组图） */
       i18n?: boolean;
+      /** 仅在图生图（已有参考图）时展示的分区（Seedream 5.0 pro 透明背景） */
+      visible?: "i2i";
     }
   | {
       type: "ratio";
@@ -72,6 +74,8 @@ export interface ModelDef {
   capabilities: Capability[];
   aspectRatios: string[];
   qualities: string[]; // 图像画质 / 视频分辨率
+  /** 模型默认画质档位；缺省取 qualities[0]（Seedream 5.0 pro 官方默认 2K，不能用数组下标） */
+  defaultQuality?: string;
   durations?: string[]; // 仅视频
   /** 图像输出格式（如火山方舟 5.0 的 png/jpeg）；声明后参数弹层渲染「图片格式」分区，缺省 jpeg */
   formats?: string[];
@@ -80,6 +84,8 @@ export interface ModelDef {
   maxBatch?: number;
   /** 单图模式一次请求最大张数（变体 n，如 qwen 系列官方 6）；缺省按 maxRef 收敛（≤4）。 */
   maxImages?: number;
+  /** 模板模型 id（用户自添加模型继承模板行为；内置模型为 undefined，提交时回退为自身 id） */
+  templateModelId?: string;
   /** 图像编辑能力（指令编辑/局部修改/多图操作）。缺省 = 仅图生图（参考图生成）。
    *  百炼上很多"不支持编辑"的模型仍支持图生图（实测 z-image-turbo / qwen-image-max）。 */
   edit?: boolean;
@@ -142,15 +148,33 @@ const SEEDREAM_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "9:2
 const seedreamSectionsPro: ParamSectionDef[] = [
   { type: "segmented", key: "quality", title: "prompt.resolution" },
   { type: "ratio", key: "ar", title: "prompt.imageSize", size: true },
+  { type: "segmented", key: "optimize", title: "prompt.optimizePrompt", options: ["standard", "fast"], i18n: true },
   { type: "segmented", key: "batch", title: "prompt.imageCount" },
   { type: "segmented", key: "format", title: "prompt.imageFormat" },
+  { type: "segmented", key: "background", title: "prompt.backgroundMode", options: ["opaque", "transparent"], i18n: true, visible: "i2i" },
 ];
-const seedreamSectionsMulti: ParamSectionDef[] = [
+const seedreamSections45: ParamSectionDef[] = [
+  { type: "segmented", key: "mode", title: "prompt.imageMode", options: ["single", "group"], i18n: true },
+  { type: "segmented", key: "quality", title: "prompt.resolution" },
+  { type: "ratio", key: "ar", title: "prompt.imageSize", size: true },
+  { type: "segmented", key: "batch", title: "prompt.imageCount" },
+];
+// 4.0 支持标准/快速提示词优化，但不支持 output_format（仅 jpeg）与联网搜索。
+const seedreamSections40: ParamSectionDef[] = [
+  { type: "segmented", key: "mode", title: "prompt.imageMode", options: ["single", "group"], i18n: true },
+  { type: "segmented", key: "quality", title: "prompt.resolution" },
+  { type: "ratio", key: "ar", title: "prompt.imageSize", size: true },
+  { type: "segmented", key: "optimize", title: "prompt.optimizePrompt", options: ["standard", "fast"], i18n: true },
+  { type: "segmented", key: "batch", title: "prompt.imageCount" },
+];
+// 联网搜索与 output_format 仅 5.0 lite 支持，不能与 4.x 共用 sections。
+const seedreamSectionsLite: ParamSectionDef[] = [
   { type: "segmented", key: "mode", title: "prompt.imageMode", options: ["single", "group"], i18n: true },
   { type: "segmented", key: "quality", title: "prompt.resolution" },
   { type: "ratio", key: "ar", title: "prompt.imageSize", size: true },
   { type: "segmented", key: "batch", title: "prompt.imageCount" },
   { type: "segmented", key: "format", title: "prompt.imageFormat" },
+  { type: "segmented", key: "web_search", title: "prompt.webSearch", options: ["off", "on"], i18n: true },
 ];
 
 // 万相 2.7（wanxiang）：size 档位 1K/2K（pro 文生图另加 4K）；组图 enable_sequential；
@@ -198,10 +222,10 @@ export const IMAGE_MODELS: ModelDef[] = [
   { id: "qwen-image-edit-plus", name: "qwen-image-edit-plus", providerId: "wanxiang", studio: "image", capabilities: ["i2i"], aspectRatios: QWEN_RATIOS, qualities: QWEN_2K_QUALITIES, maxRef: 3, maxImages: 6, edit: true, blurb: "图像编辑，1-3 图参考", sections: qwenSizeSections },
   { id: "qwen-image-edit", name: "qwen-image-edit", providerId: "wanxiang", studio: "image", capabilities: ["i2i"], aspectRatios: QWEN_RATIOS, qualities: QWEN_FIXED_QUALITIES, maxRef: 1, edit: true, blurb: "轻量图像编辑，单图" },
   { id: "z-image-turbo", name: "z-image-turbo", providerId: "wanxiang", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: Z_RATIOS, qualities: ["1K", "2K"], maxRef: 1, blurb: "快 10 倍/约 1/5 价，写实人像，支持图生图", sections: zImageSections },
-  { id: "doubao-seedream-5-0-pro-260628", name: "Seedream 5.0 Pro", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","2K"], formats: ["jpeg", "png"], maxRef: 10, blurb: "写实电影感，超高细节", sections: seedreamSectionsPro },
-  { id: "doubao-seedream-5-0-260128", name: "Seedream 5.0 Lite", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","3K","4K"], formats: ["jpeg", "png"], maxRef: 14, blurb: "组图/流式/联网，性价比", sections: seedreamSectionsMulti },
-  { id: "doubao-seedream-4-5-251128", name: "Seedream 4.5", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","4K"], maxRef: 14, blurb: "多图参考，组图/流式", sections: seedreamSectionsMulti },
-  { id: "doubao-seedream-4-0-250828", name: "Seedream 4.0", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","2K","4K"], maxRef: 14, blurb: "稳定通用，legacy", sections: seedreamSectionsMulti },
+  { id: "doubao-seedream-5-0-pro-260628", name: "Seedream 5.0 Pro", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","1.5K","2K"], defaultQuality: "2K", formats: ["jpeg", "png"], maxRef: 10, blurb: "写实电影感，提示词优化/透明背景", sections: seedreamSectionsPro },
+  { id: "doubao-seedream-5-0-260128", name: "Seedream 5.0 Lite", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","3K","4K"], formats: ["jpeg", "png"], maxRef: 14, maxBatch: 15, blurb: "组图/流式/联网，性价比", sections: seedreamSectionsLite },
+  { id: "doubao-seedream-4-5-251128", name: "Seedream 4.5", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["2K","4K"], maxRef: 14, maxBatch: 15, blurb: "多图参考，组图/流式", sections: seedreamSections45 },
+  { id: "doubao-seedream-4-0-250828", name: "Seedream 4.0", providerId: "volcark", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: SEEDREAM_RATIOS, qualities: ["1K","2K","4K"], defaultQuality: "2K", maxRef: 14, maxBatch: 15, blurb: "组图/流式，标准/快速优化", sections: seedreamSections40 },
   { id: "wan2.6-t2i", name: "wan2.6-t2i", providerId: "wanxiang", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: ["1:1","3:4","4:3","16:9","9:16"], qualities: ["1K","2K"], maxRef: 1, blurb: "国风水墨，意境留白，对话式图生图", sections: wan26Sections },
   { id: "wan2.6-image", name: "wan2.6-image", providerId: "wanxiang", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: ["1:1","3:4","4:3","16:9","9:16"], qualities: ["1K","2K"], maxRef: 1, edit: true, blurb: "图像编辑，单图参考", sections: wan26Sections },
   { id: "image-01", name: "image-01", providerId: "minimax", studio: "image", capabilities: ["t2i", "i2i"], aspectRatios: ["1:1","3:4","4:3","16:9","9:16"], qualities: ["1K","2K"], maxRef: 1, blurb: "机甲赛博，octane 质感" },
@@ -311,11 +335,26 @@ export function parseSizePx(size: string): { w: number; h: number } {
   return m ? { w: Number(m[1]), h: Number(m[2]) } : { w: 2048, h: 2048 };
 }
 
+/** 模型是否声明了指定参数分区（新参数状态仅在分区存在时提交/回填）。 */
+export function hasSection(m: ModelDef, key: ParamSectionDef["key"]): boolean {
+  return m.sections?.some((s) => s.key === key) ?? false;
+}
+
 /** 张数区上限：单图模式按 maxImages（qwen 变体 6）或 maxRef 收敛（≤4）；
- *  组图模式按 maxBatch（wan2.7 官方 12）；自定义模型 maxRef 是参考图上限，与张数无关，固定 1-4。 */
-export function batchCap(m: ModelDef, mode: "single" | "group"): number {
+ *  组图模式按 maxBatch；volcark Seedream lite/4.5/4.0 官方上限 15，
+ *  i2i 组图还需满足「参考图数 + 生成数 ≤ 15」，因此 refs 参与收敛。
+ *  自定义模型 maxRef 是参考图上限，与张数无关，固定 1-4。 */
+export function batchCap(m: ModelDef, mode: "single" | "group", refs = 0): number {
   if (m.custom) return 4;
-  if (mode === "group") return Math.max(1, Math.min(m.maxBatch ?? m.maxRef ?? 4, 12));
+  if (mode === "group") {
+    if (m.providerId === "volcark") {
+      // 5.0 pro 不支持组图（以 id 或用户模型模板 id 判断）
+      if (m.id.includes("5-0-pro") || m.templateModelId?.includes("5-0-pro")) return 1;
+      const refCount = Math.max(0, Math.floor(refs));
+      return Math.max(1, Math.min(m.maxBatch ?? 15, 15 - refCount));
+    }
+    return Math.max(1, Math.min(m.maxBatch ?? m.maxRef ?? 4, 12));
+  }
   return Math.max(1, m.maxImages ?? Math.min(m.maxRef ?? 4, 4));
 }
 
@@ -384,6 +423,7 @@ function toUserModelDef(row: UserModelRow): ModelDef | null {
     id: row.model_id,
     name: row.name,
     providerId: row.provider_id,
+    templateModelId: row.template_model_id,
     custom,
     sections,
     // 用户模型无简介；「自定义」后缀由展示层用 t() 拼接（registry 无 i18n 上下文）
@@ -461,12 +501,16 @@ export function getModel(studio: Studio, id: string): ModelDef | undefined {
 }
 
 /** 官方像素表（对照 docs/model-api 图片生成 API 文档方式1 映射表）。
- *  5.0 pro 独立（1K/2K）；lite/4.5/4.0 共用（1K/2K/3K/4K）。
+ *  5.0 pro 独立（1K/1.5K/2K）；lite/4.5/4.0 共用（1K/2K/3K/4K）。
  *  9:21 文档无直给值，取 21:9 转置（总像素合规，见 volcarkPixelBounds）。 */
 const PRO_PX: Record<string, Record<string, string>> = {
   "1K": {
     "1:1": "1024x1024", "4:3": "1152x864", "3:4": "864x1152", "16:9": "1424x800", "9:16": "800x1424",
     "3:2": "1248x832", "2:3": "832x1248", "21:9": "1568x672", "9:21": "672x1568",
+  },
+  "1.5K": {
+    "1:1": "1536x1536", "4:3": "1792x1344", "3:4": "1344x1792", "16:9": "2048x1152", "9:16": "1152x2048",
+    "3:2": "1872x1248", "2:3": "1248x1872", "21:9": "2352x1008", "9:21": "1008x2352",
   },
   "2K": {
     "1:1": "2048x2048", "4:3": "2368x1776", "3:4": "1776x2368", "16:9": "2816x1584", "9:16": "1584x2816",
@@ -506,9 +550,16 @@ function pxByRatio(ar: string, k: number): string {
 
 /** 比例 → 原厂 size 串（UI 展示与自定义尺寸回退基准，与后端 volcark.rs 官方像素表一致）。
  *  volcark(Seedream)：方式2 像素 `宽x高`，按 model+quality+ratio 查官方表（5.0 pro 与 lite/4.5/4.0 表不同）；
+ *  profileId 为模板模型 id（用户自添加模型继承模板像素机制，缺省回退 modelId）；
  *  wanxiang（万相/千问/z-image）：像素串按画质档位长边换算（pro 文生图支持 4K）；
  *  其余厂商不读 size 字段，回退为比例原值占位。 */
-export function aspectToSize(providerId: string, modelId: string, ar: string, quality?: string): string {
+export function aspectToSize(
+  providerId: string,
+  modelId: string,
+  ar: string,
+  quality?: string,
+  profileId?: string,
+): string {
   if (providerId === "wanxiang") {
     const q = quality ?? "2K";
     let k = 2048;
@@ -527,13 +578,14 @@ export function aspectToSize(providerId: string, modelId: string, ar: string, qu
   }
   if (providerId !== "volcark") return ar;
   const q = quality ?? "2K";
-  const table = modelId.includes("5-0-pro") ? PRO_PX : COMMON_PX;
+  const table = (profileId ?? modelId).includes("5-0-pro") ? PRO_PX : COMMON_PX;
   return table[q]?.[ar] ?? table["2K"]?.[ar] ?? "2048x2048";
 }
 
 /** W/H 自定义尺寸总像素区间（UI 校验用）：
  *  用户自添加模型通用 [512², 4096²]；volcark 官方区间：pro [921600, 4624220]，5.0 lite/4.5 [3686400, 16777216]，4.0 [921600, 16777216]；
- *  wanxiang：qwen/z-image [512², 2048²]，其余 [768², 2048²]（wan2.7-image-pro 文生图 4K 放宽到 [768², 4096²]）。 */
+ *  wanxiang：qwen/z-image [512², 2048²]，其余 [768², 2048²]（wan2.7-image-pro 文生图 4K 放宽到 [768², 4096²]）。
+ *  自添加模型按其模板模型判断（与后端 template_model_id 行为一致）。 */
 export function pixelBounds(model: ModelDef): { min: number; max: number } {
   if (model.custom) {
     // 用户自添加/魔搭内置模型：最小 512²，最大按模型上限（魔搭 msMax，其余 4096²）。
@@ -546,7 +598,13 @@ export function pixelBounds(model: ModelDef): { min: number; max: number } {
     const max = model.id === "wan2.7-image-pro" ? 4096 * 4096 : 2048 * 2048;
     return { min, max };
   }
-  if (model.id.includes("5-0-pro")) return { min: 921600, max: 4624220 };
-  if (model.id.includes("4-0")) return { min: 921600, max: 16777216 };
+  const profileId = model.templateModelId ?? model.id;
+  if (profileId.includes("5-0-pro")) return { min: 921600, max: 4624220 };
+  if (profileId.includes("4-0")) return { min: 921600, max: 16777216 };
   return { min: 3686400, max: 16777216 }; // 5.0 lite / 4.5
+}
+
+/** W/H 自定义尺寸宽高比区间（UI 校验用）；volcark 官方要求 [1/16, 16]，其余厂商无此限制。 */
+export function pixelRatioBounds(model: ModelDef): { min: number; max: number } | null {
+  return model.providerId === "volcark" ? { min: 1 / 16, max: 16 } : null;
 }

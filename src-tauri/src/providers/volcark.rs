@@ -5,13 +5,17 @@ use serde_json::json;
 use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
 use crate::providers::{sanitize_body, GenerationProvider};
 
-/// 火山方舟 豆包 Seedream/Seedance 适配器（对照 docs/model-api 官方文档实查 2026.07.31）。
+/// 火山方舟 豆包 Seedream/Seedance 适配器（对照 docs/model-api 官方文档实查 2026.08）。
 /// baseUrl: https://ark.cn-beijing.volces.com/api/v3
 /// 鉴权: Authorization: Bearer $ARK_API_KEY
 ///
 /// 图像 t2i/i2i（同步）: POST /images/generations → data[].url（24h 有效）
 ///   - 无 `n` 参数：多图走 `sequential_image_generation:"auto"` + `max_images`（仅 4.5/4.0/lite；5.0 pro 单图）
-///   - `size` 用方式2 像素串，按 model+quality+ratio 取官方 2K/4K/1K 像素表（须满足各模型总像素区间）
+///   - 组图 i2i 须满足「参考图数 + max_images ≤ 15」，后端按请求内参考图数收敛
+///   - `size` 用方式2 像素串，按 model+quality+ratio 取官方 1K/1.5K/2K/3K/4K 像素表
+///   - 自定义 W/H 必须同时满足总像素区间与宽高比 [1/16, 16]，非法尺寸显式报错，不静默回退
+///   - 5.0 pro 支持 `optimize_prompt_options`（standard/fast）与 `background`（仅 i2i 单参考图）
+///   - 5.0 lite 支持 `tools=[{type:"web_search"}]` 联网搜索
 ///   - `image` 接受 URL 或 data:image/...;base64,
 ///
 /// 视频 t2v/i2v（异步）: POST /contents/generations/tasks → id（7 天）
@@ -47,9 +51,31 @@ impl VolcArkProvider {
     }
 }
 
+/// 行为模板 id：用户自添加模型按 template_model_id 继承内置模型规格，
+/// 缺省回退到请求 model（内置模型两者一致）。后续所有模型能力判断都用它，
+/// 不再用 model 字符串启发式（自定义 model id 不含 "5-0-pro" 会误判）。
+fn profile_model_id<'a>(model: &'a str, template_model_id: Option<&'a str>) -> &'a str {
+    template_model_id
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(model)
+}
+
+fn is_seedream_pro(profile: &str) -> bool {
+    profile.contains("5-0-pro")
+}
+
+fn is_seedream_5_0(profile: &str) -> bool {
+    profile.contains("5-0")
+}
+
+/// 提示词优化 standard/fast：5.0 pro 与 4.0 支持；5.0 lite / 4.5 仅默认 standard。
+fn supports_prompt_optimizer(profile: &str) -> bool {
+    is_seedream_pro(profile) || profile.contains("4-0")
+}
+
 /// 是否支持组图（sequential_image_generation）。5.0 pro 仅单图；4.5/4.0/lite 支持。
-fn supports_sequential(model: &str) -> bool {
-    !model.contains("5-0-pro")
+fn supports_sequential(profile: &str) -> bool {
+    !is_seedream_pro(profile)
 }
 
 /// 各模型方式2 总像素区间（官方规格）：
@@ -57,10 +83,10 @@ fn supports_sequential(model: &str) -> bool {
 ///   - 5.0 lite: [3686400, 16777216]
 ///   - 4.5:      [3686400, 16777216]
 ///   - 4.0:      [921600, 16777216]
-fn total_pixel_bounds(model: &str) -> (u64, u64) {
-    if model.contains("5-0-pro") {
+fn total_pixel_bounds(profile: &str) -> (u64, u64) {
+    if is_seedream_pro(profile) {
         (921_600, 4_624_220)
-    } else if model.contains("4-0") {
+    } else if profile.contains("4-0") {
         (921_600, 16_777_216)
     } else {
         // 5.0 lite / 4.5
@@ -68,51 +94,96 @@ fn total_pixel_bounds(model: &str) -> (u64, u64) {
     }
 }
 
-/// 图像 size 像素串：优先接受前端自定义宽高像素值（须满足该模型总像素区间），
-/// 否则按 model + quality + ratio 取官方像素表（方式2）。
-fn volcark_image_size(model: &str, quality: &str, ar: &str, custom: Option<&str>) -> String {
+/// 自定义 W/H 是否同时满足官方总像素区间与宽高比 [1/16, 16]。
+/// 不合法返回 Err（中文可读）——此前静默回退到官方像素表，params_json 记录的原值
+/// 与实际生成尺寸不一致，重新编辑时产生误导。
+fn validate_custom_size(profile: &str, w: u64, h: u64) -> Result<(), String> {
+    let total = w.saturating_mul(h);
+    let (lo, hi) = total_pixel_bounds(profile);
+    if total < lo || total > hi {
+        return Err(format!(
+            "自定义尺寸 {w}x{h} 总像素不符合该模型区间 [{lo}, {hi}]"
+        ));
+    }
+    let ratio = w as f64 / h as f64;
+    if !(1.0 / 16.0..=16.0).contains(&ratio) {
+        return Err(format!("自定义尺寸 {w}x{h} 宽高比需在 [1/16, 16] 范围内"));
+    }
+    Ok(())
+}
+
+/// 图像 size 像素串：请求必须携带方式2 像素串（前端始终下发官方表或用户自定义 W/H），
+/// 解析后校验总像素与宽高比，不合法直接报错；custom 缺省时按 profile+quality+ratio 取官方像素表。
+fn volcark_image_size(
+    profile: &str,
+    quality: &str,
+    ar: &str,
+    custom: Option<&str>,
+) -> Result<String, String> {
     if let Some(px) = custom {
         if let Some((w, h)) = px.split_once('x') {
             if let (Ok(w), Ok(h)) = (w.parse::<u64>(), h.parse::<u64>()) {
-                let total = w.saturating_mul(h);
-                let (lo, hi) = total_pixel_bounds(model);
-                if total >= lo && total <= hi {
-                    return format!("{w}x{h}");
-                }
+                validate_custom_size(profile, w, h)?;
+                return Ok(format!("{w}x{h}"));
             }
         }
+        return Err(format!("尺寸参数格式应为 WxH，收到: {px}"));
     }
     // 5.0 pro 独立像素表（与 lite/4.5/4.0 不同：如 2K 16:9 pro=2816x1584 vs lite=2848x1600）
-    if model.contains("5-0-pro") {
-        return match quality {
+    if is_seedream_pro(profile) {
+        return Ok(match quality {
             "1K" => match ar {
                 "1:1" => "1024x1024",
                 "4:3" => "1152x864",
                 "3:4" => "864x1152",
                 "16:9" => "1424x800",
                 "9:16" => "800x1424",
+                "3:2" => "1248x832",
+                "2:3" => "832x1248",
+                "21:9" => "1568x672",
+                "9:21" => "672x1568",
                 _ => "1024x1024",
             },
-            // 2K（含 1.5K 归并）
+            "1.5K" => match ar {
+                "1:1" => "1536x1536",
+                "4:3" => "1792x1344",
+                "3:4" => "1344x1792",
+                "16:9" => "2048x1152",
+                "9:16" => "1152x2048",
+                "3:2" => "1872x1248",
+                "2:3" => "1248x1872",
+                "21:9" => "2352x1008",
+                "9:21" => "1008x2352",
+                _ => "1536x1536",
+            },
+            // 2K（默认）
             _ => match ar {
                 "1:1" => "2048x2048",
                 "4:3" => "2368x1776",
                 "3:4" => "1776x2368",
                 "16:9" => "2816x1584",
                 "9:16" => "1584x2816",
+                "3:2" => "2496x1664",
+                "2:3" => "1664x2496",
+                "21:9" => "3136x1344",
+                "9:21" => "1344x3136",
                 _ => "2048x2048",
             },
         }
-        .to_string();
+        .to_string());
     }
     // 5.0 lite / 4.5 / 4.0 共用像素表
-    match quality {
+    Ok(match quality {
         "4K" => match ar {
             "1:1" => "4096x4096",
             "4:3" => "4704x3520",
             "3:4" => "3520x4704",
             "16:9" => "5504x3040",
             "9:16" => "3040x5504",
+            "3:2" => "4992x3328",
+            "2:3" => "3328x4992",
+            "21:9" => "6240x2656",
+            "9:21" => "2656x6240",
             _ => "4096x4096",
         },
         "3K" => match ar {
@@ -121,6 +192,10 @@ fn volcark_image_size(model: &str, quality: &str, ar: &str, custom: Option<&str>
             "3:4" => "2592x3456",
             "16:9" => "4096x2304",
             "9:16" => "2304x4096",
+            "3:2" => "3744x2496",
+            "2:3" => "2496x3744",
+            "21:9" => "4704x2016",
+            "9:21" => "2016x4704",
             _ => "3072x3072",
         },
         "1K" => match ar {
@@ -129,6 +204,10 @@ fn volcark_image_size(model: &str, quality: &str, ar: &str, custom: Option<&str>
             "3:4" => "864x1152",
             "16:9" => "1280x720",
             "9:16" => "720x1280",
+            "3:2" => "1248x832",
+            "2:3" => "832x1248",
+            "21:9" => "1512x648",
+            "9:21" => "648x1512",
             _ => "1024x1024",
         },
         // 2K（默认）
@@ -138,10 +217,14 @@ fn volcark_image_size(model: &str, quality: &str, ar: &str, custom: Option<&str>
             "3:4" => "1728x2304",
             "16:9" => "2848x1600",
             "9:16" => "1600x2848",
+            "3:2" => "2496x1664",
+            "2:3" => "1664x2496",
+            "21:9" => "3136x1344",
+            "9:21" => "1344x3136",
             _ => "2048x2048",
         },
     }
-    .to_string()
+    .to_string())
 }
 
 #[async_trait]
@@ -288,16 +371,37 @@ impl VolcArkProvider {
             .clone()
             .filter(|m| !m.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_IMAGE_MODEL.to_string());
+        // 用户自添加模型继承模板规格（自定义 model id 可能不含任何 Seedream 版本特征）。
+        let profile = profile_model_id(&model, req.template_model_id.as_deref());
         let ar = req.aspect_ratio.as_deref().unwrap_or("1:1");
         let quality = req.quality.as_deref().unwrap_or("2K");
-        let size = volcark_image_size(&model, quality, ar, Some(&req.size));
+        let custom_size = (!req.size.trim().is_empty()).then_some(req.size.as_str());
+        let size = volcark_image_size(profile, quality, ar, custom_size)?;
+
+        // 参考图数量上限（官方规格）：pro 10 张，其余 Seedream 图像模型 14 张。
+        if req.capability == "i2i" {
+            let max_refs = if is_seedream_pro(profile) { 10 } else { 14 };
+            if req.references.is_empty() {
+                return Err("i2i 需要至少 1 张参考图".to_string());
+            }
+            if req.references.len() > max_refs {
+                return Err(format!("参考图数量超过该模型上限（{} 张）", max_refs));
+            }
+        }
 
         let want_n = req.n.max(1) as usize;
         // 组图模式（mode=group 且模型支持）：一次请求 sequential auto + max_images（一组关联图）；
         // 单图模式（默认，含 5.0 pro）：官方 API 无 n 参数，同样参数**并行**请求，每张图一个独立请求
         // （哩布行为：N 张 = N 次请求，计费 N 份），全部归入同一任务。
+        // 组图上限：t2i ≤15；i2i 须满足「参考图数 + max_images ≤ 15」。
         let group =
-            req.mode.as_deref() == Some("group") && want_n > 1 && supports_sequential(&model);
+            req.mode.as_deref() == Some("group") && want_n > 1 && supports_sequential(profile);
+        let group_cap = if req.capability == "i2i" {
+            15usize.saturating_sub(req.references.len()).max(1)
+        } else {
+            15
+        };
+        let max_images = if group { want_n.min(group_cap) } else { want_n };
         let loops = if group { 1 } else { want_n };
 
         let mut payload = json!({
@@ -311,17 +415,58 @@ impl VolcArkProvider {
         // 故此处不传；反向描述请并入 prompt。GenRequest 保留该字段供其他厂商使用。
         // 图像格式 output_format：仅 5.0 pro/lite 支持（png/jpeg，缺省 jpeg），其余模型不传。
         if let Some(fmt) = req.output_format.as_deref() {
-            if model.contains("5-0") && (fmt == "png" || fmt == "jpeg") {
+            if is_seedream_5_0(profile) && (fmt == "png" || fmt == "jpeg") {
                 payload["output_format"] = json!(fmt);
             }
         }
+        // 提示词优化：5.0 pro / 4.0 支持 standard/fast；lite / 4.5 仅默认 standard。
+        if let Some(mode) = req.optimize_prompt_mode.as_deref() {
+            if !supports_prompt_optimizer(profile) {
+                return Err("提示词优化模式仅 Seedream 5.0 pro / 4.0 支持".to_string());
+            }
+            if mode != "standard" && mode != "fast" {
+                return Err(format!(
+                    "提示词优化模式取值应为 standard / fast，收到: {mode}"
+                ));
+            }
+            payload["optimize_prompt_options"] = json!({ "mode": mode });
+        }
+        // 透明背景：仅 5.0 pro 图生图、单参考图；透明模式只能输出 png。
+        if let Some(bg) = req.background.as_deref() {
+            if bg != "opaque" && bg != "transparent" {
+                return Err(format!(
+                    "background 取值应为 opaque / transparent，收到: {bg}"
+                ));
+            }
+            if !is_seedream_pro(profile) {
+                return Err("透明通道参数仅 Seedream 5.0 pro 支持".to_string());
+            }
+            if bg == "transparent" {
+                if req.capability != "i2i" || req.references.len() != 1 {
+                    return Err("透明背景模式仅支持 1 张参考图的图生图".to_string());
+                }
+                if req.output_format.as_deref() == Some("jpeg") {
+                    return Err("透明背景模式不支持 jpeg，请改用 png".to_string());
+                }
+                // 官方默认 jpeg，透明模式必须显式 png（前端默认会同步切换，此处兜底）。
+                payload["output_format"] = json!("png");
+                payload["background"] = json!("transparent");
+            }
+        }
+        // 联网搜索：仅 5.0 lite（pro / 4.5 / 4.0 官方均不支持）。
+        if req.web_search == Some(true) {
+            if !is_seedream_5_0(profile) || is_seedream_pro(profile) {
+                return Err("联网搜索仅 Seedream 5.0 lite 支持".to_string());
+            }
+            payload["tools"] = json!([{ "type": "web_search" }]);
+        }
         // i2i：image[] 接受 data:image/...;base64, 或 https URL
-        if req.capability == "i2i" && !req.references.is_empty() {
+        if req.capability == "i2i" {
             payload["image"] = json!(req.references);
         }
         if group {
             payload["sequential_image_generation"] = json!("auto");
-            payload["sequential_image_generation_options"] = json!({ "max_images": want_n });
+            payload["sequential_image_generation_options"] = json!({ "max_images": max_images });
         }
 
         // 并行发起（组图为单次请求；单图模式并发 N 个）。
@@ -531,5 +676,63 @@ impl VolcArkProvider {
             error: None,
             http_log: vec![record],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pro_has_15k_pixel_table() {
+        let size =
+            volcark_image_size("doubao-seedream-5-0-pro-260628", "1.5K", "16:9", None).unwrap();
+        assert_eq!(size, "2048x1152");
+        let size =
+            volcark_image_size("doubao-seedream-5-0-pro-260628", "1.5K", "3:4", None).unwrap();
+        assert_eq!(size, "1344x1792");
+    }
+
+    #[test]
+    fn custom_size_rejects_bad_ratio() {
+        // 总像素恰在区间下界，但宽高比 4096/225≈18.2 超出 [1/16, 16]
+        let err = volcark_image_size(
+            "doubao-seedream-5-0-pro-260628",
+            "2K",
+            "1:1",
+            Some("4096x225"),
+        )
+        .unwrap_err();
+        assert!(err.contains("宽高比"), "{err}");
+    }
+
+    #[test]
+    fn custom_size_rejects_bad_total_pixels() {
+        let err = volcark_image_size(
+            "doubao-seedream-5-0-pro-260628",
+            "2K",
+            "1:1",
+            Some("512x512"),
+        )
+        .unwrap_err();
+        assert!(err.contains("总像素"), "{err}");
+    }
+
+    #[test]
+    fn custom_model_inherits_pro_profile_via_template_id() {
+        // 自添加模型 id 不含 "5-0-pro"，但模板 id 指定为 pro → 走 pro 像素区间/表格
+        let profile = profile_model_id("my-custom-vision", Some("doubao-seedream-5-0-pro-260628"));
+        assert!(is_seedream_pro(profile));
+        assert!(!supports_sequential(profile));
+        let size = volcark_image_size(profile, "1.5K", "9:16", None).unwrap();
+        assert_eq!(size, "1152x2048");
+    }
+
+    #[test]
+    fn prompt_optimizer_only_for_pro_and_4_0() {
+        assert!(supports_prompt_optimizer("doubao-seedream-5-0-pro-260628"));
+        assert!(supports_prompt_optimizer("doubao-seedream-4-0-250828"));
+        assert!(!supports_prompt_optimizer("doubao-seedream-5-0-260128"));
+        assert!(!supports_prompt_optimizer("doubao-seedream-4-5-251128"));
     }
 }

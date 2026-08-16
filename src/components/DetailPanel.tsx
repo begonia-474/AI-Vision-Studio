@@ -35,6 +35,12 @@ export interface DetailSource {
   n?: number;
   /** 图像输出格式（params_json.output_format） */
   format?: string;
+  /** Seedream 5.0 pro 提示词优化（params_json.optimize_prompt_mode） */
+  optimizePromptMode?: string;
+  /** Seedream 5.0 pro 透明通道（params_json.background） */
+  background?: string;
+  /** Seedream 5.0 lite 联网搜索（params_json.web_search） */
+  webSearch?: boolean;
   /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等，params_json 剩余键） */
   params?: Record<string, unknown>;
   /** LoRA 列表（魔搭模型） */
@@ -141,6 +147,18 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   }
   if (source.image && source.format) {
     paramRows.push({ label: t("prompt.imageFormat"), value: source.format });
+  }
+  if (source.image && source.optimizePromptMode) {
+    paramRows.push({
+      label: t("prompt.optimizePrompt"),
+      value: source.optimizePromptMode === "fast" ? t("prompt.fastMode") : t("prompt.standardMode"),
+    });
+  }
+  if (source.image && source.background === "transparent") {
+    paramRows.push({ label: t("prompt.backgroundMode"), value: t("prompt.transparentMode") });
+  }
+  if (source.image && source.webSearch) {
+    paramRows.push({ label: t("prompt.webSearch"), value: t("prompt.onMode") });
   }
   for (const [k, v] of Object.entries(source.params ?? {})) {
     if (k === "negative_prompt") continue;

@@ -14,6 +14,7 @@ import {
   defaultSections,
   parseSizePx,
   pixelBounds,
+  pixelRatioBounds,
   type ModelDef,
   type ParamSectionDef,
 } from "../models/registry";
@@ -57,6 +58,10 @@ export function ParamPanel({ open, onOpenChange, trigger, model, api }: ParamPan
 
 function Section({ section, model, api }: { section: ParamSectionDef; model: ModelDef; api: StudioApi }) {
   const { t } = useTranslation();
+  // Seedream 5.0 pro 透明背景官方要求「单张参考图」，无参考图或多图时隐藏该分区。
+  if (section.type === "segmented" && section.visible === "i2i" && api.refs.length !== 1) {
+    return null;
+  }
   return (
     <div>
       <h3 className="mb-2 text-[13px] font-medium text-foreground">{t(section.title as ParseKeys)}</h3>
@@ -65,12 +70,18 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
           options={
             section.options ??
             (section.key === "batch"
-              ? batchOptions(model, api.mode)
+              ? batchOptions(model, api.mode, api.refs.length)
               : section.key === "mode"
                 ? ["single", "group"]
                 : section.key === "format"
                   ? (model.formats ?? ["jpeg", "png"])
-                  : model.qualities)
+                  : section.key === "optimize"
+                    ? ["standard", "fast"]
+                    : section.key === "background"
+                      ? ["opaque", "transparent"]
+                      : section.key === "web_search"
+                        ? ["off", "on"]
+                        : model.qualities)
           }
           current={
             section.key === "batch"
@@ -79,7 +90,13 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
                 ? api.mode
                 : section.key === "format"
                   ? api.format
-                  : api.quality
+                  : section.key === "optimize"
+                    ? api.optimizePrompt
+                    : section.key === "background"
+                      ? api.background
+                      : section.key === "web_search"
+                        ? (api.webSearch ? "on" : "off")
+                        : api.quality
           }
           onSelect={(v) =>
             section.key === "batch"
@@ -88,7 +105,13 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
                 ? api.setMode(v as "single" | "group")
                 : section.key === "format"
                   ? api.setFormat(v)
-                  : api.setQuality(v)
+                  : section.key === "optimize"
+                    ? api.setOptimizePrompt(v)
+                    : section.key === "background"
+                      ? api.setBackground(v)
+                      : section.key === "web_search"
+                        ? api.setWebSearch(v === "on")
+                        : api.setQuality(v)
           }
           labelOf={(v) => (section.i18n ? t(v as ParseKeys) : v)}
         />
@@ -102,8 +125,8 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
   );
 }
 
-function batchOptions(m: ModelDef, mode?: string): string[] {
-  const cap = batchCap(m, mode === "group" ? "group" : "single");
+function batchOptions(m: ModelDef, mode?: string, refs = 0): string[] {
+  const cap = batchCap(m, mode === "group" ? "group" : "single", refs);
   return Array.from({ length: cap }, (_, i) => String(i + 1));
 }
 
@@ -195,17 +218,22 @@ function RatioSection({
 // —— W/H 自定义尺寸（基准随画质档位，锁定比例联动；合规性按官方总像素区间） ——
 function SizeRow({ model, api }: { model: ModelDef; api: StudioApi }) {
   const { t } = useTranslation();
-  const base = api.size ?? parseSizePx(aspectToSize(model.providerId, model.id, api.ar, api.quality));
+  const base = api.size ?? parseSizePx(aspectToSize(model.providerId, model.id, api.ar, api.quality, model.templateModelId));
   const locked = api.sizeLocked;
   const bounds = pixelBounds(model);
+  const ratioBounds = pixelRatioBounds(model);
 
   const clamp = (v: number) =>
     Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.round(v / SIZE_STEP) * SIZE_STEP));
 
-  /** 总像素越界（官方区间）时拒绝提交，保持原值。 */
+  /** 总像素或宽高比越界（官方区间）时拒绝提交，保持原值；后端同样校验，不静默回退。 */
   const commit = (w: number, h: number) => {
     const px = w * h;
     if (px < bounds.min || px > bounds.max) return;
+    if (ratioBounds) {
+      const ratio = w / h;
+      if (ratio < ratioBounds.min || ratio > ratioBounds.max) return;
+    }
     api.setSize(w, h);
   };
 

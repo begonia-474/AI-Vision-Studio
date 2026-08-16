@@ -44,6 +44,19 @@ pub struct GenRequest {
     /// 图像输出格式（火山方舟 Seedream 5.0 pro/lite 支持）：png / jpeg，缺省 jpeg。
     #[serde(default)]
     pub output_format: Option<String>,
+    /// 模板模型 id：用户自添加模型继承内置模板行为（尺寸区间/组图能力/专属参数），
+    /// 内置模型提交自身 id；缺省时按 model 字段推断。
+    #[serde(default)]
+    pub template_model_id: Option<String>,
+    /// 提示词优化模式（Seedream 5.0 pro）：standard / fast，缺省 standard。
+    #[serde(default)]
+    pub optimize_prompt_mode: Option<String>,
+    /// 透明通道（Seedream 5.0 pro，仅 i2i 单参考图）：transparent / opaque。
+    #[serde(default)]
+    pub background: Option<String>,
+    /// 联网搜索（Seedream 5.0 lite）：true 时提交 tools=[{type:"web_search"}]。
+    #[serde(default)]
+    pub web_search: Option<bool>,
     #[serde(default)]
     pub references: Vec<String>,
     #[serde(default)]

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, batchCap, defaultModelForStudio, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
+import { aspectToSize, batchCap, defaultModelForStudio, hasSection, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import { freeParams, jumpParams, type ResultItem, type SessionApi } from "./sessionStore";
 import { uid } from "../lib/utils";
@@ -18,6 +18,9 @@ export interface StudioApi {
   ar: string;
   quality: string;
   format: string; // 仅图像；输出格式（png/jpeg，缺省 jpeg）
+  optimizePrompt: string; // 仅 Seedream 5.0 pro；standard / fast
+  background: string; // 仅 Seedream 5.0 pro i2i；opaque / transparent
+  webSearch: boolean; // 仅 Seedream 5.0 lite
   duration: string; // 仅视频
   batch: number; // 仅图像；组图模式下为组图张数（max_images）
   mode: "single" | "group"; // 生图模式：单图固定 1 张（API 无 n），组图 = sequential auto
@@ -35,6 +38,9 @@ export interface StudioApi {
   setAr: (v: string) => void;
   setQuality: (v: string) => void;
   setFormat: (v: string) => void;
+  setOptimizePrompt: (v: string) => void;
+  setBackground: (v: string) => void;
+  setWebSearch: (v: boolean) => void;
   setDuration: (v: string) => void;
   setBatch: (n: number) => void;
   setMode: (v: "single" | "group") => void;
@@ -58,8 +64,14 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const allModels = useMemo(() => modelsForStudio(studio), [studio, userModels]);
   const [model, setModel] = useState<ModelDef>(() => defaultModelForStudio(studio));
   const [ar, setAr] = useState(() => defaultModelForStudio(studio).aspectRatios[0]);
-  const [quality, setQuality] = useState(() => defaultModelForStudio(studio).qualities[0]);
+  const [quality, setQuality] = useState(() => {
+    const m = defaultModelForStudio(studio);
+    return m.defaultQuality ?? m.qualities[0];
+  });
   const [format, setFormat] = useState("jpeg"); // 输出格式（仅声明 formats 的模型生效）
+  const [optimizePrompt, setOptimizePromptState] = useState("standard");
+  const [background, setBackgroundState] = useState("opaque");
+  const [webSearch, setWebSearchState] = useState(false);
   const [duration, setDuration] = useState(() => defaultModelForStudio(studio).durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
   const [mode, setModeState] = useState<"single" | "group">("single");
@@ -92,7 +104,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         return;
       }
       if (m.providerId === "volcark" || m.providerId === "wanxiang" || m.providerId === "modelscope") {
-        const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q));
+        const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q, m.templateModelId));
         setSizeState({ w, h });
         setSizeLocked(false);
         return;
@@ -133,7 +145,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       setQuality(v);
       if (!supportsCustomSize(target)) return;
       if (target.providerId === "volcark" || target.providerId === "wanxiang" || target.providerId === "modelscope") {
-        const { w, h } = parseSizePx(aspectToSize(target.providerId, target.id, targetAr, v));
+        const { w, h } = parseSizePx(aspectToSize(target.providerId, target.id, targetAr, v, target.templateModelId));
         setSizeState({ w, h });
         return;
       }
@@ -152,13 +164,23 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
 
   const setSize = useCallback((w: number, h: number) => setSizeState({ w, h }), []);
 
-  /** 模式切换：组图/单图的张数上限不同（wan2.7 组图 1-12），切换时收敛当前张数。 */
+  const setOptimizePrompt = useCallback((v: string) => setOptimizePromptState(v), []);
+  const setWebSearch = useCallback((v: boolean) => setWebSearchState(v), []);
+
+  /** 透明背景只支持 png（官方约束：jpeg 会报错），切透明时自动同步输出格式。 */
+  const setBackground = useCallback((v: string) => {
+    setBackgroundState(v);
+    if (v === "transparent") setFormat("png");
+  }, []);
+
+  /** 模式切换：组图/单图的张数上限不同（wan2.7 组图 1-12，Seedream 组图 15 且 i2i 减参考图数），
+   *  切换时按当前参考图数量收敛张数。 */
   const setMode = useCallback(
     (v: "single" | "group") => {
       setModeState(v);
-      setBatch((prev) => Math.min(prev, batchCap(model, v)));
+      setBatch((prev) => Math.min(prev, batchCap(model, v, refs.length)));
     },
-    [model],
+    [model, refs.length],
   );
 
   const setParamValue = useCallback(
@@ -175,11 +197,17 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     (m: ModelDef) => {
       setModel(m);
       // 先定画质再换算尺寸：保证比例 → 像素换算使用新模型的档位。
-      const nextQ = m.qualities.includes(quality) ? quality : m.qualities[0];
+      const nextQ = m.qualities.includes(quality) ? quality : (m.defaultQuality ?? m.qualities[0]);
       setQuality(nextQ);
       applyAr(m, m.aspectRatios.includes(ar) ? ar : m.aspectRatios[0], nextQ);
       if (m.durations) setDuration((prev) => (m.durations!.includes(prev) ? prev : m.durations![0]));
       if (m.formats) setFormat((prev) => (m.formats!.includes(prev) ? prev : "jpeg"));
+      // volcark 新参数状态在切换模型时重置；非声明模型不会随请求下发。
+      if (studio === "image") {
+        setOptimizePrompt("standard");
+        setBackgroundState("opaque");
+        setWebSearch(false);
+      }
       if (studio === "image") setBatch((prev) => Math.min(prev, batchCap(m, "single")));
       // 直接置 single（batch 已按新模型收缩；setMode 的 clamp 会用旧模型上限，不适用）
       setModeState("single");
@@ -198,8 +226,25 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     [applyAr, ar, quality, studio],
   );
 
-  const addRef = useCallback((url: string) => setRefs((r) => [...r, url]), []);
-  const removeRef = useCallback((i: number) => setRefs((r) => r.filter((_, idx) => idx !== i)), []);
+  const addRef = useCallback(
+    (url: string) => {
+      const next = [...refs, url];
+      setRefs(next);
+      // 组图模式：新增参考图会挤占「参考图数 + max_images ≤ 15」的预算，立即收敛张数。
+      if (studio === "image" && mode === "group") {
+        setBatch((prev) => Math.min(prev, batchCap(model, "group", next.length)));
+      }
+    },
+    [refs, studio, mode, model],
+  );
+  const removeRef = useCallback(
+    (i: number) => {
+      const next = refs.filter((_, idx) => idx !== i);
+      setRefs(next);
+      // 删除参考图后不要自动放大张数——用户已选张数是显式意图。
+    },
+    [refs],
+  );
 
   const removeResult = useCallback(
     (id: string) => {
@@ -249,11 +294,13 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       if (j.duration && (!m || !m.durations || m.durations.includes(j.duration))) setDuration(j.duration);
       // 生图模式：快照带 mode 时按该模式上限收敛张数（组图任务恢复后仍是组图，
       // 而非退化为单图模式带超量 n 并行请求）；无 mode 的旧数据按原逻辑取两模式上限。
+      // Seedream 组图上限受参考图数影响，跳转快照里的 refs 优先于当前表单 refs。
+      const jumpRefs = j.refs?.length ?? refs.length;
       if (j.mode === "single" || j.mode === "group") {
         setModeState(j.mode);
-        if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? batchCap(m, j.mode) : 4));
+        if (j.n != null) setBatch(Math.min(Math.max(1, j.n), m ? batchCap(m, j.mode, jumpRefs) : 4));
       } else if (j.n != null) {
-        setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group")) : 4));
+        setBatch(Math.min(Math.max(1, j.n), m ? Math.max(batchCap(m, "single"), batchCap(m, "group", jumpRefs)) : 4));
       }
       // 自定义像素尺寸（size 区模型）：原任务手动 W/H 优先于 ar 换算
       if (j.size && supportsCustomSize(target)) {
@@ -264,13 +311,31 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         }
       }
       if (j.format && target.formats?.includes(j.format)) setFormat(j.format);
+      // volcark 新参数：仅目标模型声明对应分区时回填，避免把不支持的参数带回表单。
+      if (j.optimizePromptMode && hasSection(target, "optimize")) {
+        setOptimizePrompt(j.optimizePromptMode === "fast" ? "fast" : "standard");
+      }
+      if (j.background && hasSection(target, "background")) {
+        setBackgroundState(j.background === "transparent" ? "transparent" : "opaque");
+        if (j.background === "transparent") setFormat("png");
+      }
+      if (typeof j.webSearch === "boolean" && hasSection(target, "web_search")) {
+        setWebSearch(j.webSearch);
+      }
       // 魔搭自由参数快照：selectModel 已重置为模型默认，此处覆盖回原任务值
       if (j.params) setParamValues(j.params);
-      if (j.refs) setRefs(j.refs);
+      if (j.refs) {
+        setRefs(j.refs);
+        // 跳转快照带参考图且组图模式时，再次按「参考图数 + max_images ≤ 15」收敛张数。
+        const jumpMode = j.mode ?? mode;
+        if (jumpMode === "group") {
+          setBatch((prev) => Math.min(prev, batchCap(target, "group", j.refs!.length)));
+        }
+      }
       // LoRA：selectModel 已清空（模型切换重置），跳转快照在此恢复。
       if (j.loras) setLoras(j.loras);
     },
-    [allModels, model, selectModel, applyAr, setQualityCb, quality, supportsCustomSize],
+    [allModels, model, mode, selectModel, applyAr, setQualityCb, quality, refs.length, supportsCustomSize],
   );
 
   // 一次提交 = 一个任务（taskId），与占位卡一一对应；无并发守卫，
@@ -284,6 +349,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       ar: string;
       quality: string;
       format: string;
+      optimizePrompt: string;
+      background: string;
+      webSearch: boolean;
       duration: string;
       n: number;
       mode: "single" | "group";
@@ -293,12 +361,24 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       /** 魔搭自由参数覆盖（重新生成时从原任务 params_json 还原，优先于弹层当前值） */
       paramsOverride?: Record<string, string | number>;
     }) => {
-      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, duration: d, n, mode, refs: refs0, loras: loras0, isVideo, paramsOverride } = params;
+      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, optimizePrompt, background, webSearch, duration: d, n: rawN, mode, refs: refs0, loras: loras0, isVideo, paramsOverride } = params;
       const capability = refs0.length > 0 ? (isVideo ? "i2v" : "i2i") : isVideo ? "t2v" : "t2i";
+      // 实际请求张数：组图模式按「参考图数 + max_images ≤ 15」在提交前再次收敛，
+      // 避免用户先选 15 张组图、后补参考图时把超限参数发给后端。
+      const n = isVideo
+        ? 1
+        : Math.min(Math.max(1, rawN), batchCap(m, mode, refs0.length));
       // 声明 size 区的模型（volcark）用自定义像素尺寸直传 size；其余仍走 aspect_ratio。
       const useCustomSize = size !== null && supportsCustomSize(m);
-      const sizeField = useCustomSize ? `${size.w}x${size.h}` : aspectToSize(m.providerId, m.id, ar0, q);
+      const sizeField = useCustomSize
+        ? `${size.w}x${size.h}`
+        : aspectToSize(m.providerId, m.id, ar0, q, m.templateModelId);
       const extra = isVideo ? `${d}s · ${q}` : q;
+      // volcark 新参数只随声明分区的模型下发；background 仅图生图有意义。
+      const optMode = !isVideo && hasSection(m, "optimize") ? optimizePrompt : undefined;
+      const bg =
+        !isVideo && capability === "i2i" && hasSection(m, "background") ? background : undefined;
+      const webSearchOn = !isVideo && hasSection(m, "web_search") ? webSearch : undefined;
       // 用户自添加模型：透传按模型配置的自由参数（协议原生字段名，如
       // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））。
       // popover 里调整过的参数（paramValues）覆盖配置默认值；数值参数转 number，空值跳过。
@@ -371,6 +451,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         extra,
         quality: q,
         format: m.formats ? fmt : undefined,
+        optimizePromptMode: optMode,
+        background: bg,
+        webSearch: webSearchOn,
         duration: d,
         refs: refs0,
         loras: loras0,
@@ -394,6 +477,10 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           duration: isVideo ? d : undefined,
           mode: isVideo ? undefined : mode,
           output_format: m.formats ? fmt : undefined,
+          template_model_id: m.providerId === "volcark" ? (m.templateModelId ?? m.id) : undefined,
+          optimize_prompt_mode: optMode,
+          background: bg,
+          web_search: webSearchOn,
           references: refs0,
           extra: customExtra,
         });
@@ -415,6 +502,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           extra,
           quality: q,
           format: m.formats ? fmt : undefined,
+          optimizePromptMode: optMode,
+          background: bg,
+          webSearch: webSearchOn,
           duration: d,
           refs: refs0,
           loras: loras0,
@@ -472,6 +562,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       ar,
       quality,
       format,
+      optimizePrompt,
+      background,
+      webSearch,
       duration,
       n,
       mode,
@@ -479,7 +572,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       loras,
       isVideo: studio === "video",
     });
-  }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, duration, results, session.activeId, session.renameSession, submitTask]);
+  }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, optimizePrompt, background, webSearch, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
   // mode 与魔搭自由参数优先从数据库 params_json 还原（与「重新编辑」同源），
@@ -509,6 +602,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         ar: task.ar,
         quality: task.quality ?? quality,
         format: task.format ?? format,
+        optimizePrompt: task.optimizePromptMode ?? optimizePrompt,
+        background: task.background ?? background,
+        webSearch: task.webSearch ?? webSearch,
         duration: task.duration ?? duration,
         n,
         mode: regenMode,
@@ -518,7 +614,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         isVideo: studio === "video",
       });
     },
-    [results, allModels, model, mode, quality, format, duration, studio, submitTask],
+    [results, allModels, model, mode, quality, format, optimizePrompt, background, webSearch, duration, studio, submitTask],
   );
 
   return {
@@ -527,6 +623,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     ar,
     quality,
     format,
+    optimizePrompt,
+    background,
+    webSearch,
     duration,
     batch,
     mode,
@@ -544,6 +643,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     setAr: setArCb,
     setQuality: setQualityCb,
     setFormat,
+    setOptimizePrompt,
+    setBackground,
+    setWebSearch,
     setDuration,
     setBatch,
     setMode,

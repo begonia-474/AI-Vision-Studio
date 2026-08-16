@@ -26,6 +26,14 @@ export interface GenRequest {
   mode?: "single" | "group";
   /** 图像输出格式（火山方舟 Seedream 5.0 pro/lite）：png / jpeg，缺省 jpeg */
   output_format?: string;
+  /** 模板模型 id（用户自添加模型继承内置模板行为；内置模型提交自身 id） */
+  template_model_id?: string;
+  /** 提示词优化模式（Seedream 5.0 pro）：standard / fast，缺省 standard */
+  optimize_prompt_mode?: string;
+  /** 透明通道（Seedream 5.0 pro，仅 i2i 单参考图）：transparent / opaque */
+  background?: string;
+  /** 联网搜索（Seedream 5.0 lite）：true 时提交 tools=[{type:"web_search"}] */
+  web_search?: boolean;
   references?: string[];
   /** 用户自添加模型透传：{ params: 用户按模型配置的自由参数 } */
   extra?: Record<string, unknown>;
@@ -139,6 +147,12 @@ export interface StudioJump {
   mode?: "single" | "group";
   /** 图像输出格式（png/jpeg，仅图像） */
   format?: string;
+  /** 提示词优化模式（Seedream 5.0 pro：standard / fast） */
+  optimizePromptMode?: string;
+  /** 透明通道（Seedream 5.0 pro：transparent / opaque） */
+  background?: string;
+  /** 联网搜索（Seedream 5.0 lite） */
+  webSearch?: boolean;
   /** 提交时实际像素尺寸 "WxH"（size 区模型回填，优先于 ar 换算） */
   size?: string;
   /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等） */

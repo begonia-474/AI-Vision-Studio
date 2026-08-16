@@ -577,6 +577,10 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         quality: typeof params?.quality === "string" ? params.quality : undefined,
         duration: typeof params?.duration === "string" ? params.duration : undefined,
         format: typeof params?.output_format === "string" ? params.output_format : undefined,
+        optimizePromptMode:
+          typeof params?.optimize_prompt_mode === "string" ? params.optimize_prompt_mode : undefined,
+        background: typeof params?.background === "string" ? params.background : undefined,
+        webSearch: typeof params?.web_search === "boolean" ? params.web_search : undefined,
         n: typeof params?.n === "number" ? params.n : undefined,
         params: freeParams(params ?? {}),
         loras: parseLoras(params?.loras),

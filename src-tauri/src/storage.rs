@@ -297,6 +297,7 @@ pub fn normalize_reference(r: &str) -> Result<String, String> {
 }
 
 /// 本地文件 → data:{mime};base64,...
+/// 扩展名→MIME 对齐火山方舟官方参考图格式：png/jpg/webp/bmp/tiff/gif/heic/heif。
 fn local_to_data_url(path: &str) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|e| format!("读取参考图失败: {}", e))?;
     let mime = match Path::new(path)
@@ -307,6 +308,11 @@ fn local_to_data_url(path: &str) -> Result<String, String> {
     {
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("tif") | Some("tiff") => "image/tiff",
+        Some("gif") => "image/gif",
+        Some("heic") => "image/heic",
+        Some("heif") => "image/heif",
         _ => "image/png",
     };
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -334,6 +340,16 @@ pub fn save_reference(r: &str) -> Result<String, String> {
             ".jpg"
         } else if mime.contains("webp") {
             ".webp"
+        } else if mime.contains("bmp") {
+            ".bmp"
+        } else if mime.contains("tif") {
+            ".tiff"
+        } else if mime.contains("gif") {
+            ".gif"
+        } else if mime.contains("heic") {
+            ".heic"
+        } else if mime.contains("heif") {
+            ".heif"
         } else {
             ".png"
         };
@@ -391,8 +407,21 @@ fn copy_input(src: &str) -> Result<String, String> {
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-        .filter(|e| e == "png" || e == "jpg" || e == "jpeg" || e == "webp")
-        .map(|e| if e == "jpeg" { "jpg".to_string() } else { e })
+        .filter(|e| {
+            matches!(
+                e.as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "gif" | "heic" | "heif"
+            )
+        })
+        .map(|e| {
+            if e == "jpeg" {
+                "jpg".to_string()
+            } else if e == "tif" {
+                "tiff".to_string()
+            } else {
+                e
+            }
+        })
         .unwrap_or_else(|| "png".to_string());
     let bytes = fs::read(src).map_err(|e| format!("读取参考图失败: {}", e))?;
     write_input(bytes, &format!(".{}", ext))
