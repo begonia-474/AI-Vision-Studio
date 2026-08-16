@@ -340,6 +340,15 @@ export function hasSection(m: ModelDef, key: ParamSectionDef["key"]): boolean {
   return m.sections?.some((s) => s.key === key) ?? false;
 }
 
+/** 是否为 Seedream 5.0 Pro（内置或以其为模板的自添加模型）。
+ *  Draw 交互编辑 / 透明背景 / 图层拆分等专属能力按模板 ID 判断。 */
+export function isSeedreamProModel(m: ModelDef): boolean {
+  return (
+    m.providerId === "volcark" &&
+    (m.templateModelId ?? m.id).includes("5-0-pro")
+  );
+}
+
 /** 张数区上限：单图模式按 maxImages（qwen 变体 6）或 maxRef 收敛（≤4）；
  *  组图模式按 maxBatch；volcark Seedream lite/4.5/4.0 官方上限 15，
  *  i2i 组图还需满足「参考图数 + 生成数 ≤ 15」，因此 refs 参与收敛。

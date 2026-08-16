@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toAssetUrl } from "../api";
 import { ModelSelectModal } from "./ModelSelectModal";
+import { DrawDialog } from "./DrawDialog";
 import { ParamPanel } from "./Popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { cn } from "../lib/utils";
@@ -18,7 +19,7 @@ import {
   IconSparkles,
   IconUpload,
 } from "../lib/icons";
-import { PROVIDERS, providerMeta } from "../models/registry";
+import { PROVIDERS, isSeedreamProModel, providerMeta } from "../models/registry";
 import type { StudioApi } from "../studios/useStudio";
 
 interface PromptComposerProps {
@@ -82,6 +83,7 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
 
   const supportRef =
     isVideo ? api.model.capabilities.includes("i2v") : api.model.capabilities.includes("i2i");
+  const drawAvailable = !isVideo && isSeedreamProModel(api.model);
   const maxRef = api.model.maxRef ?? 0;
   const canAddRef = supportRef && api.refs.length < Math.max(maxRef, 1);
 
@@ -328,15 +330,19 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
         <IconSparkles size={14} className="shrink-0 text-primary" />
       </button>
 
-      {/* Draw 占位提示（待接入功能，Dialog 替代原生 alert） */}
-      <Dialog open={drawOpen} onOpenChange={setDrawOpen}>
-        <DialogContent className="max-w-[360px] text-center">
-          <DialogHeader className="gap-3">
-            <DialogTitle className="text-base">{t("prompt.drawTitle")}</DialogTitle>
-            <span className="text-[13px] text-muted-foreground">{t("prompt.drawAlert")}</span>
-          </DialogHeader>
-        </DialogContent>
-      </Dialog>
+      {/* Draw：Seedream 5.0 Pro 打开交互编辑画板；其余模型保持占位提示 */}
+      {drawAvailable ? (
+        <DrawDialog open={drawOpen} onOpenChange={setDrawOpen} api={api} />
+      ) : (
+        <Dialog open={drawOpen} onOpenChange={setDrawOpen}>
+          <DialogContent className="max-w-[360px] text-center">
+            <DialogHeader className="gap-3">
+              <DialogTitle className="text-base">{t("prompt.drawTitle")}</DialogTitle>
+              <span className="text-[13px] text-muted-foreground">{t("prompt.drawAlert")}</span>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
