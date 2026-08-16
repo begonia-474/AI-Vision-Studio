@@ -25,10 +25,13 @@
 - 主题切换：暗色 / 浅色 / 跟随系统（设置弹窗中切换，持久化到本地）
 - 迁移 [shadcn/ui](https://ui.shadcn.com)（Radix + Tailwind v4）：Dialog / Popover / Command / Button / Badge / Input / Progress / Toggle Group
 - 模型选择弹层支持键盘导航（方向键 + Enter）
+- 火山方舟 Seedream 官方参数对齐（2026.08 文档）：5.0 Pro / 4.0 新增提示词优化（标准 / 快速），5.0 Pro 新增 1.5K 像素档与透明背景（i2i 单参考图，自动切 PNG），5.0 Lite 新增联网搜索；4.5 / 4.0 移除不支持的图片格式分区；参考图本地选择与 MIME 归一化补齐 bmp / tiff / gif / heic / heif
+- Seedream 组图上限对齐官方：15 张，i2i 组图按「参考图数 + 生成数 ≤ 15」动态收敛；自添加模型提交携带模板 ID，后端按模板识别版本能力
 
 ### 变更
 
 - 会话与生成历史全量迁移 SQLite（sessions / tasks 表：提交即落库、终态回写），前端 localStorage 业务数据归零；孤儿任务按归属自动重建会话
+- 火山方舟自定义 W/H 尺寸改为前后端共同校验（总像素区间 + 宽高比 [1/16, 16]），非法尺寸显式报错，不再静默回退官方像素表
 - 任务结果区由网格卡片重构为对话式时间线（`ResultGrid.tsx` 移除，改为 `TaskTimeline.tsx`）
 - 任务时间线重渲染优化（消除会话历史串台与卡顿），i18n 升级为类型安全校验
 - 参考图 / 图库跳转带来的本地路径统一归一化为 base64 data URL 后再提交厂商

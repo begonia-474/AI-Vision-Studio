@@ -29,7 +29,8 @@
 ## 关键设计
 
 - `providers/mod.rs` 的 `GenerationProvider` trait 把同步厂商（图像）与异步厂商（视频）统一成 `submit / poll / test_connectivity / default_model` 四个方法，新增内置厂商只需实现该 trait 并注册
-- 自添加模型存 SQLite `user_models` 表，前端注册表（`src/models/registry.ts`）是模型声明的单一数据源（尺寸机制 / 参数分区 / 默认参数），启动/增删时拉取合并进模型列表
+- 自添加模型存 SQLite `user_models` 表，前端注册表（`src/models/registry.ts`）是模型声明的单一数据源（尺寸机制 / 参数分区 / 默认参数），启动/增删时拉取合并进模型列表；提交时携带 `template_model_id`，volcark 后端按模板 ID 判断 Seedream 版本能力，避免自定义模型 ID 破坏版本识别
+- volcark（Seedream，对照 2026.08 官方文档）：5.0 pro 支持 1K/1.5K/2K 像素档、`optimize_prompt_options`（standard/fast）与 `background`（仅 i2i 单参考图，透明模式强制 PNG）；4.0 同样支持 standard/fast 优化；5.0 lite 支持 `web_search` 与 png/jpeg 输出；4.5/4.0 仅 jpeg、不渲染格式分区；组图上限 15 且 i2i 按 `15 - 参考图数` 收敛；自定义 W/H 必须同时满足总像素区间与宽高比 [1/16, 16]，前后端共同校验、非法尺寸显式报错不静默回退
 - 产物下载、缩略图生成由 `commands` 层调用 `storage` 完成，provider 与本地存储解耦
 - 任务进度由后端 `gen-progress` 事件推送，前端 `TaskTimeline` 按 taskId 写入对应卡片
 - 会话与生成历史全部以 SQLite 为唯一权威（sessions 表 + tasks 表，提交即落库、终态回写），前端无 localStorage 业务数据——清理 WebView 缓存不影响任何会话；孤儿任务按归属自动重建会话
