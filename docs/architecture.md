@@ -33,6 +33,7 @@
 - volcark（Seedream，对照 2026.08 官方文档）：5.0 pro 支持 1K/1.5K/2K 像素档、`optimize_prompt_options`（standard/fast）与 `background`（仅 i2i 单参考图，透明模式强制 PNG）；4.0 同样支持 standard/fast 优化；5.0 lite 支持 `web_search` 与 png/jpeg 输出；4.5/4.0 仅 jpeg、不渲染格式分区；组图上限 15 且 i2i 按 `15 - 参考图数` 收敛；自定义 W/H 必须同时满足总像素区间与宽高比 [1/16, 16]，前后端共同校验、非法尺寸显式报错不静默回退
 - Seedream 5.0 Pro 交互编辑（`DrawDialog.tsx`）：纯前端实现，按参考图显示矩形把点选 / 框选换算为 0–999 归一化坐标，以 `<point>` / `<bbox>` token 写回 prompt；多参考图按「图 N」标记，后端复用现有 refs 提交通路
 - Seedream 5.0 Pro 图层拆分：volcark 解析 `data[].z_index/name/description/bounding_box` 并按 z_index 排序；commands 层写入 sidecar `layers/{history_id}.json`（不迁移 tasks 表），删除任务与失败路径同步清理；详情面板经 `get_layer_meta` 按需读取
+- 图层重组画布（`LayerCanvasDialog.tsx`）：前端 Canvas2D 按 `bounding_box.absolute` 叠放图层，支持显隐 / 拖拽排序；导出走后端 `export_layer_composition`（image crate 合成 PNG 到 outputs），避免 WebView canvas 跨域污染
 - 产物下载、缩略图生成由 `commands` 层调用 `storage` 完成，provider 与本地存储解耦
 - 任务进度由后端 `gen-progress` 事件推送，前端 `TaskTimeline` 按 taskId 写入对应卡片
 - 会话与生成历史全部以 SQLite 为唯一权威（sessions 表 + tasks 表，提交即落库、终态回写），前端无 localStorage 业务数据——清理 WebView 缓存不影响任何会话；孤儿任务按归属自动重建会话
