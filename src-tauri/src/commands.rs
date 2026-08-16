@@ -6,10 +6,12 @@ use tauri::{AppHandle, Emitter, State};
 use futures_util::StreamExt;
 
 use crate::models::{
-    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, ProgressPayload, ProviderInfoDto,
-    SessionRow, TaskHandle, TaskPhase, UserModelRow,
+    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, LayerMetaDto, ProgressPayload,
+    ProviderInfoDto, SessionRow, TaskHandle, TaskPhase, UserModelRow,
 };
-use crate::providers::{all_providers, dashscope, get_provider, sanitize_body, GenerationProvider};
+use crate::providers::{
+    all_providers, dashscope, get_provider, sanitize_body, volcark, GenerationProvider,
+};
 use crate::storage;
 
 // 审计#12 修正：曾在此引入全局生成并发信号量（上限 4，许可覆盖提交+轮询+下载全生命周期）。
@@ -176,14 +178,16 @@ pub async fn generate(
         "optimize_prompt_mode": req.optimize_prompt_mode,
         "background": req.background,
         "web_search": req.web_search,
+        "layer_decomposition": req.layer_decomposition,
         // 收编后的参考图路径/URL 数组（本地文件已复制进 inputs 目录，生命周期由应用管理）
         "references": collected_refs,
     });
     // 魔搭自由参数快照（steps/guidance/seed/negative_prompt/loras 等）原样并入
     // params_json：详情页/图库按 params_json 消费完整参数，重新编辑时回填弹层。
     // 结构化字段（size/n/aspect_ratio/quality/duration/mode/output_format/optimize_prompt_mode/
-    // background/web_search/references）以顶部 json! 为准——用户自建模型声明同名 key 时跳过，
-    // 防止污染快照。注意：与前端 src/studios/sessionStore.ts 的 STRUCTURED_PARAM_KEYS 保持同步。
+    // background/web_search/layer_decomposition/references）以顶部 json! 为准——用户自建模型
+    // 声明同名 key 时跳过，防止污染快照。注意：与前端 src/studios/sessionStore.ts 的
+    // STRUCTURED_PARAM_KEYS 保持同步。
     const STRUCTURED_PARAM_KEYS: &[&str] = &[
         "size",
         "n",
@@ -195,6 +199,7 @@ pub async fn generate(
         "optimize_prompt_mode",
         "background",
         "web_search",
+        "layer_decomposition",
         "references",
     ];
     if let Some(map) = req
@@ -264,6 +269,24 @@ pub async fn generate(
     };
     // 提交记录 + 终态轮询记录合并（按下标对应）
     http_log.extend(poll_log);
+    // 图层拆分：从提交响应中解析 z_index/bounding_box 等元数据，写 sidecar 供详情面板读取。
+    // 解析器在 volcark 模块内，响应体已由 sanitize_body 保留 JSON 结构与短字段。
+    let layer_metas = if req.layer_decomposition == Some(true) {
+        let metas = http_log
+            .iter()
+            .rev()
+            .find_map(|r| volcark::parse_layer_metas_from_body(&r.response_body));
+        match metas {
+            Some(m) if !m.is_empty() => Some(m),
+            _ => {
+                let err = "图层拆分响应缺少图层元数据".to_string();
+                fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &err)?;
+                return Err(err);
+            }
+        }
+    } else {
+        None
+    };
     eprintln!(
         "[gen] task={} phase=poll_done elapsed={:?}",
         req.task_id,
@@ -342,6 +365,21 @@ pub async fn generate(
         req.task_id,
         t_start.elapsed()
     );
+
+    // 图层元数据 sidecar：下载成功后按 history_id 落盘；删除任务与失败路径都会同步清理。
+    if let Some(metas) = layer_metas.as_ref() {
+        if let Err(e) = storage::save_layer_meta(history_id, metas) {
+            fail_generation(
+                &app,
+                &req.task_id,
+                history_id,
+                &collected_refs,
+                &local_paths,
+                &e,
+            )?;
+            return Err(e);
+        }
+    }
 
     let local_json = serde_json::to_string(&local_paths).unwrap_or_else(|_| "[]".to_string());
     let remote_json = serde_json::to_string(&remote_urls).ok();
@@ -424,6 +462,7 @@ fn fail_generation(
 ) -> Result<(), String> {
     cleanup_files(refs);
     cleanup_files(paths);
+    let _ = storage::delete_layer_meta(history_id);
     let _ = storage::update_task_result(
         history_id,
         "failed",
@@ -650,6 +689,14 @@ pub async fn delete_histories(ids: Vec<i64>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || storage::delete_tasks(&ids))
         .await
         .map_err(|e| format!("删除任务异常: {}", e))?
+}
+
+/// 读取图层拆分元数据 sidecar（layers/{history_id}.json）；非图层任务/旧记录返回 None。
+#[tauri::command]
+pub async fn get_layer_meta(history_id: i64) -> Result<Option<Vec<LayerMetaDto>>, String> {
+    tokio::task::spawn_blocking(move || storage::read_layer_meta(history_id))
+        .await
+        .map_err(|e| format!("读取图层元数据异常: {}", e))?
 }
 
 /// 补全历史任务缺失的缩略图（旧数据仅第一张有）。

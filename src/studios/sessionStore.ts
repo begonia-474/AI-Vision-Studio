@@ -48,6 +48,7 @@ export interface ResultItem {
   optimizePromptMode?: string; // Seedream 5.0 pro 提示词优化（standard/fast）
   background?: string; // Seedream 5.0 pro 透明通道（transparent/opaque）
   webSearch?: boolean; // Seedream 5.0 lite 联网搜索
+  layerDecomposition?: boolean; // Seedream 5.0 pro 图层拆分
   duration?: string;
   refs?: string[];
   loras?: LoraEntry[]; // 重新生成参数快照：LoRA 列表（魔搭用户自添加模型）
@@ -124,6 +125,7 @@ const STRUCTURED_PARAM_KEYS = new Set([
   "optimize_prompt_mode",
   "background",
   "web_search",
+  "layer_decomposition",
   "references",
   "loras",
   "mode",
@@ -166,6 +168,8 @@ export function jumpFromParams(
     optimizePromptMode: typeof params.optimize_prompt_mode === "string" ? params.optimize_prompt_mode : undefined,
     background: typeof params.background === "string" ? params.background : undefined,
     webSearch: typeof params.web_search === "boolean" ? params.web_search : undefined,
+    layerDecomposition:
+      typeof params.layer_decomposition === "boolean" ? params.layer_decomposition : undefined,
     size: typeof params.size === "string" ? params.size : undefined,
     params: jumpParams(freeParams(params)),
     refs,
@@ -222,6 +226,8 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     typeof params.optimize_prompt_mode === "string" ? params.optimize_prompt_mode : undefined;
   const background = typeof params.background === "string" ? params.background : undefined;
   const webSearch = typeof params.web_search === "boolean" ? params.web_search : undefined;
+  const layerDecomposition =
+    typeof params.layer_decomposition === "boolean" ? params.layer_decomposition : undefined;
   const n = typeof params.n === "number" ? params.n : undefined;
 
   return localPaths.map((path, index) => ({
@@ -243,6 +249,7 @@ function historyResults(studio: Studio, item: HistoryTask): ResultItem[] {
     optimizePromptMode,
     background,
     webSearch,
+    layerDecomposition,
     n,
     refs: refList,
     loras: parseLoras(params.loras),

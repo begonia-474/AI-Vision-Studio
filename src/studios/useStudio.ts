@@ -21,6 +21,7 @@ export interface StudioApi {
   optimizePrompt: string; // 仅 Seedream 5.0 pro；standard / fast
   background: string; // 仅 Seedream 5.0 pro i2i；opaque / transparent
   webSearch: boolean; // 仅 Seedream 5.0 lite
+  layerDecomposition: boolean; // 仅 Seedream 5.0 pro；true 时图层拆分
   duration: string; // 仅视频
   batch: number; // 仅图像；组图模式下为组图张数（max_images）
   mode: "single" | "group"; // 生图模式：单图固定 1 张（API 无 n），组图 = sequential auto
@@ -41,6 +42,7 @@ export interface StudioApi {
   setOptimizePrompt: (v: string) => void;
   setBackground: (v: string) => void;
   setWebSearch: (v: boolean) => void;
+  setLayerDecomposition: (v: boolean) => void;
   setDuration: (v: string) => void;
   setBatch: (n: number) => void;
   setMode: (v: "single" | "group") => void;
@@ -72,6 +74,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const [optimizePrompt, setOptimizePromptState] = useState("standard");
   const [background, setBackgroundState] = useState("opaque");
   const [webSearch, setWebSearchState] = useState(false);
+  const [layerDecomposition, setLayerDecompositionState] = useState(false);
   const [duration, setDuration] = useState(() => defaultModelForStudio(studio).durations?.[0] ?? "5");
   const [batch, setBatch] = useState(1);
   const [mode, setModeState] = useState<"single" | "group">("single");
@@ -167,10 +170,25 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   const setOptimizePrompt = useCallback((v: string) => setOptimizePromptState(v), []);
   const setWebSearch = useCallback((v: boolean) => setWebSearchState(v), []);
 
-  /** 透明背景只支持 png（官方约束：jpeg 会报错），切透明时自动同步输出格式。 */
+  /** 透明背景只支持 png（官方约束：jpeg 会报错），切透明时自动同步输出格式。
+   *  与图层拆分互斥：透明模式会关闭图层拆分。 */
   const setBackground = useCallback((v: string) => {
     setBackgroundState(v);
-    if (v === "transparent") setFormat("png");
+    if (v === "transparent") {
+      setFormat("png");
+      setLayerDecompositionState(false);
+    }
+  }, []);
+
+  /** 图层拆分仅支持单参考图图生图：开启时固定单张并关闭透明背景；
+   *  参考图数量离开 1 时由 effect 自动复位。 */
+  const setLayerDecomposition = useCallback((v: boolean) => {
+    setLayerDecompositionState(v);
+    if (v) {
+      setModeState("single");
+      setBatch(1);
+      setBackgroundState("opaque");
+    }
   }, []);
 
   /** 模式切换：组图/单图的张数上限不同（wan2.7 组图 1-12，Seedream 组图 15 且 i2i 减参考图数），
@@ -187,6 +205,11 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     (key: string, v: string | number) => setParamValues((p) => ({ ...p, [key]: v })),
     [],
   );
+
+  // 图层拆分要求恰好 1 张参考图；移除参考图或补到多张时自动关闭，避免提交无效参数。
+  useEffect(() => {
+    if (layerDecomposition && refs.length !== 1) setLayerDecompositionState(false);
+  }, [refs.length, layerDecomposition]);
 
   // 自定义模型（魔搭）列表变化时，保持当前选中模型；若已被删除则回退默认。
   useEffect(() => {
@@ -207,6 +230,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         setOptimizePrompt("standard");
         setBackgroundState("opaque");
         setWebSearch(false);
+        setLayerDecompositionState(false);
       }
       if (studio === "image") setBatch((prev) => Math.min(prev, batchCap(m, "single")));
       // 直接置 single（batch 已按新模型收缩；setMode 的 clamp 会用旧模型上限，不适用）
@@ -322,6 +346,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       if (typeof j.webSearch === "boolean" && hasSection(target, "web_search")) {
         setWebSearch(j.webSearch);
       }
+      if (typeof j.layerDecomposition === "boolean" && hasSection(target, "layer")) {
+        setLayerDecomposition(j.layerDecomposition);
+      }
       // 魔搭自由参数快照：selectModel 已重置为模型默认，此处覆盖回原任务值
       if (j.params) setParamValues(j.params);
       if (j.refs) {
@@ -352,6 +379,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       optimizePrompt: string;
       background: string;
       webSearch: boolean;
+      layerDecomposition: boolean;
       duration: string;
       n: number;
       mode: "single" | "group";
@@ -361,11 +389,11 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       /** 魔搭自由参数覆盖（重新生成时从原任务 params_json 还原，优先于弹层当前值） */
       paramsOverride?: Record<string, string | number>;
     }) => {
-      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, optimizePrompt, background, webSearch, duration: d, n: rawN, mode, refs: refs0, loras: loras0, isVideo, paramsOverride } = params;
+      const { taskId, prompt: p, model: m, ar: ar0, quality: q, format: fmt, optimizePrompt, background, webSearch, layerDecomposition, duration: d, n: rawN, mode, refs: refs0, loras: loras0, isVideo, paramsOverride } = params;
       const capability = refs0.length > 0 ? (isVideo ? "i2v" : "i2i") : isVideo ? "t2v" : "t2i";
-      // 实际请求张数：组图模式按「参考图数 + max_images ≤ 15」在提交前再次收敛，
-      // 避免用户先选 15 张组图、后补参考图时把超限参数发给后端。
-      const n = isVideo
+      // 图层拆分固定单任务单图；其余组图模式按「参考图数 + max_images ≤ 15」再次收敛。
+      const layerMode = !isVideo && hasSection(m, "layer") ? layerDecomposition : false;
+      const n = isVideo || layerMode
         ? 1
         : Math.min(Math.max(1, rawN), batchCap(m, mode, refs0.length));
       // 声明 size 区的模型（volcark）用自定义像素尺寸直传 size；其余仍走 aspect_ratio。
@@ -454,6 +482,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         optimizePromptMode: optMode,
         background: bg,
         webSearch: webSearchOn,
+        layerDecomposition: layerMode,
         duration: d,
         refs: refs0,
         loras: loras0,
@@ -481,6 +510,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           optimize_prompt_mode: optMode,
           background: bg,
           web_search: webSearchOn,
+          layer_decomposition: layerMode || undefined,
           references: refs0,
           extra: customExtra,
         });
@@ -505,6 +535,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           optimizePromptMode: optMode,
           background: bg,
           webSearch: webSearchOn,
+          layerDecomposition: layerMode,
           duration: d,
           refs: refs0,
           loras: loras0,
@@ -565,6 +596,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       optimizePrompt,
       background,
       webSearch,
+      layerDecomposition,
       duration,
       n,
       mode,
@@ -572,7 +604,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       loras,
       isVideo: studio === "video",
     });
-  }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, optimizePrompt, background, webSearch, duration, results, session.activeId, session.renameSession, submitTask]);
+  }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, optimizePrompt, background, webSearch, layerDecomposition, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
   // mode 与魔搭自由参数优先从数据库 params_json 还原（与「重新编辑」同源），
@@ -605,6 +637,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         optimizePrompt: task.optimizePromptMode ?? optimizePrompt,
         background: task.background ?? background,
         webSearch: task.webSearch ?? webSearch,
+        layerDecomposition: task.layerDecomposition ?? layerDecomposition,
         duration: task.duration ?? duration,
         n,
         mode: regenMode,
@@ -614,7 +647,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         isVideo: studio === "video",
       });
     },
-    [results, allModels, model, mode, quality, format, optimizePrompt, background, webSearch, duration, studio, submitTask],
+    [results, allModels, model, mode, quality, format, optimizePrompt, background, webSearch, layerDecomposition, duration, studio, submitTask],
   );
 
   return {
@@ -626,6 +659,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     optimizePrompt,
     background,
     webSearch,
+    layerDecomposition,
     duration,
     batch,
     mode,
@@ -646,6 +680,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     setOptimizePrompt,
     setBackground,
     setWebSearch,
+    setLayerDecomposition,
     setDuration,
     setBatch,
     setMode,

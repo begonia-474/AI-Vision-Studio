@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::json;
 
-use crate::models::{GenRequest, HttpRecord, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot};
+use crate::models::{
+    GenRequest, HttpRecord, LayerMetaDto, ProviderInfoDto, TaskHandle, TaskPhase, TaskSnapshot,
+};
 use crate::providers::{sanitize_body, GenerationProvider};
 
 /// 火山方舟 豆包 Seedream/Seedance 适配器（对照 docs/model-api 官方文档实查 2026.08）。
@@ -227,6 +229,50 @@ fn volcark_image_size(
     .to_string())
 }
 
+/// 从图层拆分响应体解析图层元数据（仅含 URL 与 z_index 的成功项），
+/// 按 z_index 升序返回，与 `image_generate_once` 排序后的 URL 顺序对齐。
+/// 非图层响应返回 None。commands 层据此写 sidecar（layers/{history_id}.json）。
+pub fn parse_layer_metas_from_body(body: &str) -> Option<Vec<LayerMetaDto>> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let data = v.get("data")?.as_array()?;
+    let mut metas: Vec<LayerMetaDto> = Vec::new();
+    for item in data {
+        if item.get("url").and_then(|u| u.as_str()).is_none() {
+            continue;
+        }
+        let z_index = item.get("z_index").and_then(|z| z.as_i64());
+        if z_index.is_none() {
+            continue;
+        }
+        metas.push(LayerMetaDto {
+            z_index,
+            name: item
+                .get("name")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string()),
+            description: item
+                .get("description")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string()),
+            bounding_box_absolute: item
+                .get("bounding_box")
+                .and_then(|b| b.get("absolute"))
+                .and_then(|a| a.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_i64()).collect()),
+            bounding_box_normalized: item
+                .get("bounding_box")
+                .and_then(|b| b.get("normalized"))
+                .and_then(|a| a.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_i64()).collect()),
+        });
+    }
+    if metas.is_empty() {
+        return None;
+    }
+    metas.sort_by_key(|m| m.z_index.unwrap_or(0));
+    Some(metas)
+}
+
 #[async_trait]
 impl GenerationProvider for VolcArkProvider {
     fn default_model(&self) -> &str {
@@ -389,13 +435,29 @@ impl VolcArkProvider {
             }
         }
 
-        let want_n = req.n.max(1) as usize;
+        // 图层拆分：仅 5.0 pro、图生图、单参考图；与透明背景互斥。
+        let layer = req.layer_decomposition == Some(true);
+        if layer {
+            if !is_seedream_pro(profile) {
+                return Err("图层拆分仅 Seedream 5.0 pro 支持".to_string());
+            }
+            if req.capability != "i2i" || req.references.len() != 1 {
+                return Err("图层拆分模式仅支持 1 张参考图的图生图".to_string());
+            }
+            if req.background.as_deref() == Some("transparent") {
+                return Err("图层拆分模式与透明背景模式互斥".to_string());
+            }
+        }
+
+        let want_n = if layer { 1 } else { req.n.max(1) as usize };
         // 组图模式（mode=group 且模型支持）：一次请求 sequential auto + max_images（一组关联图）；
         // 单图模式（默认，含 5.0 pro）：官方 API 无 n 参数，同样参数**并行**请求，每张图一个独立请求
         // （哩布行为：N 张 = N 次请求，计费 N 份），全部归入同一任务。
         // 组图上限：t2i ≤15；i2i 须满足「参考图数 + max_images ≤ 15」。
-        let group =
-            req.mode.as_deref() == Some("group") && want_n > 1 && supports_sequential(profile);
+        let group = !layer
+            && req.mode.as_deref() == Some("group")
+            && want_n > 1
+            && supports_sequential(profile);
         let group_cap = if req.capability == "i2i" {
             15usize.saturating_sub(req.references.len()).max(1)
         } else {
@@ -463,6 +525,9 @@ impl VolcArkProvider {
         // i2i：image[] 接受 data:image/...;base64, 或 https URL
         if req.capability == "i2i" {
             payload["image"] = json!(req.references);
+        }
+        if layer {
+            payload["layer_decomposition"] = json!(true);
         }
         if group {
             payload["sequential_image_generation"] = json!("auto");
@@ -553,23 +618,30 @@ impl VolcArkProvider {
         {
             return Err(err_msg.to_string());
         }
-        let mut urls = Vec::new();
+        let mut entries: Vec<(Option<i64>, String)> = Vec::new();
         if let Some(data) = v.get("data").and_then(|d| d.as_array()) {
             for item in data {
                 // 单图错误 data.error 不中断其余图，跳过失败项
                 if item.get("error").is_some_and(|e| !e.is_null()) {
                     continue;
                 }
+                let z_index = item.get("z_index").and_then(|z| z.as_i64());
                 if let Some(u) = item.get("url").and_then(|u| u.as_str()) {
-                    urls.push(u.to_string());
+                    entries.push((z_index, u.to_string()));
                 } else if let Some(b64) = item.get("b64_json").and_then(|b| b.as_str()) {
-                    urls.push(format!("data:image/png;base64,{}", b64));
+                    entries.push((z_index, format!("data:image/png;base64,{}", b64)));
                 }
             }
         }
-        if urls.is_empty() {
+        if entries.is_empty() {
             return Err("响应未包含图片 URL".to_string());
         }
+        // 图层拆分响应包含 z_index 时按叠放顺序升序（底图 0 → 图层 1..n），
+        // 保证下载产物顺序与 parse_layer_metas_from_body 的元数据顺序一致。
+        if entries.iter().any(|(z, _)| z.is_some()) {
+            entries.sort_by_key(|(z, _)| z.unwrap_or(i64::MAX));
+        }
+        let urls: Vec<String> = entries.into_iter().map(|(_, u)| u).collect();
         Ok((urls, record))
     }
 
@@ -734,5 +806,41 @@ mod tests {
         assert!(supports_prompt_optimizer("doubao-seedream-4-0-250828"));
         assert!(!supports_prompt_optimizer("doubao-seedream-5-0-260128"));
         assert!(!supports_prompt_optimizer("doubao-seedream-4-5-251128"));
+    }
+
+    #[test]
+    fn parses_layer_metas_and_sorts_by_z_index() {
+        let body = r#"{
+            "model": "doubao-seedream-5-0-pro-260628",
+            "data": [
+                {
+                    "url": "https://example.com/layer-2.png",
+                    "size": "492x98",
+                    "output_format": "png",
+                    "z_index": 2,
+                    "bounding_box": {
+                        "absolute": [140, 451, 631, 548],
+                        "normalized": [68, 220, 308, 268]
+                    },
+                    "name": "左上角标语文字",
+                    "description": "白色两行文字"
+                },
+                {
+                    "url": "https://example.com/base.jpeg",
+                    "size": "2048x2048",
+                    "output_format": "jpeg",
+                    "z_index": 0
+                }
+            ]
+        }"#;
+        let metas = parse_layer_metas_from_body(body).expect("应解析出图层元数据");
+        assert_eq!(metas.len(), 2);
+        assert_eq!(metas[0].z_index, Some(0));
+        assert_eq!(metas[1].z_index, Some(2));
+        assert_eq!(metas[1].name.as_deref(), Some("左上角标语文字"));
+        assert_eq!(
+            metas[1].bounding_box_normalized.as_deref(),
+            Some(&[68, 220, 308, 268][..])
+        );
     }
 }

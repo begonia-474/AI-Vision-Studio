@@ -57,10 +57,29 @@ pub struct GenRequest {
     /// 联网搜索（Seedream 5.0 lite）：true 时提交 tools=[{type:"web_search"}]。
     #[serde(default)]
     pub web_search: Option<bool>,
+    /// 图层拆分（Seedream 5.0 pro）：true 时提交 layer_decomposition，仅 i2i 单参考图。
+    #[serde(default)]
+    pub layer_decomposition: Option<bool>,
     #[serde(default)]
     pub references: Vec<String>,
     #[serde(default)]
     pub extra: Option<serde_json::Value>,
+}
+
+/// Seedream 5.0 pro 图层拆分产物的单张图层元数据。
+/// 与 sidecar layers/{history_id}.json 中的数组项对齐（serde 默认 snake_case）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LayerMetaDto {
+    /// 图层叠放顺序；底图固定 0，数值越大越靠上层。
+    pub z_index: Option<i64>,
+    /// 模型生成的图层名称/标签。
+    pub name: Option<String>,
+    /// 模型生成的图层语义描述。
+    pub description: Option<String>,
+    /// 输出底图坐标系中的绝对像素边界 [left, top, right, bottom]。
+    pub bounding_box_absolute: Option<Vec<i64>>,
+    /// 输出底图坐标系中的归一化边界 [left, top, right, bottom]（0..1000）。
+    pub bounding_box_normalized: Option<Vec<i64>>,
 }
 
 /// 一次生成返回给前端的结果。local_paths 已落盘。

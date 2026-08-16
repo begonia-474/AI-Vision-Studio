@@ -21,12 +21,12 @@ export type Capability = "t2i" | "i2i" | "t2v" | "i2v" | "r2v";
 // 哩布风格：弹层内容按模型声明式渲染，不同模型呈现不同分区。
 // title 为 i18n key；options 缺省时按 key 取模型字段（quality→qualities，batch→1..min(maxRef,4)）。
 // 生图模式（mode）：单图=1 张（API 无 n 参数），组图=sequential auto + max_images（张数区）。
-export type ParamKey = "ar" | "quality" | "duration" | "batch" | "mode" | "format" | "optimize" | "background" | "web_search";
+export type ParamKey = "ar" | "quality" | "duration" | "batch" | "mode" | "format" | "optimize" | "background" | "web_search" | "layer";
 
 export type ParamSectionDef =
   | {
       type: "segmented";
-      key: "quality" | "batch" | "mode" | "format" | "optimize" | "background" | "web_search";
+      key: "quality" | "batch" | "mode" | "format" | "optimize" | "background" | "web_search" | "layer";
       title: string;
       options?: string[]; // 缺省 quality→model.qualities，batch→1..min(maxRef,4)，mode→[single,group]，format→model.formats
       /** 选项为 i18n key，渲染时经 t() 转换（如生图模式的单图/组图） */
@@ -151,6 +151,7 @@ const seedreamSectionsPro: ParamSectionDef[] = [
   { type: "segmented", key: "optimize", title: "prompt.optimizePrompt", options: ["standard", "fast"], i18n: true },
   { type: "segmented", key: "batch", title: "prompt.imageCount" },
   { type: "segmented", key: "format", title: "prompt.imageFormat" },
+  { type: "segmented", key: "layer", title: "prompt.layerMode", options: ["off", "on"], i18n: true, visible: "i2i" },
   { type: "segmented", key: "background", title: "prompt.backgroundMode", options: ["opaque", "transparent"], i18n: true, visible: "i2i" },
 ];
 const seedreamSections45: ParamSectionDef[] = [

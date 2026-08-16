@@ -571,6 +571,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         createdAt: it.created_at,
         paths,
         pathIndex: entry.index,
+        historyId: it.id,
         thumbnailPath: it.thumbnail_path ?? undefined,
         size,
         ratio: size ? (norm.ratio ?? undefined) : undefined,

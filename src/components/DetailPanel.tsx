@@ -7,11 +7,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
-import { toAssetUrl } from "../api";
+import { getLayerMeta, toAssetUrl } from "../api";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { IconChevron, IconDownload, IconMore, IconStar, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
-import type { LoraEntry } from "../types";
+import type { LayerMeta, LoraEntry } from "../types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { XIcon } from "lucide-react";
 
@@ -24,6 +24,8 @@ export interface DetailSource {
   tool?: string;
   createdAt: string;
   paths: string[];
+  /** SQLite tasks.id；用于按需读取图层拆分 sidecar（非图层任务读取返回 null） */
+  historyId?: number;
   /** 当前展示的是 paths 中的第几张（批量任务点开第 N 张详情应显示第 N 张），缺省 0 */
   pathIndex?: number;
   thumbnailPath?: string;
@@ -93,6 +95,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   const [copied, setCopied] = useState(false);
   // 折叠态遮罩：选中文本时透明化——白雾渐变会盖住选区高亮，产生"高亮被切断"的假分隔线
   const [hasSelection, setHasSelection] = useState(false);
+  const [layerMetas, setLayerMetas] = useState<LayerMeta[] | null>(null);
   const copyTimer = useRef<number | undefined>(undefined);
 
   const source = sources[index];
@@ -119,6 +122,24 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
     return () => document.removeEventListener("selectionchange", onSelection);
   }, []);
 
+  // 图层拆分元数据按需读取（sidecar）；切换作品/张时重新读取，失败静默不阻塞详情。
+  useEffect(() => {
+    let alive = true;
+    setLayerMetas(null);
+    const hid = source?.historyId;
+    if (hid == null || !source?.image) return;
+    getLayerMeta(hid)
+      .then((metas) => {
+        if (alive) setLayerMetas(metas ?? []);
+      })
+      .catch(() => {
+        if (alive) setLayerMetas([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [source?.historyId, source?.image]);
+
   if (!source) return null;
 
   const copyPrompt = async (prompt: string) => {
@@ -132,6 +153,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   // 负向提示词独立展示（与提示词同级），不混入参数表。
   const negativePrompt =
     typeof source.params?.negative_prompt === "string" ? source.params.negative_prompt : undefined;
+  const layerMeta = layerMetas?.[source.pathIndex ?? 0];
   const paramRows: { label: string; value: string }[] = [];
   if (source.quality) {
     paramRows.push({
@@ -159,6 +181,21 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   }
   if (source.image && source.webSearch) {
     paramRows.push({ label: t("prompt.webSearch"), value: t("prompt.onMode") });
+  }
+  if (layerMeta) {
+    if (layerMeta.z_index != null) {
+      paramRows.push({ label: t("prompt.layerIndex"), value: String(layerMeta.z_index) });
+    }
+    if (layerMeta.name) {
+      paramRows.push({ label: t("prompt.layerName"), value: layerMeta.name });
+    }
+    if (layerMeta.description) {
+      paramRows.push({ label: t("prompt.layerDescription"), value: layerMeta.description });
+    }
+    const bbox = layerMeta.bounding_box_absolute ?? layerMeta.bounding_box_normalized;
+    if (bbox && bbox.length === 4) {
+      paramRows.push({ label: t("prompt.layerBBox"), value: bbox.join(", ") });
+    }
   }
   for (const [k, v] of Object.entries(source.params ?? {})) {
     if (k === "negative_prompt") continue;

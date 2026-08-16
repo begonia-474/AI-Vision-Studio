@@ -5,6 +5,7 @@ import type {
   GenRequest,
   GenerationResult,
   HistoryTask,
+  LayerMeta,
   ProgressPayload,
   ProviderInfo,
   SessionRow,
@@ -58,6 +59,10 @@ export const setStar = (id: number, starred: boolean) =>
 
 export const deleteHistories = (ids: number[]) =>
   invoke<void>("delete_histories", { ids });
+
+// 读取图层拆分元数据 sidecar；非图层任务返回 null。
+export const getLayerMeta = (historyId: number) =>
+  invoke<LayerMeta[] | null>("get_layer_meta", { historyId });
 
 // 补全历史任务缺失的缩略图（旧数据仅第一张有），返回补生成的缩略图数量。
 export const ensureThumbnails = () => invoke<number>("ensure_thumbnails");

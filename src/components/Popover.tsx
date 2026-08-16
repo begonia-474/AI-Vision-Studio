@@ -58,6 +58,8 @@ export function ParamPanel({ open, onOpenChange, trigger, model, api }: ParamPan
 
 function Section({ section, model, api }: { section: ParamSectionDef; model: ModelDef; api: StudioApi }) {
   const { t } = useTranslation();
+  // 图层拆分固定单张：开启时隐藏张数区，避免“UI 选 2 张但实际只提交 1 张”。
+  if (section.key === "batch" && api.layerDecomposition) return null;
   // Seedream 5.0 pro 透明背景官方要求「单张参考图」，无参考图或多图时隐藏该分区。
   if (section.type === "segmented" && section.visible === "i2i" && api.refs.length !== 1) {
     return null;
@@ -81,7 +83,9 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
                       ? ["opaque", "transparent"]
                       : section.key === "web_search"
                         ? ["off", "on"]
-                        : model.qualities)
+                        : section.key === "layer"
+                          ? ["off", "on"]
+                          : model.qualities)
           }
           current={
             section.key === "batch"
@@ -96,7 +100,9 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
                       ? api.background
                       : section.key === "web_search"
                         ? (api.webSearch ? "on" : "off")
-                        : api.quality
+                        : section.key === "layer"
+                          ? (api.layerDecomposition ? "on" : "off")
+                          : api.quality
           }
           onSelect={(v) =>
             section.key === "batch"
@@ -111,7 +117,9 @@ function Section({ section, model, api }: { section: ParamSectionDef; model: Mod
                       ? api.setBackground(v)
                       : section.key === "web_search"
                         ? api.setWebSearch(v === "on")
-                        : api.setQuality(v)
+                        : section.key === "layer"
+                          ? api.setLayerDecomposition(v === "on")
+                          : api.setQuality(v)
           }
           labelOf={(v) => (section.i18n ? t(v as ParseKeys) : v)}
         />

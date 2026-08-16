@@ -52,6 +52,7 @@ pub fn run() {
             commands::delete_session,
             commands::set_star,
             commands::delete_histories,
+            commands::get_layer_meta,
             commands::ensure_thumbnails,
             commands::list_user_models,
             commands::save_user_model,

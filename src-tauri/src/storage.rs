@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::Manager;
 use tokio::io::AsyncWriteExt;
 
-use crate::models::{HistoryTaskDto, SessionRow, UserModelRow};
+use crate::models::{HistoryTaskDto, LayerMetaDto, SessionRow, UserModelRow};
 
 const APP_DIR_NAME: &str = "AIVisionStudio";
 
@@ -137,6 +137,54 @@ fn today_output_dir() -> Result<PathBuf, String> {
 /// 参考图收编根目录（ComfyUI 式 input）：%LOCALAPPDATA%\AIVisionStudio\inputs\。
 pub fn input_root() -> PathBuf {
     app_dir().join("inputs")
+}
+
+/// 图层拆分元数据 sidecar 目录：app_dir/layers/{history_id}.json。
+/// 不新增 tasks 列（当前无 PRAGMA user_version，结构性迁移需先引入版本号）；
+/// 元数据可由原厂响应重建，按 history_id 关联 tasks.local_paths_json 的下标。
+fn layer_meta_path(history_id: i64) -> PathBuf {
+    app_dir().join("layers").join(format!("{history_id}.json"))
+}
+
+/// 写图层元数据 sidecar（原子写：tmp + rename，避免半写文件被读到）。
+pub fn save_layer_meta(history_id: i64, layers: &[LayerMetaDto]) -> Result<(), String> {
+    let path = layer_meta_path(history_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_vec_pretty(layers).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &json).map_err(|e| e.to_string())?;
+    // Windows rename 到已存在目标会失败，先移除旧文件（sidecar 可重建，短窗口可接受）。
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+/// 读图层元数据 sidecar；文件不存在（非图层任务/旧记录）返回 None。
+pub fn read_layer_meta(history_id: i64) -> Result<Option<Vec<LayerMetaDto>>, String> {
+    let path = layer_meta_path(history_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    let layers: Vec<LayerMetaDto> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    Ok(Some(layers))
+}
+
+/// 删除图层元数据 sidecar；不存在时视为成功（幂等清理）。
+pub fn delete_layer_meta(history_id: i64) -> Result<(), String> {
+    let path = layer_meta_path(history_id);
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 缩略图根目录（预览图可再生，不算产物，与 outputs 分开）：
@@ -892,6 +940,9 @@ pub fn delete_tasks(ids: &[i64]) -> Result<(), String> {
     for t in thumbs {
         let _ = fs::remove_file(t);
     }
+    for id in ids {
+        let _ = delete_layer_meta(*id);
+    }
     Ok(())
 }
 
@@ -1115,5 +1166,23 @@ mod tests {
         let decoded = image::open(&thumb).unwrap();
         assert!(decoded.width() <= 256 && decoded.height() <= 256);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn layer_meta_roundtrip_and_delete() {
+        let id = -4242;
+        let layers = vec![LayerMetaDto {
+            z_index: Some(0),
+            name: Some("底图".to_string()),
+            description: None,
+            bounding_box_absolute: None,
+            bounding_box_normalized: None,
+        }];
+        save_layer_meta(id, &layers).unwrap();
+        let loaded = read_layer_meta(id).unwrap().expect("sidecar 应可读");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].z_index, Some(0));
+        delete_layer_meta(id).unwrap();
+        assert!(read_layer_meta(id).unwrap().is_none());
     }
 }

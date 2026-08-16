@@ -34,9 +34,20 @@ export interface GenRequest {
   background?: string;
   /** 联网搜索（Seedream 5.0 lite）：true 时提交 tools=[{type:"web_search"}] */
   web_search?: boolean;
+  /** 图层拆分（Seedream 5.0 pro）：true 时提交 layer_decomposition，仅 i2i 单参考图 */
+  layer_decomposition?: boolean;
   references?: string[];
   /** 用户自添加模型透传：{ params: 用户按模型配置的自由参数 } */
   extra?: Record<string, unknown>;
+}
+
+/** Seedream 5.0 pro 图层拆分产物的单张图层元数据（sidecar layers/{history_id}.json）。 */
+export interface LayerMeta {
+  z_index: number | null;
+  name: string | null;
+  description: string | null;
+  bounding_box_absolute: number[] | null;
+  bounding_box_normalized: number[] | null;
 }
 
 export interface GenerationResult {
@@ -153,6 +164,8 @@ export interface StudioJump {
   background?: string;
   /** 联网搜索（Seedream 5.0 lite） */
   webSearch?: boolean;
+  /** 图层拆分（Seedream 5.0 pro） */
+  layerDecomposition?: boolean;
   /** 提交时实际像素尺寸 "WxH"（size 区模型回填，优先于 ar 换算） */
   size?: string;
   /** 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等） */
