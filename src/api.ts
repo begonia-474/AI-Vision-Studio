@@ -5,6 +5,7 @@ import type {
   GenRequest,
   GenerationResult,
   HistoryTask,
+  LayerComposition,
   LayerMeta,
   ProgressPayload,
   ProviderInfo,
@@ -63,6 +64,17 @@ export const deleteHistories = (ids: number[]) =>
 // 读取图层拆分元数据 sidecar；非图层任务返回 null。
 export const getLayerMeta = (historyId: number) =>
   invoke<LayerMeta[] | null>("get_layer_meta", { historyId });
+
+// 图层画布上下文（本地产物路径 + 图层元数据）；非图层任务返回 null。
+export const getLayerComposition = (historyId: number) =>
+  invoke<LayerComposition | null>("get_layer_composition", { historyId });
+
+// 按当前顺序与显隐合成 PNG，返回保存的本地绝对路径。
+export const exportLayerComposition = (
+  historyId: number,
+  order: number[],
+  visible: boolean[],
+) => invoke<string>("export_layer_composition", { historyId, order, visible });
 
 // 补全历史任务缺失的缩略图（旧数据仅第一张有），返回补生成的缩略图数量。
 export const ensureThumbnails = () => invoke<number>("ensure_thumbnails");

@@ -53,6 +53,8 @@ pub fn run() {
             commands::set_star,
             commands::delete_histories,
             commands::get_layer_meta,
+            commands::get_layer_composition,
+            commands::export_layer_composition,
             commands::ensure_thumbnails,
             commands::list_user_models,
             commands::save_user_model,

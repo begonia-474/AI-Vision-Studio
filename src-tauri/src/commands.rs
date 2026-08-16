@@ -6,8 +6,8 @@ use tauri::{AppHandle, Emitter, State};
 use futures_util::StreamExt;
 
 use crate::models::{
-    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, LayerMetaDto, ProgressPayload,
-    ProviderInfoDto, SessionRow, TaskHandle, TaskPhase, UserModelRow,
+    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, LayerCompositionDto, LayerMetaDto,
+    ProgressPayload, ProviderInfoDto, SessionRow, TaskHandle, TaskPhase, UserModelRow,
 };
 use crate::providers::{
     all_providers, dashscope, get_provider, sanitize_body, volcark, GenerationProvider,
@@ -697,6 +697,26 @@ pub async fn get_layer_meta(history_id: i64) -> Result<Option<Vec<LayerMetaDto>>
     tokio::task::spawn_blocking(move || storage::read_layer_meta(history_id))
         .await
         .map_err(|e| format!("读取图层元数据异常: {}", e))?
+}
+
+/// 图层画布上下文：本地产物路径 + sidecar 元数据；非图层任务返回 None。
+#[tauri::command]
+pub async fn get_layer_composition(history_id: i64) -> Result<Option<LayerCompositionDto>, String> {
+    tokio::task::spawn_blocking(move || storage::layer_composition(history_id))
+        .await
+        .map_err(|e| format!("读取图层合成上下文异常: {}", e))?
+}
+
+/// 按画布当前顺序与显隐状态合成图层 PNG（CPU 密集，走阻塞线程池），返回产物绝对路径。
+#[tauri::command]
+pub async fn export_layer_composition(
+    history_id: i64,
+    order: Vec<usize>,
+    visible: Vec<bool>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || storage::compose_layer_image(history_id, &order, &visible))
+        .await
+        .map_err(|e| format!("合成图层异常: {}", e))?
 }
 
 /// 补全历史任务缺失的缩略图（旧数据仅第一张有）。

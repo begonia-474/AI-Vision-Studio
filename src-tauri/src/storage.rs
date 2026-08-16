@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::Manager;
 use tokio::io::AsyncWriteExt;
 
-use crate::models::{HistoryTaskDto, LayerMetaDto, SessionRow, UserModelRow};
+use crate::models::{HistoryTaskDto, LayerCompositionDto, LayerMetaDto, SessionRow, UserModelRow};
 
 const APP_DIR_NAME: &str = "AIVisionStudio";
 
@@ -185,6 +185,95 @@ pub fn delete_layer_meta(history_id: i64) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// 图层画布上下文：tasks.local_paths_json + sidecar 元数据。
+/// 非图层任务 / sidecar 缺失返回 None。
+pub fn layer_composition(history_id: i64) -> Result<Option<LayerCompositionDto>, String> {
+    let layers = match read_layer_meta(history_id)? {
+        Some(layers) => layers,
+        None => return Ok(None),
+    };
+    let conn = open_conn()?;
+    let local_json = conn
+        .query_row(
+            "SELECT local_paths_json FROM tasks WHERE id=?1",
+            params![history_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(local_json) = local_json else {
+        return Ok(None);
+    };
+    let paths: Vec<String> = serde_json::from_str(&local_json).unwrap_or_default();
+    Ok(Some(LayerCompositionDto { paths, layers }))
+}
+
+/// 按当前画布顺序与显隐状态合成图层 PNG，保存到当日 outputs 目录。
+/// 返回合成图绝对路径（由前端经 asset 协议预览 / 在文件夹中显示）。
+pub fn compose_layer_image(
+    history_id: i64,
+    order: &[usize],
+    visible: &[bool],
+) -> Result<String, String> {
+    let Some(comp) = layer_composition(history_id)? else {
+        return Err("未找到图层拆分元数据".to_string());
+    };
+    if comp.paths.len() != comp.layers.len() || comp.paths.is_empty() {
+        return Err("图层路径与元数据数量不一致".to_string());
+    }
+    let n = comp.paths.len();
+    let base_idx = comp
+        .layers
+        .iter()
+        .position(|m| m.z_index == Some(0))
+        .unwrap_or(0);
+    let base = image::open(&comp.paths[base_idx])
+        .map_err(|e| format!("读取底图失败: {e}"))?
+        .to_rgba8();
+    let (canvas_w, canvas_h) = (base.width(), base.height());
+    let mut canvas = if visible.get(base_idx).copied().unwrap_or(true) {
+        base
+    } else {
+        image::RgbaImage::from_pixel(canvas_w, canvas_h, image::Rgba([0, 0, 0, 0]))
+    };
+
+    for idx in order.iter().copied() {
+        if idx >= n || idx == base_idx {
+            continue;
+        }
+        if !visible.get(idx).copied().unwrap_or(true) {
+            continue;
+        }
+        let layer = image::open(&comp.paths[idx])
+            .map_err(|e| format!("读取图层失败: {e}"))?
+            .to_rgba8();
+        let (x, y, w, h) = match comp.layers[idx].bounding_box_absolute.as_deref() {
+            Some([l, t, r, b]) => {
+                let (l, t, r, b) = (*l, *t, *r, *b);
+                (l.max(0), t.max(0), (r - l).max(1), (b - t).max(1))
+            }
+            _ => (0i64, 0i64, layer.width() as i64, layer.height() as i64),
+        };
+        let w = (w as u32).min(canvas_w);
+        let h = (h as u32).min(canvas_h);
+        let x = x.min((canvas_w - w) as i64).max(0);
+        let y = y.min((canvas_h - h) as i64).max(0);
+        let resized = image::imageops::resize(&layer, w, h, image::imageops::FilterType::Triangle);
+        image::imageops::overlay(&mut canvas, &resized, x, y);
+    }
+
+    let dir = today_output_dir()?;
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let short_id = uuid::Uuid::new_v4().simple().to_string();
+    let path = dir.join(format!("composed_{}_{}.png", ts, &short_id[..8]));
+    let tmp = dir.join(format!("composed_{}_{}.png.tmp", ts, &short_id[..8]));
+    image::DynamicImage::ImageRgba8(canvas)
+        .save_with_format(&tmp, image::ImageFormat::Png)
+        .map_err(|e| format!("合成图编码失败: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// 缩略图根目录（预览图可再生，不算产物，与 outputs 分开）：

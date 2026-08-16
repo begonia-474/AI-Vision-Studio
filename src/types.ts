@@ -50,6 +50,12 @@ export interface LayerMeta {
   bounding_box_normalized: number[] | null;
 }
 
+/** 图层画布上下文：本地产物路径与图层元数据（下标对齐）。 */
+export interface LayerComposition {
+  paths: string[];
+  layers: LayerMeta[];
+}
+
 export interface GenerationResult {
   history_id: number;
   provider_id: string;

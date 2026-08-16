@@ -13,6 +13,7 @@ import { IconChevron, IconDownload, IconMore, IconStar, IconTrash, IconVideo } f
 import { cn } from "../lib/utils";
 import type { LayerMeta, LoraEntry } from "../types";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { LayerCanvasDialog } from "./LayerCanvasDialog";
 import { XIcon } from "lucide-react";
 
 export interface DetailSource {
@@ -96,6 +97,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   // 折叠态遮罩：选中文本时透明化——白雾渐变会盖住选区高亮，产生"高亮被切断"的假分隔线
   const [hasSelection, setHasSelection] = useState(false);
   const [layerMetas, setLayerMetas] = useState<LayerMeta[] | null>(null);
+  const [layerCanvasOpen, setLayerCanvasOpen] = useState(false);
   const copyTimer = useRef<number | undefined>(undefined);
 
   const source = sources[index];
@@ -404,6 +406,15 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                       ))}
                     </div>
                   )}
+                  {source.image && layerMeta && source.historyId != null && (
+                    <button
+                      type="button"
+                      onClick={() => setLayerCanvasOpen(true)}
+                      className="mt-3 flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-[#eef2ff] px-3 py-2.5 text-xs font-semibold text-[#2563eb] transition-colors hover:bg-[#e0e7ff]"
+                    >
+                      {t("prompt.layerCanvasOpen")}
+                    </button>
+                  )}
                 </div>
                 {!paramsOpen && (
                   <button
@@ -505,6 +516,14 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
           </div>
         </div>
       </div>
+
+      {source.historyId != null && (
+        <LayerCanvasDialog
+          historyId={source.historyId}
+          open={layerCanvasOpen}
+          onOpenChange={setLayerCanvasOpen}
+        />
+      )}
     </div>
   );
 }

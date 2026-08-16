@@ -82,6 +82,13 @@ pub struct LayerMetaDto {
     pub bounding_box_normalized: Option<Vec<i64>>,
 }
 
+/// 图层画布所需上下文：本地产物路径（与 sidecar 下标对齐）+ 图层元数据。
+#[derive(Serialize, Clone)]
+pub struct LayerCompositionDto {
+    pub paths: Vec<String>,
+    pub layers: Vec<LayerMetaDto>,
+}
+
 /// 一次生成返回给前端的结果。local_paths 已落盘。
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GenerationResultDto {
