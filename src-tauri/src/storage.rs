@@ -155,10 +155,8 @@ pub fn save_layer_meta(history_id: i64, layers: &[LayerMetaDto]) -> Result<(), S
     let json = serde_json::to_vec_pretty(layers).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &json).map_err(|e| e.to_string())?;
-    // Windows rename 到已存在目标会失败，先移除旧文件（sidecar 可重建，短窗口可接受）。
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| e.to_string())?;
-    }
+    // 审计#16：std::fs::rename 在 Windows 走 MOVEFILE_REPLACE_EXISTING，可直接覆盖既有目标
+    // （keys.json 原子写同款用法），原先「先删旧再换新」反而制造了读侧短暂可见的缺失窗口。
     if let Err(e) = fs::rename(&tmp, &path) {
         let _ = fs::remove_file(&tmp);
         return Err(e.to_string());
@@ -286,12 +284,16 @@ fn db_path() -> PathBuf {
     app_dir().join("history.db")
 }
 
-/// 统一连接入口：每次操作独立连接（避免 Send/Sync 约束），
+/// 统一连接入口：每次操作独立连接（避免 Send/Sync 约束）。
 /// busy_timeout 让并发写等待而非立即报 database is locked；
-/// WAL 模式在 ensure_schema 中持久化开启（读不阻塞写）。
+/// WAL 在 ensure_schema 中持久化开启（文件级属性），synchronous=NORMAL
+/// 是连接级 PRAGMA，必须在每条新连接上设置（审计#15：WAL 官方推荐组合，
+/// 保住应用崩溃一致性、放弃断电级耐久，sessions 高频 upsert 显著减少 fsync 成本）。
 fn open_conn() -> Result<Connection, String> {
     let conn = Connection::open(db_path()).map_err(|e| e.to_string())?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA synchronous=NORMAL;")
         .map_err(|e| e.to_string())?;
     Ok(conn)
 }
@@ -656,23 +658,31 @@ fn thumbnail_path_of(p: &str) -> PathBuf {
 /// thumbnail_path 为空的任务回填第一张缩略图。返回补生成的缩略图数量。
 pub fn ensure_thumbnails() -> Result<usize, String> {
     let conn = open_conn()?;
-    let mut stmt = conn
-        .prepare("SELECT id, local_paths_json, thumbnail_path FROM tasks")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
+    // 审计#17：先把待处理行收进内存并立即结束读游标，避免整表扫描的连接横跨
+    // 缩略图解码/编码等 CPU 密集步骤被长期占用（WAL 下读不阻塞写，但连接与
+    // 页缓存会被无谓占住）。
+    let mut scanned: Vec<(i64, String, Option<String>)> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, local_paths_json, thumbnail_path FROM tasks")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for r in rows {
+            scanned.push(r.map_err(|e| e.to_string())?);
+        }
+    }
 
     let mut made = 0usize;
     let mut backfill: Vec<(i64, String)> = Vec::new();
-    for r in rows {
-        let (id, local_json, thumb) = r.map_err(|e| e.to_string())?;
+    for (id, local_json, thumb) in scanned {
         let paths: Vec<String> = serde_json::from_str(&local_json).unwrap_or_default();
         let mut first_thumb: Option<String> = None;
         for p in &paths {
@@ -898,20 +908,21 @@ pub fn delete_session(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 任务终态回写：提交即落库（status=running），成功/失败后在此收尾。
-/// 失败任务也留行——图库可编辑复用、时间线可删除，产物不会因瞬时错误永久丢失。
+/// 任务终态回写（成功路径）：提交即落库（status=running），成功后在此收尾。
 /// 参数多（9 个）是 tasks 表终态字段的直接映射，打包 struct 反而多一层转换，故允许。
+/// 字段为值传 String：调用方经 spawn_blocking 把参数移入阻塞线程池（审计#14），
+/// 消除借用跨线程的生命周期问题。
 #[allow(clippy::too_many_arguments)]
 pub fn update_task_result(
     id: i64,
     status: &str,
-    local_paths_json: &str,
-    remote_urls_json: Option<&str>,
-    thumbnail_path: Option<&str>,
-    params_json: Option<&str>,
-    request_json: Option<&str>,
-    raw_response: Option<&str>,
-    error: Option<&str>,
+    local_paths_json: String,
+    remote_urls_json: Option<String>,
+    thumbnail_path: Option<String>,
+    params_json: Option<String>,
+    request_json: Option<String>,
+    raw_response: Option<String>,
+    error: Option<String>,
 ) -> Result<(), String> {
     let conn = open_conn()?;
     conn.execute(
@@ -929,6 +940,29 @@ pub fn update_task_result(
             raw_response,
             error,
         ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 失败终态回写：只更新失败必需的列，params_json 快照原样保留——它是「重新编辑 /
+/// 重新生成」的回填权威，失败行同样要能在图库复用（历史 bug：经 update_task_result
+/// 全列覆写为 NULL，重启后失败卡丢失尺寸/数量等全部参数）。
+/// 仅剥离 params_json.references：收编副本随失败清理即时删除（inputs GC 立场），
+/// 保留该键会让重新生成拿悬空路径报"读取参考图失败"；前端对缺失 references 有
+/// 回退逻辑（i2i 用首张产物），其余字段完整保留。
+pub fn mark_task_failed(id: i64, error: &str) -> Result<(), String> {
+    let conn = open_conn()?;
+    conn.execute(
+        "UPDATE tasks SET status='failed', local_paths_json='[]', thumbnail_path=NULL, error=?2
+         WHERE id=?1",
+        params![id, error],
+    )
+    .map_err(|e| e.to_string())?;
+    // json_remove 对缺失/NULL 是幂等的；bundled SQLite 内置 JSON1。
+    conn.execute(
+        "UPDATE tasks SET params_json = json_remove(params_json, '$.references') WHERE id=?1",
+        params![id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -1023,14 +1057,26 @@ pub fn delete_tasks(ids: &[i64]) -> Result<(), String> {
         }
         tx.commit().map_err(|e| e.to_string())?;
     }
+    // 审计#18：行删除已提交（产物孤儿只此一路兜底可观测），文件删除失败必须留痕，
+    // 不阻断——NotFound 是常态（任务本就无产物），其余错误记录路径供排查。
     for p in files {
-        let _ = fs::remove_file(p);
+        if let Err(e) = fs::remove_file(&p) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[storage] 产物文件删除失败 {p}: {e}");
+            }
+        }
     }
     for t in thumbs {
-        let _ = fs::remove_file(t);
+        if let Err(e) = fs::remove_file(&t) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[storage] 缩略图删除失败 {t}: {e}");
+            }
+        }
     }
     for id in ids {
-        let _ = delete_layer_meta(*id);
+        if let Err(e) = delete_layer_meta(*id) {
+            eprintln!("[storage] 图层元数据删除失败 history={id}: {e}");
+        }
     }
     Ok(())
 }
@@ -1218,11 +1264,52 @@ pub fn delete_user_model(id: i64) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// DB 行为测试夹具（审计#19）：全程互斥串行；进程内首次调用把 APP_DIR
+    /// 指向一次性临时数据根并建空库，之后每次进入只清空业务表——
+    /// 保证测试绝不触碰开发者真实 .data/history.db，且用例间互不残留。
+    static TEST_DB_READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    static DB_FIXTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn db_fixture() -> std::sync::MutexGuard<'static, ()> {
+        let guard = DB_FIXTURE_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join("avs_storage_db_tests");
+        if TEST_DB_READY.set(()).is_ok() {
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            APP_DIR.set(dir).ok();
+            ensure_schema().unwrap();
+        } else {
+            let conn = open_conn().unwrap();
+            conn.execute_batch("DELETE FROM tasks; DELETE FROM sessions; DELETE FROM user_models;")
+                .unwrap();
+        }
+        guard
+    }
+
+    fn sample_history(session_id: Option<String>) -> HistoryInsert {
+        HistoryInsert {
+            provider: "volcark".to_string(),
+            model: "seedream-test-model".to_string(),
+            capability: "t2i".to_string(),
+            prompt: "一只猫".to_string(),
+            params_json: None,
+            status: "running".to_string(),
+            local_paths_json: "[]".to_string(),
+            remote_urls_json: None,
+            thumbnail_path: None,
+            request_json: None,
+            raw_response: None,
+            error: None,
+            session_id,
+        }
+    }
+
     #[test]
-    fn app_dir_is_canonical() {
+    fn default_app_dir_is_canonical() {
         // debug 目录由 CARGO_MANIFEST_DIR(../.data) 派生，必须规范化：
         // 带 src-tauri/.. 前缀的路径串会原样落库/落盘，导致产物路径与真实位置不一致。
-        let dir = app_dir();
+        // 直接测契约本体 default_app_dir（不依赖 APP_DIR 是否已被 init 或测试夹具改写）。
+        let dir = default_app_dir();
         assert!(dir.is_absolute(), "app_dir 应为绝对路径: {}", dir.display());
         let s = dir.to_string_lossy().to_string();
         assert!(
@@ -1232,6 +1319,124 @@ mod tests {
         );
         assert!(s.ends_with("/.data"), "app_dir 应为项目 .data: {}", s);
         assert_eq!(fs::canonicalize(&dir).unwrap(), dir);
+    }
+
+    #[test]
+    fn task_terminal_state_semantics() {
+        let _g = db_fixture();
+
+        // 审计#15：锁定「WAL 持久化 + 每条连接 synchronous=NORMAL」组合。
+        {
+            let conn = open_conn().unwrap();
+            let mode: String = conn
+                .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(mode.to_lowercase(), "wal");
+            let sync: i64 = conn
+                .query_row("PRAGMA synchronous", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(sync, 1, "synchronous 应为 NORMAL(1)");
+        }
+
+        let mut h = sample_history(None);
+        h.params_json =
+            Some(r#"{"size":"2048x2048","n":3,"references":["inputs/a.png"]}"#.to_string());
+        let id = insert_task(h).unwrap();
+
+        // HISTORY_COLS 与 history_row 的列下标映射：分页查询读回完整 DTO
+        let page = query_page(10, 0).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].id, id);
+        assert_eq!(page[0].status, "running");
+        let submitted_params = page[0].params_json.clone().unwrap();
+
+        // 失败终态（审计#13）：错误落列、产物路径清空，params_json 快照保留，
+        // 仅剥离随失败清理的参考图收编副本引用（前端对缺失有回退逻辑）。
+        mark_task_failed(id, "boom").unwrap();
+        let rows = query_page(10, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "failed");
+        assert_eq!(rows[0].error.as_deref(), Some("boom"));
+        assert_eq!(rows[0].local_paths_json, "[]");
+        assert!(rows[0].thumbnail_path.is_none());
+        let failed_params: serde_json::Value =
+            serde_json::from_str(rows[0].params_json.as_deref().unwrap()).unwrap();
+        assert_eq!(failed_params["size"], "2048x2048", "失败行必须保留参数快照");
+        assert_eq!(failed_params["n"], 3);
+        assert!(failed_params.get("references").is_none());
+
+        // 成功终态：全字段覆盖回写
+        update_task_result(
+            id,
+            "succeeded",
+            r#"["outputs/a.png"]"#.to_string(),
+            Some(r#"["https://cdn.example/a.png"]"#.to_string()),
+            Some("thumbs/a.thumb.webp".to_string()),
+            Some(submitted_params),
+            Some("[]".to_string()),
+            Some("[]".to_string()),
+            None,
+        )
+        .unwrap();
+        let rows = query_page(10, 0).unwrap();
+        assert_eq!(rows[0].status, "succeeded");
+        assert_eq!(rows[0].error, None);
+        assert_eq!(rows[0].local_paths_json, r#"["outputs/a.png"]"#);
+        assert!(rows[0]
+            .params_json
+            .as_ref()
+            .unwrap()
+            .contains("inputs/a.png"));
+    }
+
+    #[test]
+    fn upsert_session_overwrites_row() {
+        let _g = db_fixture();
+        upsert_session(&SessionRow {
+            id: "s1".to_string(),
+            title: "first".to_string(),
+            name_manually_edited: false,
+            created_at: 1,
+            updated_at: 100,
+        })
+        .unwrap();
+        upsert_session(&SessionRow {
+            id: "s1".to_string(),
+            title: "renamed".to_string(),
+            name_manually_edited: true,
+            created_at: 1,
+            updated_at: 200,
+        })
+        .unwrap();
+        let all = list_sessions().unwrap();
+        assert_eq!(all.len(), 1, "同 id 幂等 upsert");
+        assert_eq!(all[0].title, "renamed");
+        assert!(all[0].name_manually_edited);
+        assert_eq!(all[0].updated_at, 200);
+    }
+
+    #[test]
+    fn delete_session_unbinds_but_keeps_tasks() {
+        let _g = db_fixture();
+        upsert_session(&SessionRow {
+            id: "sx".to_string(),
+            title: "会话".to_string(),
+            name_manually_edited: false,
+            created_at: 5,
+            updated_at: 50,
+        })
+        .unwrap();
+        insert_task(sample_history(Some("sx".to_string()))).unwrap();
+        insert_task(sample_history(Some("sx".to_string()))).unwrap();
+
+        delete_session("sx").unwrap();
+        assert!(list_sessions().unwrap().is_empty(), "会话行应被删除");
+        // 任务不随会话删除：解绑后仅图库可见，且不被孤儿重建复活
+        let rows = query_page(10, 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        for r in rows {
+            assert_eq!(r.session_id, None);
+        }
     }
 
     #[test]
@@ -1259,6 +1464,9 @@ mod tests {
 
     #[test]
     fn layer_meta_roundtrip_and_delete() {
+        // sidecar 落在 app_dir/layers，纳入 DB 夹具串行（审计#19）：
+        // 避免与夹具首建的目录重建互踩（并行测试曾出现文件被清掉后读取失败）。
+        let _g = db_fixture();
         let id = -4242;
         let layers = vec![LayerMetaDto {
             z_index: Some(0),

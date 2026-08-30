@@ -71,7 +71,7 @@ cd src-tauri && cargo test                  # 后端单测（storage 层）
 - **失败路径统一收尾**：`commands.rs::fail_generation` 是唯一出口：清理已产生文件 + 写库终态 + 推 failed 事件。新失败分支不得自写 cleanup / update / emit 序列。
 - **密钥不出后端**：前端只能拿到掩码；完整 Key 只存在于 `keys.json` 与厂商请求中，不得设计"查看完整密钥"类功能。
 - **默认模型按显式 id 声明**（`defaultModelForStudio`），禁止列表魔法下标——列表重排会静默换默认。
-- **错误一律 `Result<_, String>` 中文可读消息**；生产路径禁止 `unwrap` 与 `panic`（仅 Mutex 中毒与启动期带消息 `expect` 例外）。
+- **错误一律 `Result<_, String>` 中文可读消息**；生产路径禁止 `unwrap` 与 `panic`（仅锁中毒（KEYS_LOCK/KEYS_CACHE，中毒即不可恢复）与启动期带消息 `expect` 例外）。
 
 ## 详细约定
 

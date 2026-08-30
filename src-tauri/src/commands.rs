@@ -215,32 +215,46 @@ pub async fn generate(
             params_obj[k] = v.clone();
         }
     }
-    let history_id = storage::insert_task(storage::HistoryInsert {
-        provider: provider_id.clone(),
-        model: model.clone(),
-        capability: req.capability.clone(),
-        prompt: req.prompt.clone(),
-        params_json: Some(params_obj.to_string()),
-        status: "running".to_string(),
-        local_paths_json: "[]".to_string(),
-        remote_urls_json: None,
-        thumbnail_path: None,
-        request_json: None,
-        raw_response: None,
-        error: None,
-        session_id: req.session_id.clone(),
-    })?;
+    // 审计#14：提交即落库是同步 SQLite IO，与其余命令同款纪律走阻塞线程池，
+    // 不占 tokio worker（WAL 下 autocommit 含 fsync，毫秒到几十毫秒）。
+    let params_snapshot = params_obj.to_string();
+    let history_id = {
+        let provider = provider_id.clone();
+        let model = model.clone();
+        let capability = req.capability.clone();
+        let prompt = req.prompt.clone();
+        let session_id = req.session_id.clone();
+        tokio::task::spawn_blocking(move || {
+            storage::insert_task(storage::HistoryInsert {
+                provider,
+                model,
+                capability,
+                prompt,
+                params_json: Some(params_snapshot),
+                status: "running".to_string(),
+                local_paths_json: "[]".to_string(),
+                remote_urls_json: None,
+                thumbnail_path: None,
+                request_json: None,
+                raw_response: None,
+                error: None,
+                session_id,
+            })
+        })
+        .await
+        .map_err(|e| format!("落库异常: {}", e))??
+    };
 
     let handle = match provider.submit(&req2, &api_key).await {
         Ok(h) => h,
         Err(e) => {
-            fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &e)?;
+            fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &e).await?;
             return Err(e);
         }
     };
     if handle.phase == TaskPhase::Failed {
         let err = handle.error.unwrap_or_else(|| "生成失败".to_string());
-        fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &err)?;
+        fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &err).await?;
         return Err(err);
     }
     eprintln!(
@@ -280,7 +294,7 @@ pub async fn generate(
             Some(m) if !m.is_empty() => Some(m),
             _ => {
                 let err = "图层拆分响应缺少图层元数据".to_string();
-                fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &err)?;
+                fail_generation(&app, &req.task_id, history_id, &collected_refs, &[], &err).await?;
                 return Err(err);
             }
         }
@@ -330,7 +344,8 @@ pub async fn generate(
                 &collected_refs,
                 &partial,
                 &e,
-            )?;
+            )
+            .await?;
             return Err(e);
         }
     };
@@ -376,7 +391,8 @@ pub async fn generate(
                 &collected_refs,
                 &local_paths,
                 &e,
-            )?;
+            )
+            .await?;
             return Err(e);
         }
     }
@@ -415,18 +431,24 @@ pub async fn generate(
     )
     .ok();
 
-    // 终态回写：running 行 → succeeded（提交即落库，前端时间线/图库以库为准）。
-    storage::update_task_result(
-        history_id,
-        "succeeded",
-        &local_json,
-        remote_json.as_deref(),
-        thumbnail_path.as_deref(),
-        Some(&params_obj.to_string()),
-        http_req_json.as_deref(),
-        http_resp_json.as_deref(),
-        None,
-    )?;
+    // 审计#14：成功终态回写是同步 SQLite IO，走阻塞线程池；参数为值传
+    // （update_task_result 改签名），所有权整体移入阻塞任务。
+    let params_for_update = params_obj.to_string();
+    tokio::task::spawn_blocking(move || {
+        storage::update_task_result(
+            history_id,
+            "succeeded",
+            local_json,
+            remote_json,
+            thumbnail_path,
+            Some(params_for_update),
+            http_req_json,
+            http_resp_json,
+            None,
+        )
+    })
+    .await
+    .map_err(|e| format!("终态回写异常: {}", e))??;
 
     let _ = app.emit(
         "gen-progress",
@@ -451,8 +473,12 @@ pub async fn generate(
 }
 
 /// 失败统一收尾：清理已产生的文件 + 写库终态 + 推送 failed 事件。
-/// 收敛原先 5 处重复的 cleanup + update_task_result + emit 序列。
-fn fail_generation(
+/// 收敛原先 5 处重复的 cleanup + 写库 + emit 序列。
+/// 审计#13：终态改走 mark_task_failed——params_json 快照保留（失败行仍可回填复用），
+/// 仅剥离随失败清理的参考图收编副本引用。
+/// 审计#14：文件清理与 SQLite 终态写是阻塞 IO，整批丢阻塞线程池顺序执行
+/// （保持「先清文件后置终态」时序），完成后统一推 failed 事件。
+async fn fail_generation(
     app: &AppHandle,
     task_id: &str,
     history_id: i64,
@@ -460,20 +486,24 @@ fn fail_generation(
     paths: &[String],
     err: &str,
 ) -> Result<(), String> {
-    cleanup_files(refs);
-    cleanup_files(paths);
-    let _ = storage::delete_layer_meta(history_id);
-    let _ = storage::update_task_result(
-        history_id,
-        "failed",
-        "[]",
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(err),
-    );
+    let refs = refs.to_vec();
+    let paths = paths.to_vec();
+    let err_owned = err.to_string();
+    match tokio::task::spawn_blocking(move || {
+        cleanup_files(&refs);
+        cleanup_files(&paths);
+        if let Err(e) = storage::delete_layer_meta(history_id) {
+            eprintln!("[gen] 图层元数据清理失败 history={history_id}: {e}");
+        }
+        storage::mark_task_failed(history_id, &err_owned)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("[gen] 失败终态写库失败 history={history_id}: {e}"),
+        Err(e) => eprintln!("[gen] 失败收尾 join 异常 history={history_id}: {e}"),
+    }
+
     let _ = app.emit(
         "gen-progress",
         ProgressPayload {
@@ -511,7 +541,7 @@ async fn poll_to_finish(
     loop {
         if std::time::Instant::now() >= deadline {
             let err = "任务超时（生成超过时限），请稍后到图库查看是否已生成".to_string();
-            fail_generation(app, task_id, history_id, refs, &[], &err)?;
+            fail_generation(app, task_id, history_id, refs, &[], &err).await?;
             return Err(err);
         }
         let mut snap = None;
@@ -532,7 +562,7 @@ async fn poll_to_finish(
         let snap = match snap {
             Some(s) => s,
             None => {
-                fail_generation(app, task_id, history_id, refs, &[], &last_err)?;
+                fail_generation(app, task_id, history_id, refs, &[], &last_err).await?;
                 return Err(last_err);
             }
         };
@@ -542,7 +572,7 @@ async fn poll_to_finish(
             TaskPhase::Succeeded => return Ok((snap.remote_urls, poll_log)),
             TaskPhase::Failed => {
                 let err = snap.message.unwrap_or_else(|| "生成失败".to_string());
-                fail_generation(app, task_id, history_id, refs, &[], &err)?;
+                fail_generation(app, task_id, history_id, refs, &[], &err).await?;
                 return Err(err);
             }
             _ => {
@@ -619,9 +649,14 @@ async fn download_all(
 
 /// 失败路径尽力清理本次任务已产生的文件（参考图收编副本 / 已下载产物），
 /// 避免 inputs/outputs 在失败任务上累积垃圾（成功路径的 inputs 副本保留供重新生成复用）。
+/// 审计#18：NotFound 是常态（无部分下载），其余删除失败留痕观测，不中断收尾流程。
 fn cleanup_files(paths: &[String]) {
     for p in paths {
-        let _ = std::fs::remove_file(p);
+        if let Err(e) = std::fs::remove_file(p) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("[gen] 失败清理文件 {p}: {e}");
+            }
+        }
     }
 }
 

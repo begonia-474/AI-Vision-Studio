@@ -5,7 +5,7 @@
 ## 错误与失败
 
 - **错误一律 `Result<_, String>` 中文可读消息**：可失败 IO/解析全部向上传播或转 `Err`，消息面向用户可读，不抛原始 panic。
-- **`unwrap`/`panic` 仅两处例外**：`KEYS_LOCK.lock().unwrap()`（Mutex 中毒不可恢复）与启动期 `expect`（必须带消息，如 `lib.rs` 的 http client 构建）。其余生产路径一律禁止。
+- **`unwrap`/`panic` 仅两处例外**：keys.json 的 `KEYS_LOCK` / `KEYS_CACHE` 两把锁上锁失败时（持锁线程已 panic 的中毒态，缓存与盘上事实的一致性不可恢复，快速失败优于带毒续跑；先例：storage.rs）与启动期 `expect`（必须带消息，如 `lib.rs` 的 http client 构建）。其余生产路径一律禁止。
 - **失败路径统一收尾**：`commands.rs::fail_generation` 是唯一出口（清理已产生文件 + 写库终态 + 推 failed 事件）。新失败分支不得自写 cleanup / update / emit 序列。
 - **空 catch 必须命名所吞之物**：`let _ = ...` 与 `.catch(() => {})` 要注释为什么可以吞（先例：删除历史的 fire-and-forget）；保持 try 块只包一个语句。
 - **前端错误三态**：结果卡 `loading / done / error`（`ResultStatus`）；生成失败文案展示在卡片上，不用 `alert()`；异步操作失败必须落卡片或设置页内联提示，不得静默。
