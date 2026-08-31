@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
 import { getLayerMeta, toAssetUrl } from "../api";
 import { revealInFolder } from "../lib/reveal";
+import { toast } from "../lib/toast";
 import { IconChevron, IconDownload, IconMore, IconStar, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
 import type { LayerMeta, LoraEntry } from "../types";
@@ -94,12 +95,10 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   const { t } = useTranslation();
   const [paramsOpen, setParamsOpen] = useState(true);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   // 折叠态遮罩：选中文本时透明化——白雾渐变会盖住选区高亮，产生"高亮被切断"的假分隔线
   const [hasSelection, setHasSelection] = useState(false);
   const [layerMetas, setLayerMetas] = useState<LayerMeta[] | null>(null);
   const [layerCanvasOpen, setLayerCanvasOpen] = useState(false);
-  const copyTimer = useRef<number | undefined>(undefined);
 
   const source = sources[index];
 
@@ -114,8 +113,6 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [source, index, sources.length, onNavigate, onClose]);
-
-  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
 
   // 有文本选区时标记（折叠遮罩据此透明化，避免盖住选区高亮）
   useEffect(() => {
@@ -261,9 +258,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
 
   const copyPrompt = async (prompt: string) => {
     await copyText(prompt);
-    setCopied(true);
-    window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    toast(t("gallery.copied"));
   };
 
   // 哩布式参数表：结构化字段（画质/时长/张数/格式）+ 魔搭自由参数，label/value 行式排布；
@@ -327,9 +322,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
     }
     lines.push(...paramRows.map((r) => `${r.label}：${r.value}`));
     await copyText(lines.join("\n"));
-    setCopied(true);
-    window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    toast(t("gallery.copied"));
   };
 
   const canPrev = index > 0;
@@ -524,7 +517,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                       aria-label={t("gallery.copyParams")}
                       onClick={copyParams}
                     >
-                      {copied ? <span className="text-[11px] text-accent">{t("gallery.copied")}</span> : copyIcon}
+                      {copyIcon}
                     </Button>
                   )}
                   <Button
@@ -551,7 +544,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                         aria-label={t("gallery.copyPrompt")}
                         onClick={() => copyPrompt(source.prompt)}
                       >
-                        {copied ? <span className="text-[11px] text-accent">{t("gallery.copied")}</span> : copyIcon}
+                        {copyIcon}
                       </Button>
                     </div>
                     <p className="mt-2 text-[13px] leading-[21px] break-words text-text-2">{source.prompt}</p>
@@ -568,7 +561,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
                           aria-label={t("gallery.copyPrompt")}
                           onClick={() => copyPrompt(negativePrompt)}
                         >
-                          {copied ? <span className="text-[11px] text-accent">{t("gallery.copied")}</span> : copyIcon}
+                          {copyIcon}
                         </Button>
                       </div>
                       <p className="mt-2 text-[13px] leading-[21px] break-words text-text-2">{negativePrompt}</p>

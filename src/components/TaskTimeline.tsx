@@ -21,6 +21,7 @@ import { useTranslation } from "react-i18next";
 import { IconCopy, IconDownload, IconImage, IconKey, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
 import { cn, copyText } from "../lib/utils";
 import { revealInFolder } from "../lib/reveal";
+import { toast } from "../lib/toast";
 import { ImageGeneration, ImageGenerationLabel } from "./ImageGeneration";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -174,13 +175,11 @@ const TaskGroupCard = memo(function TaskGroupCard({
   const phaseText = phaseLabel(t, phase);
 
   // 失败条操作：复制错误信息 / 重新生成（同一 prompt 重试，参数不变）
-  const [copied, setCopied] = useState(false);
   const copyError = async () => {
     const msg = items[0]?.error ?? t("common.generationFailed");
     try {
       await copyText(msg);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      toast(t("gallery.copied"));
     } catch {
       /* 复制失败静默 */
     }
@@ -267,8 +266,8 @@ const TaskGroupCard = memo(function TaskGroupCard({
                 aria-label={t("result.copyError")}
                 onClick={() => void copyError()}
               >
-                {copied ? <span className="text-[11px]">{t("gallery.copied")}</span> : <IconCopy size={12} />}
-                <span>{copied ? t("gallery.copied") : t("result.copyError")}</span>
+                <IconCopy size={12} />
+                <span>{t("result.copyError")}</span>
               </button>
               <button
                 className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-text-3 transition-colors duration-100 hover:bg-red-500/15 hover:text-red-600"
