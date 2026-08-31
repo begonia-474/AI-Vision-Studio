@@ -9,9 +9,7 @@ use crate::models::{
     GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, LayerCompositionDto, LayerMetaDto,
     ProgressPayload, ProviderInfoDto, SessionRow, TaskHandle, TaskPhase, UserModelRow,
 };
-use crate::providers::{
-    all_providers, dashscope, get_provider, sanitize_body, volcark, GenerationProvider,
-};
+use crate::providers::{all_providers, get_provider, sanitize_body, GenerationProvider};
 use crate::storage;
 
 // 审计#12 修正：曾在此引入全局生成并发信号量（上限 4，许可覆盖提交+轮询+下载全生命周期）。
@@ -68,7 +66,11 @@ pub async fn delete_api_key(provider_id: String) -> Result<(), String> {
 
 // WorkspaceId：业务空间专属域名（https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com）
 #[tauri::command]
-pub async fn save_workspace_id(provider_id: String, workspace_id: String) -> Result<(), String> {
+pub async fn save_workspace_id(
+    provider_id: String,
+    workspace_id: String,
+    client: State<'_, reqwest::Client>,
+) -> Result<(), String> {
     let ws = workspace_id.trim();
     // 防误输入污染域名：仅允许字母/数字/连字符（https://{ws}.cn-beijing.maas.aliyuncs.com）
     if !ws.is_empty() && !ws.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -79,9 +81,10 @@ pub async fn save_workspace_id(provider_id: String, workspace_id: String) -> Res
     tokio::task::spawn_blocking(move || storage::save_workspace(&pid, &ws))
         .await
         .map_err(|e| format!("保存 WorkspaceId 异常: {}", e))??;
-    // 审计#12：workspace 变更使 dashscope 的 base_url 缓存失效，下次请求即用新域名。
-    if provider_id == dashscope::PROVIDER_ID {
-        dashscope::invalidate_base_url_cache();
+    // 审计#12 + 审计#19：workspace 变更后的缓存失效经 trait 通知对应厂商
+    // （dashscope 覆写 on_workspace_changed 使 base_url 缓存失效），commands 不依赖具体厂商模块。
+    if let Some(provider) = get_provider(&provider_id, client.inner().clone()) {
+        provider.on_workspace_changed();
     }
     Ok(())
 }
@@ -284,12 +287,13 @@ pub async fn generate(
     // 提交记录 + 终态轮询记录合并（按下标对应）
     http_log.extend(poll_log);
     // 图层拆分：从提交响应中解析 z_index/bounding_box 等元数据，写 sidecar 供详情面板读取。
-    // 解析器在 volcark 模块内，响应体已由 sanitize_body 保留 JSON 结构与短字段。
+    // 解析由 provider 覆写 trait 方法完成（volcark），commands 只做编排（是否需要拆分）。
+    // 响应体已由 sanitize_body 保留 JSON 结构与短字段。
     let layer_metas = if req.layer_decomposition == Some(true) {
         let metas = http_log
             .iter()
             .rev()
-            .find_map(|r| volcark::parse_layer_metas_from_body(&r.response_body));
+            .find_map(|r| provider.parse_layer_metas(&r.response_body));
         match metas {
             Some(m) if !m.is_empty() => Some(m),
             _ => {

@@ -231,8 +231,9 @@ fn volcark_image_size(
 
 /// 从图层拆分响应体解析图层元数据（仅含 URL 与 z_index 的成功项），
 /// 按 z_index 升序返回，与 `image_generate_once` 排序后的 URL 顺序对齐。
-/// 非图层响应返回 None。commands 层据此写 sidecar（layers/{history_id}.json）。
-pub fn parse_layer_metas_from_body(body: &str) -> Option<Vec<LayerMetaDto>> {
+/// 非图层响应返回 None。审计#19：commands 层不再直调此函数，
+/// 改经 trait 方法 `GenerationProvider::parse_layer_metas` 调用。
+fn parse_layer_metas_from_body(body: &str) -> Option<Vec<LayerMetaDto>> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     let data = v.get("data")?.as_array()?;
     let mut metas: Vec<LayerMetaDto> = Vec::new();
@@ -277,6 +278,12 @@ pub fn parse_layer_metas_from_body(body: &str) -> Option<Vec<LayerMetaDto>> {
 impl GenerationProvider for VolcArkProvider {
     fn default_model(&self) -> &str {
         DEFAULT_IMAGE_MODEL
+    }
+
+    /// 审计#19：图层拆分元数据解析下沉到 trait 覆写（委托模块级解析函数），
+    /// commands 层不再直调 volcark::parse_layer_metas_from_body。
+    fn parse_layer_metas(&self, body: &str) -> Option<Vec<LayerMetaDto>> {
+        parse_layer_metas_from_body(body)
     }
 
     async fn submit(&self, req: &GenRequest, api_key: &str) -> Result<TaskHandle, String> {

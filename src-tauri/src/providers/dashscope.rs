@@ -244,6 +244,12 @@ impl GenerationProvider for DashScopeProvider {
         DEFAULT_IMAGE_MODEL
     }
 
+    /// 审计#19：workspace 变更使 base_url 缓存失效，下次请求即用新域名。
+    /// 原由 commands.rs 直调 invalidate_base_url_cache，现收敛到 trait 覆写。
+    fn on_workspace_changed(&self) {
+        invalidate_base_url_cache();
+    }
+
     async fn submit(&self, req: &GenRequest, api_key: &str) -> Result<TaskHandle, String> {
         match req.capability.as_str() {
             "t2i" | "i2i" => self.submit_image(req, api_key).await,

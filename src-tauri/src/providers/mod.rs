@@ -12,7 +12,7 @@ pub use volcark::VolcArkProvider;
 
 use async_trait::async_trait;
 
-use crate::models::{GenRequest, ProviderInfoDto, TaskHandle, TaskSnapshot};
+use crate::models::{GenRequest, LayerMetaDto, ProviderInfoDto, TaskHandle, TaskSnapshot};
 
 /// 统一生成提供商契约。同步厂商（豆包图像/通义 wan2.6/MiniMax 图像）与异步厂商
 /// （豆包视频/可灵/通义视频/MiniMax 视频）实现同一接口。
@@ -28,6 +28,18 @@ pub trait GenerationProvider: Send + Sync {
     async fn test_connectivity(&self, api_key: &str) -> Result<String, String>;
     /// 默认模型标识。
     fn default_model(&self) -> &str;
+
+    /// WorkspaceId 保存后的厂商副作用（如 dashscope 的 base_url 进程内缓存失效）。
+    /// 默认无操作；需要感知 workspace 变更的厂商覆写。
+    /// 审计#19：从 commands.rs 的具体模块调用下沉到 trait，命令层不再依赖具体厂商。
+    fn on_workspace_changed(&self) {}
+
+    /// 从单次 HTTP 响应体提取图层拆分元数据（Seedream 5.0 pro）。
+    /// 不支持的厂商返回 None；volcark 覆写为解析响应中的 z_index/bounding_box。
+    /// 审计#19：从 commands.rs 的 volcark 直调下沉到 trait，命令层只做编排（是否拆分）。
+    fn parse_layer_metas(&self, _body: &str) -> Option<Vec<LayerMetaDto>> {
+        None
+    }
 }
 
 /// 响应体写库前脱敏：JSON 中超过阈值的字符串（base64 图像块、data URL 等）
