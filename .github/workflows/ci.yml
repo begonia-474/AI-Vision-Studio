@@ -12,8 +12,8 @@ jobs:
     name: 前端（tsc + vite build）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -24,7 +24,7 @@ jobs:
     name: 后端（fmt + clippy + check + test）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Tauri Linux 系统依赖（构建脚本探测需要；release 工作流同样依赖）
       - name: 安装 Linux 系统依赖
         run: |
