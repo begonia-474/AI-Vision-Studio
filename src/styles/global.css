@@ -30,6 +30,7 @@
   --color-ring: var(--accent);
 
   /* 语义别名（组件内直接使用 bg-/text-/border- 工具类） */
+  --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-surface-4: var(--surface-4);

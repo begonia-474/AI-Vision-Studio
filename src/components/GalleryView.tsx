@@ -173,7 +173,7 @@ function CheckMark({ on }: { on: boolean }) {
     <span
       className={cn(
         "grid size-[15px] shrink-0 place-items-center rounded-[3px] border transition-colors",
-        on ? "border-[#2563eb] bg-[#2563eb] text-white" : "border-[#d1d5db] bg-white text-transparent",
+        on ? "border-accent bg-accent text-white" : "border-border-3 bg-card text-transparent",
       )}
     >
       <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
@@ -185,10 +185,10 @@ function CheckMark({ on }: { on: boolean }) {
 
 // 下拉菜单浅色样式（图库为浅色视图；主题令牌迁移后再统一）
 const MENU =
-  "rounded-lg border border-[#e5e7eb] bg-white text-[12px] shadow-[0_10px_30px_rgba(15,23,42,.12)]";
-const MENU_ITEM = "justify-between text-[#374151] focus:bg-[#f3f4f6] focus:text-[#374151]";
-const MENU_LABEL = "px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-[#9ca3af]";
-const MENU_SEP = "mx-3 my-1.5 h-px bg-[#f0f1f3]";
+  "rounded-lg border border-border-2 bg-card text-[12px] shadow-[var(--shadow-lg)]";
+const MENU_ITEM = "justify-between text-text-2 focus:bg-surface-2 focus:text-text-2";
+const MENU_LABEL = "px-3 pb-1 text-[10px] font-medium uppercase tracking-wide text-faint";
+const MENU_SEP = "mx-3 my-1.5 h-px bg-line-soft";
 
 export function GalleryView({ imageSession, videoSession, onImageToVideo, onImageToImage, onReEdit }: GalleryViewProps) {
   const { t } = useTranslation();
@@ -660,114 +660,122 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   };
 
   const batchBtn =
-    "flex h-7 cursor-pointer items-center gap-1 rounded-md border-0 bg-transparent px-2 text-[12px] font-medium text-[#374151] transition-colors hover:bg-[#f3f4f6] disabled:cursor-not-allowed disabled:opacity-40";
+    "h-7 gap-1 rounded-md px-2 text-[12px] font-medium text-text-2 hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-40";
 
   return (
-    <div className="flex h-full flex-col bg-[#f7f8fa] text-[#111827]">
-      <header className="relative z-30 shrink-0 bg-[#f7f8fa]">
+    <div className="flex h-full flex-col bg-surface text-foreground">
+      <header className="relative z-30 shrink-0 bg-surface">
         <div className="mx-auto flex w-full max-w-[1280px] items-center justify-between gap-4 px-2 pt-3">
           <nav className="flex items-center gap-2" aria-label={t("gallery.history")}>
-            <button className="h-9 rounded-[9px] bg-[#e9eaec] px-4 text-[13px] font-medium text-[#111827]" aria-current="page">
+            <Button variant="secondary" size="sm" className="h-9 rounded-[9px] px-4 text-[13px]" aria-current="page">
               {t("gallery.history")}
-            </button>
-            <button
-              className="h-9 cursor-pointer rounded-[9px] border-0 bg-transparent px-3 text-[13px] text-[#4b5563] transition-colors hover:bg-[#eceef1] hover:text-[#111827]"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-9 rounded-[9px] px-3 text-[13px] text-text-3 hover:bg-surface-2 hover:text-foreground"
               onClick={() => setCanvasOpen(true)}
             >
               {t("gallery.canvas")}
-            </button>
+            </Button>
           </nav>
 
           {manage ? (
-            <div className="ml-auto flex h-9 shrink-0 items-center gap-1 rounded-[9px] border border-[#e5e7eb] bg-white px-2 shadow-[0_1px_4px_rgba(15,23,42,.08)] animate-[fadeInUp_.15s]">
-              <span className="px-1.5 text-[12px] font-medium whitespace-nowrap text-[#111827]">
+            <div className="ml-auto flex h-9 shrink-0 items-center gap-1 rounded-[9px] border border-border-2 bg-card px-2 shadow-[var(--shadow-xs)] animate-[fadeInUp_.15s]">
+              <span className="px-1.5 text-[12px] font-medium whitespace-nowrap text-foreground">
                 {t("gallery.selectedItems", { n: selected.size })}
               </span>
-              <button className={batchBtn} disabled={selected.size === 0} onClick={removeSelected}>
+              <Button variant="ghost" className={batchBtn} disabled={selected.size === 0} onClick={removeSelected}>
                 <IconTrash size={13} /> {t("common.delete")}
-              </button>
-              <button className={batchBtn} disabled={selected.size === 0} onClick={downloadSelected}>
+              </Button>
+              <Button variant="ghost" className={batchBtn} disabled={selected.size === 0} onClick={downloadSelected}>
                 <IconDownload size={13} /> {t("common.revealInFolder")}
-              </button>
-              <button className={batchBtn} disabled>
+              </Button>
+              <Button variant="ghost" className={batchBtn} disabled>
                 <IconUpload size={13} /> {t("gallery.publish")}
-              </button>
-              <button className={batchBtn} disabled={selected.size === 0} onClick={starSelected}>
+              </Button>
+              <Button variant="ghost" className={batchBtn} disabled={selected.size === 0} onClick={starSelected}>
                 <IconStar size={13} filled /> {t("gallery.star")}
-              </button>
-              <span className="mx-1 h-4 w-px bg-[#e5e7eb]" />
-              <button
-                className="flex h-7 cursor-pointer items-center rounded-md border-0 bg-transparent px-2 text-[12px] text-[#4b5563] transition-colors hover:bg-[#f3f4f6] hover:text-[#dc2626]"
+              </Button>
+              <span className="mx-1 h-4 w-px bg-muted" />
+              <Button
+                variant="ghost"
+                className="h-7 rounded-md px-2 text-[12px] text-text-3 hover:bg-surface-2 hover:text-destructive"
                 onClick={cancelSelect}
               >
                 {t("gallery.cancelSelect")}
-              </button>
+              </Button>
             </div>
           ) : (
-            <div ref={searchRef} className="ml-auto flex h-9 items-center rounded-[9px] border border-[#e5e7eb] bg-white text-[13px] shadow-[0_1px_2px_rgba(15,23,42,.03)]">
+            <div ref={searchRef} className="ml-auto flex h-9 items-center rounded-[9px] border border-border-2 bg-card text-[13px] shadow-[var(--shadow-xs)]">
               {searchOpen ? (
                 <div className="flex items-center gap-2 px-3">
-                  <IconSearch size={15} style={{ color: "#4b5563" }} />
+                  <IconSearch size={15} className="text-text-3" />
                   <input
                     autoFocus
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder={t("gallery.search")}
-                    className="w-[190px] bg-transparent text-[12px] text-[#111827] outline-none placeholder:text-[#9ca3af]"
+                    className="w-[190px] bg-transparent text-[12px] text-foreground outline-none placeholder:text-faint"
                   />
                 </div>
               ) : (
-                <button
-                  className="grid size-9 cursor-pointer place-items-center border-0 bg-transparent text-[#111827] hover:text-[#2563eb]"
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-foreground hover:text-accent"
                   title={t("gallery.search")}
                   aria-label={t("gallery.search")}
                   onClick={() => setSearchOpen(true)}
                 >
                   <IconSearch size={15} />
-                </button>
+                </Button>
               )}
-              <button
-                className="h-full cursor-pointer border-0 bg-transparent px-3 font-medium text-[#111827] hover:text-[#2563eb]"
+              <Button
+                variant="ghost"
+                className="h-full px-3 font-medium text-foreground hover:text-accent"
                 onClick={() => {
                   setManage((v) => !v);
                   if (manage) setSelected(new Set());
                 }}
               >
                 {t("gallery.batch")}
-              </button>
+              </Button>
             </div>
           )}
         </div>
 
-        <div className="mx-auto flex w-full max-w-[1280px] min-h-[46px] items-center gap-6 px-2 pb-2 text-[12px] text-[#374151]">
+        <div className="mx-auto flex w-full max-w-[1280px] min-h-[46px] items-center gap-6 px-2 pb-2 text-[12px] text-text-2">
           <div className="flex shrink-0 items-center gap-6" role="tablist">
             {(["image", "video"] as TypeFilter[]).map((k) => (
-              <button
+              <Button
                 key={k}
+                variant="ghost"
                 role="tab"
                 aria-selected={type === k}
                 className={cn(
-                  "cursor-pointer border-0 bg-transparent p-0 font-normal transition-colors hover:text-[#111827]",
-                  type === k ? "font-medium text-[#111827]" : "text-[#6b7280]",
+                  "h-auto gap-0 rounded-none p-0 font-normal transition-colors hover:text-foreground",
+                  type === k ? "font-medium text-foreground" : "text-muted-foreground",
                 )}
                 onClick={() => setType(k)}
               >
                 {t(`gallery.${k}`)}
-              </button>
+              </Button>
             ))}
           </div>
 
           <div className="relative shrink-0">
             <DropdownMenu open={openMenu === "filter"} onOpenChange={(o) => setOpenMenu(o ? "filter" : null)}>
               <DropdownMenuTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
                   className={cn(
-                    "flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]",
-                    (starredOnly || type === "all" || resSel.size > 0 || ratioSel.size > 0) && "font-medium text-[#111827]",
+                    "h-auto gap-1 rounded-none p-0 text-text-3 hover:text-foreground",
+                    (starredOnly || type === "all" || resSel.size > 0 || ratioSel.size > 0) && "font-medium text-foreground",
                   )}
                 >
                   {t("gallery.filter")} <IconChevron size={11} />
-                </button>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className={cn(MENU, "min-w-[216px] py-2")}>
                 <div className={MENU_LABEL}>{t("gallery.fGroupAction")}</div>
@@ -819,28 +827,29 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
           <div className="relative shrink-0">
             <DropdownMenu open={openMenu === "time"} onOpenChange={(o) => setOpenMenu(o ? "time" : null)}>
               <DropdownMenuTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
                   className={cn(
-                    "flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]",
-                    (range.start || range.end) && "font-medium text-[#111827]",
+                    "h-auto gap-1 rounded-none p-0 text-text-3 hover:text-foreground",
+                    (range.start || range.end) && "font-medium text-foreground",
                   )}
                 >
                   {t("gallery.time")} <IconChevron size={11} />
-                </button>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className={cn(MENU, "min-w-[264px] p-2")}>
-                <div className="flex items-center gap-1.5 rounded-md bg-[#f3f4f6] px-2.5 py-2">
+                <div className="flex items-center gap-1.5 rounded-md bg-surface-2 px-2.5 py-2">
                   <input
                     type="date"
-                    className="w-full min-w-0 bg-transparent text-[12px] text-[#111827] outline-none [color-scheme:light]"
+                    className="w-full min-w-0 bg-transparent text-[12px] text-foreground outline-none [color-scheme:light]"
                     value={range.start}
                     max={range.end || undefined}
                     onChange={(e) => setRange((r) => ({ ...r, start: e.target.value }))}
                   />
-                  <span className="text-[#9ca3af]">-</span>
+                  <span className="text-faint">-</span>
                   <input
                     type="date"
-                    className="w-full min-w-0 bg-transparent text-[12px] text-[#111827] outline-none [color-scheme:light]"
+                    className="w-full min-w-0 bg-transparent text-[12px] text-foreground outline-none [color-scheme:light]"
                     value={range.end}
                     min={range.start || undefined}
                     onChange={(e) => setRange((r) => ({ ...r, end: e.target.value }))}
@@ -864,9 +873,9 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
           <div className="relative shrink-0">
             <DropdownMenu open={openMenu === "sort"} onOpenChange={(o) => setOpenMenu(o ? "sort" : null)}>
               <DropdownMenuTrigger asChild>
-                <button className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 text-[#4b5563] hover:text-[#111827]">
+                <Button variant="ghost" className="h-auto gap-1 rounded-none p-0 text-text-3 hover:text-foreground">
                   {t("gallery.sort")} <IconChevron size={11} />
-                </button>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className={cn(MENU, "min-w-[180px] py-1.5")}>
                 <div className={MENU_LABEL}>{t("gallery.order")}</div>
@@ -876,7 +885,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
                     className={cn(MENU_ITEM, "justify-between")}
                     onClick={() => setSortOrder(k)}
                   >
-                    <span className={cn(sortOrder === k && "font-medium text-[#111827]")}>{t(`gallery.${k}`)}</span>
+                    <span className={cn(sortOrder === k && "font-medium text-foreground")}>{t(`gallery.${k}`)}</span>
                     {sortOrder === k && <CheckMark on />}
                   </DropdownMenuItem>
                 ))}
@@ -888,27 +897,27 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
 
       <div
         ref={scrollRef}
-        className={cn("scrollbar-none flex-1 overflow-y-auto bg-[#f7f8fa]", manage && "select-none")}
+        className={cn("scrollbar-none flex-1 overflow-y-auto bg-surface", manage && "select-none")}
         onPointerDown={onGridPointerDown}
         onPointerMove={onGridPointerMove}
         onPointerUp={onGridPointerUp}
         onPointerCancel={hideMarquee}
       >
         {loading ? (
-          <div className="grid min-h-[50vh] place-items-center text-[#9ca3af]">
-            <div className="size-7 animate-spin rounded-full border-2 border-[#dbeafe] border-t-[#2563eb]" />
+          <div className="grid min-h-[50vh] place-items-center text-faint">
+            <div className="size-7 animate-spin rounded-full border-2 border-accent/30 border-t-accent" />
           </div>
         ) : error ? (
-          <div className="grid min-h-[50vh] place-items-center text-xs text-[#dc2626]">
+          <div className="grid min-h-[50vh] place-items-center text-xs text-destructive">
             {t("gallery.failed")}：{error}
           </div>
         ) : entries.length === 0 ? (
           <div className="flex min-h-[50vh] flex-col items-center justify-center p-4 text-center animate-[fadeInUp_.7s]">
-            <IconLibrary size={38} style={{ color: "#cbd5e1", marginBottom: 14 }} />
-            <h1 className="m-0 mb-3 text-[24px] font-semibold tracking-tight text-[#1f2937]">
+            <IconLibrary size={38} className="text-faint-2" style={{ marginBottom: 14 }} />
+            <h1 className="m-0 mb-3 text-[24px] font-semibold tracking-tight text-foreground">
               {items.length === 0 ? t("gallery.empty") : t("gallery.emptySearch")}
             </h1>
-            <p className="m-0 max-w-[480px] text-[13px] leading-relaxed text-[#6b7280]">
+            <p className="m-0 max-w-[480px] text-[13px] leading-relaxed text-muted-foreground">
               {items.length === 0 ? t("gallery.emptyDesc") : t("gallery.emptySearchDesc")}
             </p>
           </div>
@@ -916,7 +925,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
           <div className="mx-auto w-full max-w-[1280px] px-2 pt-3 pb-8 animate-[fadeInUp_.35s]">
             {groups.map((g) => (
               <section key={g.key} className="mb-8 last:mb-0">
-                <h2 className="mb-3 text-[23px] font-normal leading-none tracking-[-.03em] text-[#111827]">{dateLabel(t, g.key)}</h2>
+                <h2 className="mb-3 text-[23px] font-normal leading-none tracking-[-.03em] text-foreground">{dateLabel(t, g.key)}</h2>
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-[2px]">
                   {g.items.map((entry) => {
                     const it = entry.item;
@@ -925,8 +934,8 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
                       <div
                         data-gid={it.id}
                         className={cn(
-                          "group/gallery-card relative aspect-square cursor-pointer overflow-hidden rounded-[2px] bg-[#e5e7eb] transition-[box-shadow] duration-150 hover:z-10 hover:shadow-[0_3px_14px_rgba(15,23,42,.18)]",
-                          selected.has(it.id) && "z-[2] shadow-[0_0_0_2px_#2563eb]",
+                          "group/gallery-card relative aspect-square cursor-pointer overflow-hidden rounded-[2px] bg-muted transition-[box-shadow] duration-150 hover:z-10 hover:shadow-[0_3px_14px_var(--shadow)]",
+                          selected.has(it.id) && "z-[2] shadow-[0_0_0_2px_var(--accent)]",
                         )}
                         key={entry.key}
                         onClick={() => (manage ? toggleSelect(it.id) : openDetail(entry))}
@@ -963,8 +972,8 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
                             </div>
                           </>
                         ) : (
-                          <div className="grid h-full w-full place-items-center bg-[#e5e7eb] text-[#6b7280]">
-                            <span className="grid size-9 place-items-center rounded-full bg-white/80">
+                          <div className="grid h-full w-full place-items-center bg-muted text-muted-foreground">
+                            <span className="grid size-9 place-items-center rounded-full bg-card/80">
                               {img ? <IconLibrary size={14} /> : <IconPlay size={14} />}
                             </span>
                           </div>
@@ -973,8 +982,8 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
                         {manage && (
                           <div
                             className={cn(
-                              "absolute top-1.5 left-1.5 z-[3] grid size-5 place-items-center rounded-full border border-white bg-white/80 text-[11px] font-bold text-white shadow-sm",
-                              selected.has(it.id) && "border-[#2563eb] bg-[#2563eb]",
+                              "absolute top-1.5 left-1.5 z-[3] grid size-5 place-items-center rounded-full border border-white bg-card/80 text-[11px] font-bold text-white shadow-sm",
+                              selected.has(it.id) && "border-accent bg-accent",
                             )}
                           >
                             {selected.has(it.id) && "✓"}
@@ -985,7 +994,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
                           <button
                             title={it.starred ? t("gallery.unstar") : t("gallery.star")}
                             className={cn(
-                              "grid size-7 cursor-pointer place-items-center rounded-full border border-white/70 bg-black/45 text-white backdrop-blur-sm hover:bg-white hover:text-[#111827]",
+                              "grid size-7 cursor-pointer place-items-center rounded-full border border-white/70 bg-black/45 text-white backdrop-blur-sm hover:bg-card hover:text-foreground",
                               it.starred && "opacity-100 text-[#f9a8d4]",
                             )}
                             onClick={(e) => cardAction(e, () => toggleStar(it))}
@@ -994,7 +1003,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
                           </button>
                           <button
                             title={t("gallery.delete")}
-                            className="grid size-7 cursor-pointer place-items-center rounded-full border border-white/70 bg-black/45 text-white backdrop-blur-sm hover:bg-[#dc2626]"
+                            className="grid size-7 cursor-pointer place-items-center rounded-full border border-white/70 bg-black/45 text-white backdrop-blur-sm hover:bg-destructive"
                             onClick={(e) => cardAction(e, () => removeOne(it))}
                           >
                             <IconTrash size={12} />
@@ -1013,7 +1022,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
       {/* 框选 overlay：固定渲染、默认隐藏，拖动期经 ref 直写 style（审计#12，零 setState） */}
       <div
         ref={marqueeRef}
-        className="pointer-events-none fixed z-[60] hidden border border-[#2563eb] bg-[#2563eb]/10"
+        className="pointer-events-none fixed z-[60] hidden border border-accent bg-accent/10"
       />
 
       {detailIdx != null && detailIdx >= 0 && (
