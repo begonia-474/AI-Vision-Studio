@@ -55,6 +55,7 @@ interface TaskGroup {
   prompt: string;
   model: string;
   ar: string;
+  size?: string;
   phase?: string;
   items: ResultItem[];
 }
@@ -67,6 +68,9 @@ interface TaskGroupCardProps {
   prompt: string;
   model: string;
   ar: string;
+  /** 提交时实际像素尺寸（"WxH"）；与 ar 可不一致（用户手动改 W/H 时 ar 不联动）。
+   *  网格容器宽高比优先用它，保证容器匹配真实产物比例（审计#20）。 */
+  size?: string;
   phase?: string;
   items: ResultItem[];
   onImageToVideo?: (src: string, prompt: string) => void;
@@ -147,6 +151,7 @@ const TaskGroupCard = memo(function TaskGroupCard({
   prompt,
   model,
   ar,
+  size,
   phase,
   items,
   onImageToVideo,
@@ -158,9 +163,12 @@ const TaskGroupCard = memo(function TaskGroupCard({
 }: TaskGroupCardProps) {
   const { t } = useTranslation();
   const timeLabel = new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  const cols = gridCols(items.length, ar);
-  const aspect = mediaAspect(ar);
-  const resLabel = resolutionLabel(ar);
+  // 网格容器比例优先用实际产物尺寸（用户手动改 W/H 时 ar 不联动，ar 只是画面比例标签），
+  // 保证容器与图片比例一致，避免 9:16 图被塞进 16:9 容器留白（审计#20）。
+  const displayAr = size ?? ar;
+  const cols = gridCols(items.length, displayAr);
+  const aspect = mediaAspect(displayAr);
+  const resLabel = resolutionLabel(displayAr);
   const phaseText = phaseLabel(t, phase);
 
   // 失败条操作：复制错误信息 / 重新生成（同一 prompt 重试，参数不变）
@@ -444,6 +452,7 @@ export const TaskTimeline = memo(function TaskTimeline({
           prompt: it.prompt,
           model: it.model,
           ar: it.ar,
+          size: it.size,
           phase: it.phase,
           items: [],
         };
@@ -617,6 +626,7 @@ export const TaskTimeline = memo(function TaskTimeline({
           prompt={g.prompt}
           model={g.model}
           ar={g.ar}
+          size={g.size}
           phase={g.phase}
           items={g.items}
           onImageToVideo={onImageToVideo}
