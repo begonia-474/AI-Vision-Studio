@@ -18,6 +18,57 @@ pub struct ProviderInfoDto {
     pub auth_help: String,
 }
 
+/// LoRA 条目（生成弹层内编辑；repo=模型仓库 ID，weight=权重字符串，原样下发不做限制）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "LoraEntry")]
+pub struct LoraEntryDto {
+    pub repo: String,
+    pub weight: String,
+}
+
+/// params_json → 重新编辑/重新生成参数还原（parse_history_params 命令的返回）。
+/// 特意用 camelCase：与前端私有类型 StudioJump 直接对齐，省去前端映射层；
+/// 结构化字段以 params_json 为准（重新编辑/重新生成的回填权威），剩余自由参数进 params。
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export, rename = "EditJump", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct EditJumpDto {
+    pub studio: Studio,
+    pub prompt: String,
+    #[ts(optional = nullable)]
+    pub model_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub ar: Option<String>,
+    #[ts(optional = nullable)]
+    pub quality: Option<String>,
+    #[ts(optional = nullable)]
+    pub duration: Option<String>,
+    #[ts(type = "number", optional = nullable)]
+    pub n: Option<i64>,
+    #[ts(optional = nullable)]
+    pub mode: Option<String>,
+    #[ts(optional = nullable)]
+    pub format: Option<String>,
+    #[ts(optional = nullable)]
+    pub optimize_prompt_mode: Option<String>,
+    #[ts(optional = nullable)]
+    pub background: Option<String>,
+    #[ts(optional = nullable)]
+    pub web_search: Option<bool>,
+    #[ts(optional = nullable)]
+    pub layer_decomposition: Option<bool>,
+    /// 提交时实际像素尺寸 "WxH"（size 区模型回填，优先于 ar 换算）。
+    #[ts(optional = nullable)]
+    pub size: Option<String>,
+    /// 魔搭自由参数快照（steps/guidance/seed/negative_prompt 等，string/number 过滤后）。
+    #[ts(type = "Record<string, string | number>", optional = nullable)]
+    pub params: Option<serde_json::Value>,
+    #[ts(optional = nullable)]
+    pub refs: Option<Vec<String>>,
+    #[ts(optional = nullable)]
+    pub loras: Option<Vec<LoraEntryDto>>,
+}
+
 /// 前端发起的生成请求。model/negative_prompt 可选，缺省由适配器补默认值。
 /// size 为即梦像素串（"2048x2048"）；其余厂商用 aspect_ratio/quality/duration。
 /// references 为 i2i/i2v 参考图（data:image/...;base64, 或 https URL），角色由适配器按 capability 推断。
@@ -85,6 +136,11 @@ pub struct GenRequest {
     pub layer_decomposition: Option<bool>,
     #[serde(default)]
     pub references: Vec<String>,
+    /// LoRA 原始条目（魔搭 loras 字段）：后端归一化（单条 dict 透传 / 多条等比归一和=1，
+    /// 见 params::normalize_loras），前端不再拼装归一化结果。
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub loras: Option<Vec<LoraEntryDto>>,
     /// 用户自添加模型透传：{ params: 用户按模型配置的自由参数 }。
     #[serde(default)]
     #[ts(type = "Record<string, unknown>", optional = nullable)]
@@ -243,6 +299,158 @@ pub struct ProgressPayload {
     pub message: String,
 }
 
+// —— 内置模型领域数据 DTO（registry.rs 声明的序列化形态）——
+// 特意用 camelCase：与前端 registry.ts 的 ModelDef / ParamSectionDef 直接对齐，
+// typegen 生成同名 TS 类型；前端经 list_builtin_models 命令一次性拉取缓存，无需映射字段名。
+
+/// 内置注册表整体快照（list_builtin_models 命令返回）。
+#[derive(Serialize, Clone, Debug, TS)]
+#[ts(export, rename = "BuiltinRegistry")]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinRegistryDto {
+    pub models: Vec<BuiltinModelDto>,
+    /// 工作室默认模型 id（显式声明，禁止列表魔法下标）。
+    pub default_image: String,
+    pub default_video: String,
+}
+
+/// 模型所属工作室。
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[ts(export, rename = "Studio")]
+#[serde(rename_all = "lowercase")]
+pub enum Studio {
+    Image,
+    Video,
+}
+
+/// 自定义尺寸区某档位对应的像素串（size_table 的一项）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "SizeEntry")]
+#[serde(rename_all = "camelCase")]
+pub struct SizeEntryDto {
+    pub quality: String,
+    pub ratio: String,
+    /// 像素串 "WxH"；非像素尺寸厂商为比例原值（仅展示用）。
+    pub px: String,
+}
+
+/// 像素区间（总像素 或 宽高比）。f64 以便表达 1/16 这类比例边界。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "PxBounds")]
+#[serde(rename_all = "camelCase")]
+pub struct PxBoundsDto {
+    pub min: f64,
+    pub max: f64,
+}
+
+/// 用户自添加模型的自由参数载体（保持 snake_case：与前端 CustomModelConfig 对齐）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "CustomConfig")]
+pub struct CustomConfigDto {
+    pub repo_id: String,
+    pub name: String,
+    pub capabilities: Vec<String>,
+    pub size_presets: Vec<String>,
+    #[ts(type = "Record<string, string | number | null>")]
+    pub params: serde_json::Value,
+}
+
+/// 自由参数输入形态。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "ParamKind")]
+#[serde(rename_all = "lowercase")]
+pub enum ParamKind {
+    Number,
+    Text,
+}
+
+/// 参数弹层分区声明（与前端 ParamSectionDef 对齐）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "ParamSection", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum ParamSectionDto {
+    Segmented {
+        key: String,
+        title: String,
+        #[ts(optional = nullable)]
+        options: Option<Vec<String>>,
+        #[ts(optional = nullable)]
+        i18n: Option<bool>,
+        #[ts(optional = nullable)]
+        visible: Option<String>,
+    },
+    Ratio {
+        key: String,
+        title: String,
+        #[ts(optional = nullable)]
+        options: Option<Vec<String>>,
+        #[ts(optional = nullable)]
+        size: Option<bool>,
+    },
+    Size {
+        key: String,
+        title: String,
+    },
+    Loras {
+        key: String,
+        title: String,
+    },
+    Param {
+        key: String,
+        title: String,
+        kind: ParamKind,
+        #[ts(optional = nullable)]
+        def: Option<String>,
+    },
+    Duration {
+        key: String,
+        title: String,
+    },
+}
+
+/// 内置模型定义（领域数据：能力/尺寸/分区/像素表/像素区间）。
+/// registry.rs 声明数据，typegen 生成前端内置模型表（builtinRegistry.ts）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export, rename = "BuiltinModel", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub struct BuiltinModelDto {
+    pub id: String,
+    pub name: String,
+    pub provider_id: String,
+    pub studio: Studio,
+    pub capabilities: Vec<String>,
+    pub aspect_ratios: Vec<String>,
+    pub qualities: Vec<String>,
+    #[ts(optional = nullable)]
+    pub default_quality: Option<String>,
+    #[ts(optional = nullable)]
+    pub durations: Option<Vec<String>>,
+    #[ts(optional = nullable)]
+    pub formats: Option<Vec<String>>,
+    #[ts(type = "number", optional = nullable)]
+    pub max_ref: Option<i64>,
+    #[ts(type = "number", optional = nullable)]
+    pub max_batch: Option<i64>,
+    #[ts(type = "number", optional = nullable)]
+    pub max_images: Option<i64>,
+    #[ts(optional = nullable)]
+    pub template_model_id: Option<String>,
+    #[ts(optional = nullable)]
+    pub edit: Option<bool>,
+    pub blurb: String,
+    #[ts(optional = nullable)]
+    pub custom: Option<CustomConfigDto>,
+    #[ts(optional = nullable)]
+    pub sections: Option<Vec<ParamSectionDto>>,
+    /// 全 (quality × ratio) → 像素串（aspectToSize 的权威数据，前端直接查表）。
+    pub size_table: Vec<SizeEntryDto>,
+    /// W/H 自定义尺寸总像素区间（前端校验用）。
+    pub px_bounds: PxBoundsDto,
+    /// W/H 宽高比区间（仅 volcark；其余厂商 null）。
+    #[ts(optional = nullable)]
+    pub px_ratio_bounds: Option<PxBoundsDto>,
+}
+
 // —— Rust 内部类型（不序列化给前端）——
 
 /// 任务阶段。同步厂商（豆包）Submit 完成即 Succeeded；异步厂商走 Submitted→Running→Succeeded。
@@ -310,21 +518,33 @@ mod export_tests {
         SessionRow::export_all().expect("导出 SessionRow 失败");
         ProgressPhase::export_all().expect("导出 ProgressPhase 失败");
         ProgressPayload::export_all().expect("导出 ProgressPayload 失败");
+        LoraEntryDto::export_all().expect("导出 LoraEntry 失败");
+        EditJumpDto::export_all().expect("导出 EditJump 失败");
+        // 内置模型领域 DTO（Studio/ParamSection/SizeEntry/PxBounds/CustomConfig/ParamKind 为依赖，一并导出）。
+        BuiltinModelDto::export_all().expect("导出 BuiltinModel 失败");
+        BuiltinRegistryDto::export_all().expect("导出 BuiltinRegistry 失败");
     }
 
     /// 生成常量文件：progress phase 的 value 来自 Rust 枚举（唯一事实源），
-    /// 类型引用 ts-rs 生成的 ProgressPhase.ts。
+    /// 类型引用 ts-rs 生成的 ProgressPhase.ts；params_json 结构化键表来自 params.rs。
     fn export_constants(out_dir: &std::path::Path) {
         let phases: Vec<String> = ProgressPhase::ALL
             .iter()
             .map(|p| format!("\"{}\"", p.as_str()))
             .collect();
+        let keys: Vec<String> = crate::params::STRUCTURED_PARAM_KEYS
+            .iter()
+            .map(|k| format!("\"{}\"", k))
+            .collect();
         let content = format!(
             "// 本文件由 `npm run typegen`（cargo test export_bindings）生成，请勿手动编辑。\n\
-// 进度事件 phase 常量的唯一事实源是 Rust 侧 ProgressPhase 枚举（src-tauri/src/models.rs）。\n\
+// 进度事件 phase 常量的唯一事实源是 Rust 侧 ProgressPhase 枚举（src-tauri/src/models.rs）；\n\
+// params_json 结构化键表的唯一事实源是 Rust 侧 params.rs（commands.rs 写快照与前端 freeParams 消费同一份）。\n\
 import type {{ ProgressPhase }} from \"./ProgressPhase\";\n\n\
-/** gen-progress 事件阶段（与 Rust ProgressPhase 枚举一一对应） */\nexport const PROGRESS_PHASES: readonly ProgressPhase[] = [{}];\n",
-            phases.join(", ")
+/** gen-progress 事件阶段（与 Rust ProgressPhase 枚举一一对应） */\nexport const PROGRESS_PHASES: readonly ProgressPhase[] = [{}];\n\n\
+/** params_json 中已结构化消费的键（剩余键为魔搭自由参数，原样透传） */\nexport const STRUCTURED_PARAM_KEYS: readonly string[] = [{}];\n",
+            phases.join(", "),
+            keys.join(", ")
         );
         std::fs::write(out_dir.join("constants.ts"), content).expect("写入 constants.ts 失败");
     }

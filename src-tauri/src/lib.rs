@@ -1,6 +1,8 @@
 mod commands;
 mod models;
+mod params;
 mod providers;
+mod registry;
 mod storage;
 
 use reqwest::Client;
@@ -47,6 +49,8 @@ pub fn run() {
             commands::generate,
             commands::list_history,
             commands::list_history_page,
+            commands::parse_history_params,
+            commands::list_builtin_models,
             commands::list_sessions,
             commands::upsert_session,
             commands::delete_session,

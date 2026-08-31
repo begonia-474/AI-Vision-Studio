@@ -6,10 +6,11 @@ use tauri::{AppHandle, Emitter, State};
 use futures_util::StreamExt;
 
 use crate::models::{
-    GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, LayerCompositionDto, LayerMetaDto,
-    ProgressPayload, ProgressPhase, ProviderInfoDto, SessionRow, TaskHandle, TaskPhase,
-    UserModelRow,
+    BuiltinRegistryDto, EditJumpDto, GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord,
+    LayerCompositionDto, LayerMetaDto, ProgressPayload, ProgressPhase, ProviderInfoDto, SessionRow,
+    TaskHandle, TaskPhase, UserModelRow,
 };
+use crate::params;
 use crate::providers::{all_providers, get_provider, sanitize_body, GenerationProvider};
 use crate::storage;
 
@@ -189,23 +190,9 @@ pub async fn generate(
     // 魔搭自由参数快照（steps/guidance/seed/negative_prompt/loras 等）原样并入
     // params_json：详情页/图库按 params_json 消费完整参数，重新编辑时回填弹层。
     // 结构化字段（size/n/aspect_ratio/quality/duration/mode/output_format/optimize_prompt_mode/
-    // background/web_search/layer_decomposition/references）以顶部 json! 为准——用户自建模型
-    // 声明同名 key 时跳过，防止污染快照。注意：与前端 src/studios/sessionStore.ts 的
-    // STRUCTURED_PARAM_KEYS 保持同步。
-    const STRUCTURED_PARAM_KEYS: &[&str] = &[
-        "size",
-        "n",
-        "aspect_ratio",
-        "quality",
-        "duration",
-        "mode",
-        "output_format",
-        "optimize_prompt_mode",
-        "background",
-        "web_search",
-        "layer_decomposition",
-        "references",
-    ];
+    // background/web_search/layer_decomposition/references/loras）以顶部 json! 为准——用户自建
+    // 模型声明同名 key 时跳过，防止污染快照。键表唯一事实源在 params::STRUCTURED_PARAM_KEYS
+    // （typegen 生成前端常量，与 sessionStore.freeParams 消费同一份）。
     if let Some(map) = req
         .extra
         .as_ref()
@@ -213,10 +200,23 @@ pub async fn generate(
         .and_then(|p| p.as_object())
     {
         for (k, v) in map {
-            if STRUCTURED_PARAM_KEYS.contains(&k.as_str()) {
+            if params::STRUCTURED_PARAM_KEYS.contains(&k.as_str()) {
                 continue;
             }
             params_obj[k] = v.clone();
+        }
+    }
+    // LoRA 归一化（唯一实现下沉 Rust）：单条 dict 透传、多条等比归一和=1。
+    // 归一化结果既进 params_json 快照，也并入提交请求的 extra.params（魔搭 merge_params 消费）。
+    if let Some(normalized) = req.loras.as_deref().and_then(params::normalize_loras) {
+        params_obj["loras"] = normalized.clone();
+        if let Some(extra) = req2.extra.as_mut() {
+            if let Some(p) = extra
+                .get_mut("params")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                p.insert("loras".to_string(), normalized);
+            }
         }
     }
     // 审计#14：提交即落库是同步 SQLite IO，与其余命令同款纪律走阻塞线程池，
@@ -713,6 +713,30 @@ pub async fn list_history_page(limit: i64, offset: i64) -> Result<Vec<HistoryTas
     tokio::task::spawn_blocking(move || storage::query_page(limit, offset))
         .await
         .map_err(|e| format!("查询历史异常: {}", e))?
+}
+
+/// params_json → 重新编辑/重新生成参数还原（纯函数，无 IO）。
+/// 结构化字段以 params_json 为准（重新编辑/重新生成的回填权威），调用方按 studio 传入。
+#[tauri::command]
+pub fn parse_history_params(
+    studio: String,
+    model: String,
+    prompt: String,
+    params_json: Option<String>,
+) -> Result<EditJumpDto, String> {
+    Ok(params::parse_history_params(
+        &studio,
+        &model,
+        &prompt,
+        params_json.as_deref(),
+    ))
+}
+
+/// 内置模型注册表整体快照（领域数据唯一事实源在 Rust registry.rs）。
+/// 前端启动时调用一次缓存，渲染期同步消费缓存数据。
+#[tauri::command]
+pub fn list_builtin_models() -> BuiltinRegistryDto {
+    crate::registry::builtin_registry()
 }
 
 #[tauri::command]
