@@ -30,8 +30,9 @@ pub fn get_app_dir() -> String {
     storage::app_dir().to_string_lossy().to_string()
 }
 
-/// 「在文件夹中显示」兜底（审计#21）：插件 revealItemInDir 在 Linux 无 FileManager1/
-/// portal 时必然失败，降级到本命令——xdg-open 打开父目录（标准 Linux 兜底，不特判发行版）。
+/// 「在文件夹中显示」唯一出口（审计#21）：Windows=explorer.exe /select、macOS=open -R、
+/// Linux=FileManager1 D-Bus → xdg-open 父目录。绕开插件 Windows 偶发只开文件夹不选中、
+/// Linux 无兜底的缺陷。前端不再调插件的 revealItemInDir。
 #[tauri::command]
 pub fn reveal_in_folder(path: String) -> Result<(), String> {
     crate::reveal::reveal_in_folder(&path)

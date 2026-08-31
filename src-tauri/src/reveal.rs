@@ -1,18 +1,24 @@
-//! 「在文件夹中显示」跨平台兜底实现（审计#21）。
+//! 「在文件夹中显示」跨平台实现（审计#21）。
 //!
-//! tauri-plugin-opener 的 `revealItemInDir` 在 Windows/macOS 可靠；但 Linux 上它走
-//! FileManager1 D-Bus（选中文件），2.5.4 的 portal 兜底 `service`/`interface` 写反，
-//! 且没有 Electron `showItemInFolder` 的 `xdg-open` 兜底。本模块补齐标准降级链
-//! （freedesktop 惯例，不针对特定发行版/容器特判）：
-//!   - Linux：`xdg-open` 打开父目录（默认文件管理器，不选中文件——Electron 同款兜底）；
-//!   - Windows：`explorer.exe /select,`；macOS：`open -R`（与插件等价，双保险）。
+//! 统一走自定义命令，绕开 tauri-plugin-opener 的两个坑：
+//!  - Windows：`SHOpenFolderAndSelectItems` 偶发 `ERROR_FILE_NOT_FOUND`（文件存在也触发，
+//!    插件源码注释引用 electron 说明该问题），插件兜底为 `ShellExecuteExW` 只打开父目录、
+//!    不选中文件——用户可见「只定位到文件夹」；
+//!  - Linux：插件依赖 FileManager1 D-Bus，其 portal 兜底 `service`/`interface` 写反
+//!    （2.5.4），无文件管理器的环境必然失败，且没有 xdg-open 兜底。
+//!
+//! 各平台策略（freedesktop/Electron 惯例，不针对特定发行版/容器特判）：
+//!  - Windows：`explorer.exe /select,<path>`（原生资源管理器选中文件，最稳）；
+//!  - macOS：`open -R <path>`（Finder 中选中）；
+//!  - Linux：复用插件的 FileManager1 D-Bus（能选中文件），失败降级 `xdg-open <父目录>`
+//!    （默认文件管理器，不选中——Electron showItemInFolder 同款兜底）。
 //!
 //! 一律返回中文可读消息，前端统一 toast，不静默。
 
 use std::path::Path;
 use std::process::Command;
 
-/// 在系统文件管理器中定位文件。调用方应先尝试插件，失败后再进这里。
+/// 在系统文件管理器中定位并选中文件。
 pub fn reveal_in_folder(path: &str) -> Result<(), String> {
     let p = Path::new(path);
     if !p.exists() {
@@ -20,7 +26,10 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        // 标准 Linux 兜底：xdg-open 父目录交给默认文件管理器（inode/directory）。
+        // 优先 FileManager1 D-Bus（选中文件）；失败降级 xdg-open 父目录。
+        if tauri_plugin_opener::reveal_items_in_dir([path]).is_ok() {
+            return Ok(());
+        }
         let parent = parent_dir(p);
         if try_spawn("xdg-open", &[parent])? {
             return Ok(());
@@ -29,7 +38,7 @@ pub fn reveal_in_folder(path: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        // explorer.exe /select,"path"：选中文件（等价 SHOpenFolderAndSelectItems，更稳定）。
+        // explorer.exe /select,"path"：原生选中文件（等价 SHOpenFolderAndSelectItems，更稳）。
         if try_spawn("explorer", &[format!("/select,{path}")])? {
             return Ok(());
         }
