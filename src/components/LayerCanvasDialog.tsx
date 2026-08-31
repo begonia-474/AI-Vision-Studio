@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { revealInFolder } from "../lib/reveal";
 import { exportLayerComposition, getLayerComposition, toAssetUrl } from "../api";
 import { cn } from "../lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
@@ -226,7 +226,7 @@ export function LayerCanvasDialog({ historyId, open, onOpenChange }: LayerCanvas
                   <button
                     type="button"
                     className="shrink-0 text-xs text-primary hover:underline"
-                    onClick={() => openPath(exportPath, "reveal").catch(() => {})}
+                    onClick={() => revealInFolder(exportPath)}
                   >
                     {t("prompt.layerExportReveal")}
                   </button>

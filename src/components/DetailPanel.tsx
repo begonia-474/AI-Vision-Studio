@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
 import { getLayerMeta, toAssetUrl } from "../api";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { revealInFolder } from "../lib/reveal";
 import { IconChevron, IconDownload, IconMore, IconStar, IconTrash, IconVideo } from "../lib/icons";
 import { cn } from "../lib/utils";
 import type { LayerMeta, LoraEntry } from "../types";
@@ -338,11 +338,7 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
   const download = async () => {
     const p = source.paths[source.pathIndex ?? 0] ?? source.thumbnailPath;
     if (!p) return;
-    try {
-      await openPath(p, "reveal");
-    } catch {
-      /* 浏览器环境忽略 */
-    }
+    revealInFolder(p);
   };
 
   const navBtn = (side: "left" | "right", disabled: boolean, onClick: () => void) => (

@@ -3,6 +3,7 @@ mod models;
 mod params;
 mod providers;
 mod registry;
+mod reveal;
 mod storage;
 
 use reqwest::Client;
@@ -63,6 +64,7 @@ pub fn run() {
             commands::list_user_models,
             commands::save_user_model,
             commands::delete_user_model,
+            commands::reveal_in_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

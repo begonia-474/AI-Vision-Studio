@@ -15,13 +15,15 @@
 // 本文件所有 hooks 必须保持在空状态早退之前；重渲染风暴已由组级 memo 消除，
 // 窗口化的 DOM 数量收益不抵滚动交互回归风险，故回退为全量渲染。
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { IconCopy, IconDownload, IconImage, IconKey, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
 import { cn, copyText } from "../lib/utils";
+import { revealInFolder } from "../lib/reveal";
 import { ImageGeneration, ImageGenerationLabel } from "./ImageGeneration";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Button } from "./ui/button";
 import type { ResultItem, ResultStatus } from "../studios/sessionStore";
 
 interface TaskTimelineProps {
@@ -75,7 +77,7 @@ interface TaskGroupCardProps {
   items: ResultItem[];
   onImageToVideo?: (src: string, prompt: string) => void;
   onImageToImage?: (src: string, prompt: string) => void;
-  onDeleteTask: (taskId: string) => void;
+  onDeleteRequest: (taskId: string) => void;
   onRegenerate: (taskId: string) => void;
   onOpenDetail?: (item: ResultItem) => void;
   onReEdit?: (item: ResultItem) => void;
@@ -156,7 +158,7 @@ const TaskGroupCard = memo(function TaskGroupCard({
   items,
   onImageToVideo,
   onImageToImage,
-  onDeleteTask,
+  onDeleteRequest,
   onRegenerate,
   onOpenDetail,
   onReEdit,
@@ -268,6 +270,14 @@ const TaskGroupCard = memo(function TaskGroupCard({
                 {copied ? <span className="text-[11px]">{t("gallery.copied")}</span> : <IconCopy size={12} />}
                 <span>{copied ? t("gallery.copied") : t("result.copyError")}</span>
               </button>
+              <button
+                className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-text-3 transition-colors duration-100 hover:bg-red-500/15 hover:text-red-600"
+                title={t("result.deleteTask")}
+                onClick={() => onDeleteRequest(taskId)}
+              >
+                <IconTrash size={12} />
+                <span>{t("result.deleteTask")}</span>
+              </button>
             </div>
           </div>
         )}
@@ -377,7 +387,7 @@ const TaskGroupCard = memo(function TaskGroupCard({
                         className={cn("min-w-[28px]", CARD_HOVER_BTN)}
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (it.path) void openPath(it.path, "reveal").catch(() => {});
+                          if (it.path) void revealInFolder(it.path);
                         }}
                       >
                         <IconDownload size={14} />
@@ -395,7 +405,7 @@ const TaskGroupCard = memo(function TaskGroupCard({
                 onClick={() => {
                   const first = items.find((x) => x.path);
                   if (first?.path) {
-                    void openPath(first.path, "reveal").catch(() => {});
+                    void revealInFolder(first.path);
                   }
                 }}
               >
@@ -403,7 +413,7 @@ const TaskGroupCard = memo(function TaskGroupCard({
               </button>
               <button
                 className="flex w-fit cursor-pointer items-center gap-1 rounded-lg p-1.5 transition-colors duration-100 hover:bg-red-500/15 hover:text-red-600"
-                onClick={() => onDeleteTask(taskId)}
+                onClick={() => onDeleteRequest(taskId)}
               >
                 <IconTrash size={14} /> {t("result.deleteTask")}
               </button>
@@ -434,6 +444,12 @@ export const TaskTimeline = memo(function TaskTimeline({
   providerKeyReady,
 }: TaskTimelineProps) {
   const { t } = useTranslation();
+
+  // 删除确认：done/error 任务卡先弹确认，确认后才调 onDeleteTask（与图库一致，
+  // 删除是永久性的，本地文件一并删除——禁止原生 confirm，用 Dialog）。
+  // hooks 必须保持在空状态早退之前（审计#12 约束）。
+  const [confirmTaskId, setConfirmTaskId] = useState<string | null>(null);
+  const requestDelete = useCallback((taskId: string) => setConfirmTaskId(taskId), []);
 
   // 按 taskId 分组：一次提交（批量 n 图 / 单图）合并为一条时间线消息。
   // 审计#12：未变化任务的 items 数组复用上次引用——sessionStore 只对受影响
@@ -615,28 +631,56 @@ export const TaskTimeline = memo(function TaskTimeline({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1300px] flex-col gap-[30px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
-      {groups.map((g) => (
-        <TaskGroupCard
-          key={g.taskId}
-          studio={studio}
-          taskId={g.taskId}
-          status={g.status}
-          at={g.at}
-          prompt={g.prompt}
-          model={g.model}
-          ar={g.ar}
-          size={g.size}
-          phase={g.phase}
-          items={g.items}
-          onImageToVideo={onImageToVideo}
-          onImageToImage={onImageToImage}
-          onDeleteTask={onDeleteTask}
-          onRegenerate={onRegenerate}
-          onOpenDetail={onOpenDetail}
-          onReEdit={onReEdit}
-        />
-      ))}
-    </div>
+    <>
+      <div className="mx-auto flex w-full max-w-[1300px] flex-col gap-[30px] px-1 pb-6 pt-4 animate-[fadeInUp_.4s]">
+        {groups.map((g) => (
+          <TaskGroupCard
+            key={g.taskId}
+            studio={studio}
+            taskId={g.taskId}
+            status={g.status}
+            at={g.at}
+            prompt={g.prompt}
+            model={g.model}
+            ar={g.ar}
+            size={g.size}
+            phase={g.phase}
+            items={g.items}
+            onImageToVideo={onImageToVideo}
+            onImageToImage={onImageToImage}
+            onDeleteRequest={requestDelete}
+            onRegenerate={onRegenerate}
+            onOpenDetail={onOpenDetail}
+            onReEdit={onReEdit}
+          />
+        ))}
+      </div>
+
+      {/* 删除确认 Dialog（AGENTS.md：占位提示一律用 Dialog，禁原生 confirm） */}
+      {confirmTaskId && (
+        <Dialog open onOpenChange={(o) => !o && setConfirmTaskId(null)}>
+          <DialogContent className="max-w-[340px] text-center">
+            <DialogHeader>
+              <DialogTitle className="text-sm">{t("result.deleteTaskConfirm")}</DialogTitle>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:justify-center">
+              <Button variant="outline" onClick={() => setConfirmTaskId(null)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  const id = confirmTaskId;
+                  setConfirmTaskId(null);
+                  onDeleteTask(id);
+                }}
+              >
+                {t("common.delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   );
 });

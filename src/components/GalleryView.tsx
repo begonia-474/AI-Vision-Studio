@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { deleteHistories, ensureThumbnails, listHistoryPage, onProgress, setStar, toAssetUrl } from "../api";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { revealInFolder } from "../lib/reveal";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
 import { freeParams, editJumpToStudio, parseLoras } from "../studios/sessionStore";
@@ -489,17 +489,11 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
   };
 
   // 下载 = 在文件管理器中定位第一个产物（审计#12：消费 normCache，不再重复解析）
-  const downloadSelected = async () => {
+  const downloadSelected = () => {
     const targets = items.filter((x) => selected.has(x.id));
     for (const it of targets) {
       const p = normCache.get(it.id)?.paths[0] ?? it.thumbnail_path;
-      if (p) {
-        try {
-          await openPath(p, "reveal");
-        } catch {
-          /* 浏览器环境忽略 */
-        }
-      }
+      if (p) void revealInFolder(p);
     }
   };
 

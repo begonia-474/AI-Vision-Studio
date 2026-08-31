@@ -30,6 +30,13 @@ pub fn get_app_dir() -> String {
     storage::app_dir().to_string_lossy().to_string()
 }
 
+/// 「在文件夹中显示」兜底（审计#21）：插件 revealItemInDir 在 Linux 无 FileManager1/
+/// portal 时必然失败，降级到本命令——xdg-open 打开父目录（标准 Linux 兜底，不特判发行版）。
+#[tauri::command]
+pub fn reveal_in_folder(path: String) -> Result<(), String> {
+    crate::reveal::reveal_in_folder(&path)
+}
+
 #[tauri::command]
 pub async fn save_api_key(provider_id: String, api_key: String) -> Result<(), String> {
     // keys.json 文件 IO，丢阻塞线程池避免占主线程/tokio worker。

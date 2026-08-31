@@ -15,6 +15,7 @@ import { VideoStudio } from "./studios/VideoStudio";
 import { GalleryView } from "./components/GalleryView";
 import { ByokModal } from "./components/ByokModal";
 import { SettingsModal } from "./components/SettingsModal";
+import { ToastHost } from "./components/ToastHost";
 import { useSessionStore } from "./studios/sessionStore";
 import { defaultModelForStudio, hydrateRegistry, refreshUserModels, useRegistryReady } from "./models/registry";
 import type { StudioJump } from "./types";
@@ -146,6 +147,7 @@ export default function App() {
         defaultImage={defaultModelForStudio("image").name}
         defaultVideo={defaultModelForStudio("video").name}
       />
+      <ToastHost />
     </div>
   );
 }
