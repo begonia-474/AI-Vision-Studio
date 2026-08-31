@@ -11,8 +11,9 @@ import { deleteHistories, ensureThumbnails, listHistoryPage, onProgress, setStar
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { HistoryTask, StudioJump } from "../types";
 import { providerDisplayName } from "../models/registry";
-import { freeParams, jumpFromParams, parseLoras } from "../studios/sessionStore";
+import { freeParams, editJumpToStudio, parseLoras } from "../studios/sessionStore";
 import type { SessionApi } from "../studios/sessionStore";
+import { parseHistoryParams } from "../api";
 import { IconChevron, IconDownload, IconLibrary, IconPlay, IconSearch, IconStar, IconTrash, IconUpload } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -73,21 +74,35 @@ interface NormEntry {
 }
 
 /** 「重新编辑」：从数据库 params_json 还原参数快照（model 字段即 ModelDef.id）。
- *  与时间线入口共用 jumpFromParams，保证图库/时间线回填同源。审计#12：改为消费
- *  NormEntry（解析结果），避免再次 JSON.parse。 */
-const buildReEditFrom = (norm: NormEntry): StudioJump & { studio: "image" | "video" } => {
+ *  与时间线入口共用 parse_history_params 命令，保证图库/时间线回填同源（解析权威在 Rust
+ *  params.rs）。审计#12：改为消费 NormEntry（解析结果），避免再次 JSON.parse。 */
+const buildReEditFrom = async (norm: NormEntry): Promise<StudioJump & { studio: "image" | "video" }> => {
   const it = norm.item;
-  const params = norm.params ?? {};
+  const isImg = isImage(it);
   const first = norm.paths[0];
   // 参考图优先取数据库 params_json.references（i2i/i2v 都保留原参考图，与时间线同源）；
   // 旧数据无该字段时按能力回退：i2i 用第一张产物当参考图，i2v 无参考图（按 t2v 生成）。
-  const rawRefs = Array.isArray(params.references) ? params.references : undefined;
-  const refs = rawRefs
-    ? rawRefs.filter((r): r is string => typeof r === "string" && r.length > 0)
-    : it.capability === "i2i" && first
-      ? [toAssetUrl(first)]
-      : undefined;
-  return jumpFromParams({ prompt: it.prompt, model: it.model }, params, isImage(it), refs);
+  if (it.params_json) {
+    try {
+      const e = await parseHistoryParams({
+        studio: isImg ? "image" : "video",
+        model: it.model,
+        prompt: it.prompt,
+        paramsJson: it.params_json,
+      });
+      const refs =
+        e.refs && e.refs.length > 0
+          ? e.refs
+          : it.capability === "i2i" && first
+            ? [toAssetUrl(first)]
+            : undefined;
+      return { studio: isImg ? "image" : "video", ...editJumpToStudio(e), refs };
+    } catch {
+      // paramsJson 损坏回退散装快照
+    }
+  }
+  const refs = it.capability === "i2i" && first ? [toAssetUrl(first)] : undefined;
+  return { studio: isImg ? "image" : "video", prompt: it.prompt, modelId: it.model, refs };
 };
 
 // 缩略图命名约定：thumbs 目录 `{stem}.thumb.webp`（后端 make_thumbnail 输出，镜像产物日期子路径
@@ -598,7 +613,7 @@ export function GalleryView({ imageSession, videoSession, onImageToVideo, onImag
         },
         onReEdit: () => {
           closeDetail();
-          onReEdit?.(buildReEditFrom(norm));
+          void buildReEditFrom(norm).then((j) => onReEdit?.(j));
         },
       };
     });

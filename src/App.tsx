@@ -16,7 +16,7 @@ import { GalleryView } from "./components/GalleryView";
 import { ByokModal } from "./components/ByokModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { useSessionStore } from "./studios/sessionStore";
-import { defaultModelForStudio, refreshUserModels } from "./models/registry";
+import { defaultModelForStudio, hydrateRegistry, refreshUserModels, useRegistryReady } from "./models/registry";
 import type { StudioJump } from "./types";
 
 export type View = "image" | "video" | "gallery";
@@ -50,10 +50,19 @@ export default function App() {
   // useCallback：引用稳定，配合 Sidebar memo（审计#12），避免每次渲染重建 props。
   const activateStudio = useCallback(() => setActiveView(effectiveStudio), [effectiveStudio]);
 
-  // 启动加载用户自添加模型 → 注册表 emitter 通知两个 studio 刷新列表
+  // 启动加载：先拉内置模型注册表（领域数据唯一事实源在 Rust），再刷新用户自添加模型。
+  // 注册表就绪前不渲染工作室（模型列表/默认模型依赖它），避免首帧拿到空列表崩溃。
+  const registryReady = useRegistryReady();
   useEffect(() => {
-    void refreshUserModels();
-  }, []);
+    if (registryReady) {
+      void refreshUserModels();
+    } else {
+      void (async () => {
+        await hydrateRegistry().catch(() => {});
+        await refreshUserModels().catch(() => {});
+      })();
+    }
+  }, [registryReady]);
 
   // 跳转信号：App 持有最近一次 jump 常驻（无需清除——studio 端用 prevJump
   // 记忆去重，同一信号不会重复应用），触发时切换视图。
@@ -79,6 +88,15 @@ export default function App() {
       setActiveView("image");
     }
   }, []);
+
+  // 注册表门控：所有 hooks 已无条件执行完毕，此处才可提前返回加载态。
+  if (!registryReady) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background text-sm text-text-2">
+        加载模型注册表…
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">

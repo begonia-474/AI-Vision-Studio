@@ -2,6 +2,8 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  BuiltinRegistry,
+  EditJump,
   GenRequest,
   GenerationResult,
   HistoryTask,
@@ -46,6 +48,23 @@ export const listHistory = () => invoke<HistoryTask[]>("list_history");
 // 分页历史查询（图库渐进加载，审计#12：单次 payload 有界）
 export const listHistoryPage = (limit: number, offset: number) =>
   invoke<HistoryTask[]>("list_history_page", { limit, offset });
+
+// 内置模型注册表整体快照（启动时拉取一次，registry 缓存，渲染期同步消费）。
+export const listBuiltinModels = () => invoke<BuiltinRegistry>("list_builtin_models");
+
+// params_json → 重新编辑/重新生成参数还原（解析权威在 Rust params.rs）。
+export const parseHistoryParams = (req: {
+  studio: "image" | "video";
+  model: string;
+  prompt: string;
+  paramsJson?: string;
+}) =>
+  invoke<EditJump>("parse_history_params", {
+    studio: req.studio,
+    model: req.model,
+    prompt: req.prompt,
+    paramsJson: req.paramsJson,
+  });
 
 // ============ 会话（SQLite sessions 表，权威介质） ============
 export const listSessions = () => invoke<SessionRow[]>("list_sessions");

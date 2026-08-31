@@ -6,11 +6,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { PROVIDER_IDS, aspectToSize, batchCap, defaultModelForStudio, hasSection, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
-import { deleteHistories, generate, toAssetUrl } from "../api";
-import { freeParams, jumpParams, type ResultItem, type SessionApi } from "./sessionStore";
+import { PROVIDER_IDS, batchCap, defaultModelForStudio, hasSection, modelSize, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
+import { deleteHistories, generate, parseHistoryParams, toAssetUrl } from "../api";
+import { type ResultItem, type SessionApi } from "./sessionStore";
 import { uid } from "../lib/utils";
-import type { LoraEntry, StudioJump } from "../types";
+import type { EditJump, LoraEntry, StudioJump } from "../types";
 
 export interface StudioApi {
   studio: "image" | "video";
@@ -107,7 +107,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         return;
       }
       if (m.providerId === PROVIDER_IDS.volcark || m.providerId === PROVIDER_IDS.wanxiang || m.providerId === PROVIDER_IDS.modelscope) {
-        const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q, m.templateModelId));
+        const { w, h } = parseSizePx(modelSize(m, v, q));
         setSizeState({ w, h });
         setSizeLocked(false);
         return;
@@ -148,7 +148,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       setQuality(v);
       if (!supportsCustomSize(target)) return;
       if (target.providerId === PROVIDER_IDS.volcark || target.providerId === PROVIDER_IDS.wanxiang || target.providerId === PROVIDER_IDS.modelscope) {
-        const { w, h } = parseSizePx(aspectToSize(target.providerId, target.id, targetAr, v, target.templateModelId));
+        const { w, h } = parseSizePx(modelSize(target, targetAr, v));
         setSizeState({ w, h });
         return;
       }
@@ -400,7 +400,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       const useCustomSize = size !== null && supportsCustomSize(m);
       const sizeField = useCustomSize
         ? `${size.w}x${size.h}`
-        : aspectToSize(m.providerId, m.id, ar0, q, m.templateModelId);
+        : modelSize(m, ar0, q);
       const extra = isVideo ? `${d}s · ${q}` : q;
       // volcark 新参数只随声明分区的模型下发；background 仅图生图有意义。
       const optMode = !isVideo && hasSection(m, "optimize") ? optimizePrompt : undefined;
@@ -410,6 +410,9 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       // 用户自添加模型：透传按模型配置的自由参数（协议原生字段名，如
       // steps/guidance/seed/negative_prompt（魔搭）或 num_inference_steps/guidance_scale（HF））。
       // popover 里调整过的参数（paramValues）覆盖配置默认值；数值参数转 number，空值跳过。
+      // LoRA 归一化已下沉 Rust（params::normalize_loras）：此处不拼装归一化结果，
+      // 原始行经 GenRequest.loras 提交，后端归一化后写入 params_json 快照并并入请求。
+      const lorasClean = loras0.filter((l) => l.repo.trim() !== "");
       let customExtra: { params: Record<string, unknown> } | undefined;
       if (m.custom) {
         const merged: Record<string, unknown> = { ...m.custom.params };
@@ -425,43 +428,14 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
             merged[s.key] = s.kind === "number" ? Number(raw) : raw;
           }
         }
-        // LoRA：魔搭 loras 字段。实测网关规则：
-        // - 单 LoRA：dict 形式 {repo: weight} 权重透传（任意数值生效）；字符串形式不带权重，
-        //   调权重无效（网关按默认权重处理）→ 单 LoRA 也发 dict 保留用户权重。
-        // - 多 LoRA：权重和必须恰为 1.0（大于/小于整体被忽略），只认 2 位小数 →
-        //   提交时等比归一（w/sum）四舍五入到 2 位，最后一项补余数保证和恰为 1.00。
-        // 空 repo 行忽略。Rust merge_params 原样并入请求顶层。
-        const lorasClean = loras0.filter((l) => l.repo.trim() !== "");
-        if (lorasClean.length === 1) {
-          const w = Number(lorasClean[0].weight);
-          const wv = Number.isFinite(w) && w > 0 ? w : 1;
-          merged["loras"] = { [lorasClean[0].repo.trim()]: wv };
-        } else if (lorasClean.length > 1) {
-          const raw = lorasClean.map((l) => Math.max(0, Number(l.weight) || 0));
-          const sum = raw.reduce((a, b) => a + b, 0);
-          let normed: number[];
-          if (sum <= 0) {
-            // 全 0/空权重：均分 1/n（末项补余数）。
-            const base = Math.round((1 / raw.length) * 100) / 100;
-            normed = raw.map(() => base);
-            normed[raw.length - 1] = Math.round((1 - base * (raw.length - 1)) * 100) / 100;
-          } else {
-            normed = raw.map((w) => Math.round((w / sum) * 100) / 100);
-            normed[raw.length - 1] =
-              Math.round((1 - normed.slice(0, -1).reduce((a, b) => a + b, 0)) * 100) / 100;
-          }
-          merged["loras"] = Object.fromEntries(lorasClean.map((l, i) => [l.repo.trim(), normed[i]]));
-        }
         customExtra = { params: merged };
       }
 
       const ids = Array.from({ length: n }, () => uid());
       const submittedAt = Date.now();
-      // 魔搭自由参数快照（loras 由 loras 字段承接，此处排除避免双份）
+      // 魔搭自由参数快照（loras 由 GenRequest.loras 承接，merged 内已不含 loras）
       const paramSnapshot =
-        customExtra && Object.keys(customExtra.params).some((k) => k !== "loras")
-          ? Object.fromEntries(Object.entries(customExtra.params).filter(([k]) => k !== "loras"))
-          : undefined;
+        customExtra && Object.keys(customExtra.params).length > 0 ? customExtra.params : undefined;
       // 任务所属会话在提交时刻捕获：完成/失败回写必须落在它上面——
       // 若中途切换会话，patchActive 会把结果写进新激活会话，原会话占位卡永远停留在 loading。
       const sessionId = session.activeId;
@@ -512,6 +486,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           web_search: webSearchOn,
           layer_decomposition: layerMode || undefined,
           references: refs0,
+          loras: lorasClean.length > 0 ? lorasClean : undefined,
           extra: customExtra,
         });
         const done: ResultItem[] = res.local_paths.map((lp, i) => ({
@@ -607,43 +582,45 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
   }, [prompt, studio, batch, mode, refs, loras, model, ar, quality, format, optimizePrompt, background, webSearch, layerDecomposition, duration, results, session.activeId, session.renameSession, submitTask]);
 
   // 重新生成：按原任务的参数快照再提交一次（模型/提示词/比例/画质/时长/参考图/批量数）。
-  // mode 与魔搭自由参数优先从数据库 params_json 还原（与「重新编辑」同源），
-  // 避免组图任务退化为单图模式带超量 n 并行请求、自由参数回退弹层默认值。
+  // params_json 是「重新生成」的回填权威（AGENTS 不变量），还原逻辑在 Rust params.rs
+  // （parse_history_params 命令）：mode 与魔搭自由参数从快照还原，避免组图任务退化为
+  // 单图模式带超量 n 并行请求、自由参数回退弹层默认值。命令异常回退散装快照 + 当前值。
   const regenerate = useCallback(
-    (taskId: string) => {
+    async (taskId: string) => {
       const task = results.find((it) => it.taskId === taskId);
       if (!task || task.status !== "done") return;
       const m = allModels.find((x) => x.id === task.modelId) ?? model;
       const n = results.filter((it) => it.taskId === taskId).length;
-      let regenMode: "single" | "group" = mode;
-      let paramsOverride: Record<string, string | number> | undefined;
+      let j: EditJump | undefined;
       if (task.paramsJson) {
         try {
-          const p = JSON.parse(task.paramsJson) as Record<string, unknown>;
-          if (p.mode === "single" || p.mode === "group") regenMode = p.mode;
-          const fp = jumpParams(freeParams(p));
-          if (fp) paramsOverride = fp;
+          j = await parseHistoryParams({
+            studio,
+            model: task.modelId ?? task.model,
+            prompt: task.prompt,
+            paramsJson: task.paramsJson,
+          });
         } catch {
-          // paramsJson 损坏回退散装快照
+          // paramsJson 损坏/命令异常回退散装快照
         }
       }
       void submitTask({
         taskId: uid(),
         prompt: task.prompt,
         model: m,
-        ar: task.ar,
-        quality: task.quality ?? quality,
-        format: task.format ?? format,
-        optimizePrompt: task.optimizePromptMode ?? optimizePrompt,
-        background: task.background ?? background,
-        webSearch: task.webSearch ?? webSearch,
-        layerDecomposition: task.layerDecomposition ?? layerDecomposition,
-        duration: task.duration ?? duration,
+        ar: j?.ar ?? task.ar,
+        quality: j?.quality ?? task.quality ?? quality,
+        format: j?.format ?? task.format ?? format,
+        optimizePrompt: j?.optimizePromptMode ?? task.optimizePromptMode ?? optimizePrompt,
+        background: j?.background ?? task.background ?? background,
+        webSearch: j?.webSearch ?? task.webSearch ?? webSearch,
+        layerDecomposition: j?.layerDecomposition ?? task.layerDecomposition ?? layerDecomposition,
+        duration: j?.duration ?? task.duration ?? duration,
         n,
-        mode: regenMode,
-        refs: task.refs ?? [],
-        loras: task.loras ?? [],
-        paramsOverride,
+        mode: j?.mode === "single" || j?.mode === "group" ? j.mode : mode,
+        refs: j?.refs ?? task.refs ?? [],
+        loras: j?.loras ?? task.loras ?? [],
+        paramsOverride: j?.params,
         isVideo: studio === "video",
       });
     },

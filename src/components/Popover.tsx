@@ -9,12 +9,10 @@ import { useTranslation } from "react-i18next";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { cn } from "../lib/utils";
 import {
-  aspectToSize,
   batchCap,
   defaultSections,
+  modelSize,
   parseSizePx,
-  pixelBounds,
-  pixelRatioBounds,
   type ModelDef,
   type ParamSectionDef,
 } from "../models/registry";
@@ -226,10 +224,11 @@ function RatioSection({
 // —— W/H 自定义尺寸（基准随画质档位，锁定比例联动；合规性按官方总像素区间） ——
 function SizeRow({ model, api }: { model: ModelDef; api: StudioApi }) {
   const { t } = useTranslation();
-  const base = api.size ?? parseSizePx(aspectToSize(model.providerId, model.id, api.ar, api.quality, model.templateModelId));
+  const base = api.size ?? parseSizePx(modelSize(model, api.ar, api.quality));
   const locked = api.sizeLocked;
-  const bounds = pixelBounds(model);
-  const ratioBounds = pixelRatioBounds(model);
+  // 像素区间/宽高比区间由 Rust registry.rs 预计算进模型 DTO（pxBounds/pxRatioBounds）。
+  const bounds = model.pxBounds;
+  const ratioBounds = model.pxRatioBounds;
 
   const clamp = (v: number) =>
     Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.round(v / SIZE_STEP) * SIZE_STEP));

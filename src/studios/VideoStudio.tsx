@@ -13,7 +13,8 @@ import { TaskTimeline } from "../components/TaskTimeline";
 import { DetailPanel, type DetailSource } from "../components/DetailPanel";
 import { useStudio } from "./useStudio";
 import { useProviderKeyReady } from "../lib/useProviderKeyReady";
-import { jumpFromParams, type ResultItem, type SessionApi } from "./sessionStore";
+import { editJumpToStudio, type ResultItem, type SessionApi } from "./sessionStore";
+import { parseHistoryParams } from "../api";
 import type { StudioJump } from "../types";
 
 interface VideoStudioProps {
@@ -109,18 +110,19 @@ export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit, 
               setDetailIdx(null);
               api.removeTask(r.taskId);
             },
-            onReEdit: () => {
+            onReEdit: async () => {
               setDetailIdx(null);
               const n = doneCounts.get(r.taskId) ?? 1;
               let j: (StudioJump & { studio: "image" | "video" }) | undefined;
               if (r.paramsJson) {
                 try {
-                  j = jumpFromParams(
-                    { prompt: r.prompt, model: r.modelId ?? r.model },
-                    JSON.parse(r.paramsJson) as Record<string, unknown>,
-                    false,
-                    r.refs,
-                  );
+                  const e = await parseHistoryParams({
+                    studio: "video",
+                    model: r.modelId ?? r.model,
+                    prompt: r.prompt,
+                    paramsJson: r.paramsJson,
+                  });
+                  j = { studio: "video", ...editJumpToStudio(e) };
                 } catch {
                   // paramsJson 损坏回退散装快照
                 }
@@ -161,33 +163,36 @@ export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit, 
   onReEditRef.current = onReEdit;
   const reEdit = useCallback((item: ResultItem) => {
     const n = doneCountsRef.current.get(item.taskId) ?? 1;
-    let j: (StudioJump & { studio: "image" | "video" }) | undefined;
-    if (item.paramsJson) {
-      try {
-        j = jumpFromParams(
-          { prompt: item.prompt, model: item.modelId ?? item.model },
-          JSON.parse(item.paramsJson) as Record<string, unknown>,
-          false,
-          item.refs,
-        );
-      } catch {
-        // paramsJson 损坏回退散装快照
+    void (async () => {
+      let j: (StudioJump & { studio: "image" | "video" }) | undefined;
+      if (item.paramsJson) {
+        try {
+          const e = await parseHistoryParams({
+            studio: "video",
+            model: item.modelId ?? item.model,
+            prompt: item.prompt,
+            paramsJson: item.paramsJson,
+          });
+          j = { studio: "video", ...editJumpToStudio(e) };
+        } catch {
+          // paramsJson 损坏回退散装快照
+        }
       }
-    }
-    onReEditRef.current?.(
-      j ??
-        {
-          studio: "video",
-          prompt: item.prompt,
-          modelId: item.modelId,
-          ar: item.ar,
-          quality: item.quality,
-          duration: item.duration,
-          n,
-          refs: item.refs,
-          loras: item.loras,
-        },
-    );
+      onReEditRef.current?.(
+        j ??
+          {
+            studio: "video",
+            prompt: item.prompt,
+            modelId: item.modelId,
+            ar: item.ar,
+            quality: item.quality,
+            duration: item.duration,
+            n,
+            refs: item.refs,
+            loras: item.loras,
+          },
+      );
+    })();
   }, []);
 
   return (

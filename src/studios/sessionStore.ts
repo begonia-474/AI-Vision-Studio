@@ -17,7 +17,8 @@ import {
   toAssetUrl,
   upsertSession,
 } from "../api";
-import type { HistoryTask, LoraEntry, SessionRow, StudioJump } from "../types";
+import type { EditJump, HistoryTask, LoraEntry, SessionRow, StudioJump } from "../types";
+import { STRUCTURED_PARAM_KEYS } from "../types";
 import { uid } from "../lib/utils";
 
 export type Studio = "image" | "video";
@@ -115,65 +116,35 @@ function historyParams(item: HistoryTask): Record<string, unknown> {
 /// 已结构化消费的 params_json 键（size/n/aspect_ratio/quality/duration/output_format/
 /// optimize_prompt_mode/background/web_search/references/loras 分别落入 ResultItem 对应字段），
 /// 剩余键（魔搭自由参数 steps/guidance/seed/negative_prompt 等）原样返回，供详情页展示。
-const STRUCTURED_PARAM_KEYS = new Set([
-  "size",
-  "n",
-  "aspect_ratio",
-  "quality",
-  "duration",
-  "output_format",
-  "optimize_prompt_mode",
-  "background",
-  "web_search",
-  "layer_decomposition",
-  "references",
-  "loras",
-  "mode",
-]);
+/// 键表唯一事实源在 Rust params.rs（typegen 生成 STRUCTURED_PARAM_KEYS），
+/// 此处仅消费；重新编辑/重新生成的解析权威在 parse_history_params 命令。
 
 export function freeParams(raw: Record<string, unknown>): Record<string, unknown> | undefined {
-  const rest = Object.fromEntries(Object.entries(raw).filter(([k]) => !STRUCTURED_PARAM_KEYS.has(k)));
+  const rest = Object.fromEntries(Object.entries(raw).filter(([k]) => !STRUCTURED_PARAM_KEYS.includes(k)));
   return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
-/// 自由参数快照 → 重新编辑回填值（只保留字符串/数字，供 StudioJump.params / paramValues）。
-export function jumpParams(raw: Record<string, unknown> | undefined): Record<string, string | number> | undefined {
-  if (!raw) return undefined;
-  const f = Object.fromEntries(
-    Object.entries(raw).filter(
-      (e): e is [string, string | number] => typeof e[1] === "string" || typeof e[1] === "number",
-    ),
-  );
-  return Object.keys(f).length > 0 ? f : undefined;
-}
-
-/// 数据库 params_json → 重新编辑跳转（图库 / 时间线共用同一数据源同一拼装，
-/// 保证回填与库中记录一致；model/prompt 来自 tasks 行，参数来自 params_json）。
-export function jumpFromParams(
-  task: { prompt: string; model: string },
-  params: Record<string, unknown>,
-  image: boolean,
-  refs?: string[],
-): StudioJump & { studio: "image" | "video" } {
+/// Rust parse_history_params 返回值（EditJump，camelCase + null 可选）→ StudioJump
+/// （null 归一为 undefined，适配前端可选字段；studio 由调用方补充）。
+export function editJumpToStudio(j: EditJump): StudioJump {
+  const nn = <T>(v: T | null | undefined): T | undefined => (v == null ? undefined : v);
   return {
-    studio: image ? "image" : "video",
-    prompt: task.prompt,
-    modelId: task.model,
-    ar: typeof params.aspect_ratio === "string" ? params.aspect_ratio : undefined,
-    quality: typeof params.quality === "string" ? params.quality : undefined,
-    duration: typeof params.duration === "string" ? params.duration : undefined,
-    n: typeof params.n === "number" ? params.n : undefined,
-    mode: params.mode === "single" || params.mode === "group" ? params.mode : undefined,
-    format: typeof params.output_format === "string" ? params.output_format : undefined,
-    optimizePromptMode: typeof params.optimize_prompt_mode === "string" ? params.optimize_prompt_mode : undefined,
-    background: typeof params.background === "string" ? params.background : undefined,
-    webSearch: typeof params.web_search === "boolean" ? params.web_search : undefined,
-    layerDecomposition:
-      typeof params.layer_decomposition === "boolean" ? params.layer_decomposition : undefined,
-    size: typeof params.size === "string" ? params.size : undefined,
-    params: jumpParams(freeParams(params)),
-    refs,
-    loras: parseLoras(params.loras),
+    prompt: j.prompt,
+    modelId: nn(j.modelId),
+    ar: nn(j.ar),
+    quality: nn(j.quality),
+    duration: nn(j.duration),
+    n: nn(j.n),
+    mode: j.mode === "single" || j.mode === "group" ? j.mode : undefined,
+    format: nn(j.format),
+    optimizePromptMode: nn(j.optimizePromptMode),
+    background: nn(j.background),
+    webSearch: nn(j.webSearch),
+    layerDecomposition: nn(j.layerDecomposition),
+    size: nn(j.size),
+    params: j.params,
+    refs: nn(j.refs),
+    loras: nn(j.loras),
   };
 }
 
@@ -373,7 +344,8 @@ export function useSessionStore(studio: Studio): SessionApi {
     let mounted = true;
     (async () => {
       const [sessionRows, history] = await Promise.all([
-        listSessions(),
+        // 无后端（npm run dev 前端-only）时返回空，界面用占位会话渲染，不报错。
+        listSessions().catch(() => []),
         listHistory().catch(() => []),
       ]);
       if (!mounted) return;
@@ -382,7 +354,7 @@ export function useSessionStore(studio: Studio): SessionApi {
         if (sessions.length === 0) {
           const s = freshSession(tRef.current("sessions.defaultTitle"));
           sessions = [s];
-          void upsertSession(toSessionRow(s));
+          void upsertSession(toSessionRow(s)).catch(() => {});
         }
         const bySession = new Map<string, HistoryTask[]>();
         for (const item of history) {
@@ -398,7 +370,7 @@ export function useSessionStore(studio: Studio): SessionApi {
             const s = freshSession(tRef.current("sessions.defaultTitle"));
             s.id = sid;
             sessions.push(s);
-            void upsertSession(toSessionRow(s));
+            void upsertSession(toSessionRow(s)).catch(() => {});
           }
         }
         sessions = sortByRecent(sessions);
@@ -475,7 +447,8 @@ export function useSessionStore(studio: Studio): SessionApi {
         continue;
       }
       lastPersisted.current.set(s.id, { contentKey, fullKey, at: now });
-      void upsertSession(toSessionRow(s));
+      // 无后端（dev 前端-only）时忽略落库失败（本地会话仍可用，重启不持久化）。
+      void upsertSession(toSessionRow(s)).catch(() => {});
     }
   }, [state.sessions, ready]);
 

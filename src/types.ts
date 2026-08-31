@@ -21,11 +21,11 @@ export type CustomParamModule =
       def?: string; // 默认值（写入 params 下发）
     };
 
-/** LoRA 条目（生成弹层内编辑；repo=模型仓库 ID，weight=权重，原样下发不做限制）。 */
-export interface LoraEntry {
-  repo: string;
-  weight: string;
-}
+/** LoRA 条目（生成弹层内编辑；repo=模型仓库 ID，weight=权重，原样下发不做限制）。
+ *  由 ts-rs 从 Rust 侧 LoraEntryDto 生成（src/types/generated/LoraEntry.ts）。
+ *  export * 不建立模块内绑定，StudioJump 需引用故显式 import 后 re-export。 */
+import type { LoraEntry } from "./types/generated/LoraEntry";
+export type { LoraEntry };
 
 /** 内置魔搭模型的参数配置载体（ModelDef.custom）：默认参数 + 弹层分区声明。 */
 export interface CustomModelConfig {

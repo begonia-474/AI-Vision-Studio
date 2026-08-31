@@ -19,7 +19,7 @@ import {
   IconSparkles,
   IconUpload,
 } from "../lib/icons";
-import { PROVIDERS, isSeedreamProModel, providerMeta } from "../models/registry";
+import { isSeedreamProModel, providerMeta } from "../models/registry";
 import type { StudioApi } from "../studios/useStudio";
 
 interface PromptComposerProps {
@@ -40,7 +40,7 @@ const COLLAPSE = "duration-[350ms] ease-[cubic-bezier(.15,.75,.3,1)]";
 export function PromptComposer({ api, collapsed = false, onExpand, onHeightChange, onWheelOutside }: PromptComposerProps) {
   const { t } = useTranslation();
   const isVideo = api.studio === "video";
-  const provider = PROVIDERS[api.model.providerId] ?? providerMeta(api.model.providerId);
+  const provider = providerMeta(api.model.providerId);
   const [openModel, setOpenModel] = useState(false);
   const [openParams, setOpenParams] = useState(false);
   const [drawOpen, setDrawOpen] = useState(false);
