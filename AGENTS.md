@@ -31,7 +31,9 @@ src-tauri/                Rust 后端
   src/commands.rs         IPC 命令层：generate、会话 / 历史 / 密钥 / 自添加模型 CRUD
   src/storage.rs          AssetStore（下载 / 缩略图 / 参考图收编）+ HistoryDb（rusqlite）
                           + KeyStore（keys.json）+ UserModelStore；数据目录解析与 GC
-  src/models.rs           领域模型与共享 DTO（serde snake_case）
+  src/models.rs           领域模型与共享 DTO（serde snake_case；ts-rs 生成前端类型）
+  src/registry.rs         内置模型注册表（能力/尺寸/官方像素表/像素区间，领域数据唯一事实源）
+  src/params.rs           参数纯函数：LoRA 归一化 + params_json 解析（STRUCTURED_PARAM_KEYS 唯一来源）
   src/providers/          厂商适配器：mod.rs 契约 + dashscope / volcark / kling / minimax / modelscope
   src/lib.rs              启动初始化（storage::init + asset scope 授权）与命令注册
 docs/                     架构（architecture.md）、开发约定（development.md）、术语表（glossary.md）
@@ -66,7 +68,7 @@ cd src-tauri && cargo test                  # 后端单测（storage 层）
 ## 架构不变量（最高优先级，违反前先读 docs/architecture.md）
 
 - **SQLite 是唯一权威，前端是镜像。** 会话与历史完全以 `history.db` 为准：生成"提交即落库"（先写 running 行，成功/失败终态回写，失败也留行），启动时按行恢复时间线、孤儿会话重建；前端不再有 localStorage 业务数据。任何"本地状态改了但没落库"的路径都是 bug。
-- **`params_json` 是"重新编辑 / 重新生成"的回填权威。** 结构化字段以命令层 `json!` 快照为准，用户自建模型声明的同名 key 跳过。`STRUCTURED_PARAM_KEYS` 在 `commands.rs` 与 `sessionStore.ts` 各有一份且互相点名——**改一边必须同步另一边**。
+- **`params_json` 是"重新编辑 / 重新生成"的回填权威。** 结构化字段以命令层 `json!` 快照为准，用户自建模型声明的同名 key 跳过。键表与解析的唯一事实源在 `params.rs`（`STRUCTURED_PARAM_KEYS` 常量 + `parse_history_params` 命令，typegen 生成前端常量），前端 `sessionStore::freeParams` 与图库/时间线的「重新编辑」「重新生成」均消费它——**改键表只动 `params.rs`，勿两端手写**。
 - **`gen-progress` 是唯一实时通道**：后端 `app.emit("gen-progress", ProgressPayload)`，前端 `api.ts::onProgress` 按 `task_id` 路由写入 loading 卡；阶段由 `ProgressPhase` 枚举唯一声明（submitting → running → downloading → done/failed，`npm run typegen` 生成前端类型与常量），禁止两端拼裸字符串。新增阶段要同步枚举、卡片渲染与双语文案；订阅必须可注销（`UnlistenFn`）并处理卸载竞态。
 - **阻塞 IO 一律出 tokio worker**：SQLite、文件、`keys.json` 的同步 IO 全部 `spawn_blocking`；产物下载流式落盘，数百 MB 视频不得整块进内存。
 - **失败路径统一收尾**：`commands.rs::fail_generation` 是唯一出口：清理已产生文件 + 写库终态 + 推 failed 事件。新失败分支不得自写 cleanup / update / emit 序列。
