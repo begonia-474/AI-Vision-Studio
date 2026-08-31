@@ -1,0 +1,30 @@
+# 统一行尾策略：文本文件入库一律 LF，Windows 检出转 CRLF，Linux/macOS 检出 LF。
+# 修复 Windows 上无 .gitattributes 时 cargo / VS 触文件导致的「幻影修改」。
+* text=auto
+
+# 脚本按平台约定行尾
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf
+
+# 二进制文件，不参与行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.pdf binary
+*.sqlite binary
+*.db binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.wasm binary
