@@ -26,6 +26,10 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [byokOpen, setByokOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 密钥配置版本号：BYOK 弹层关闭时自增，工作室据此重查密钥状态
+  // （空状态「配置 API Key」入口在配置完成后自动消失）。
+  const [keyRev, setKeyRev] = useState(0);
+  const openByok = useCallback(() => setByokOpen(true), []);
   const [videoJump, setVideoJump] = useState<StudioJump | null>(null);
   const [imageJump, setImageJump] = useState<StudioJump | null>(null);
 
@@ -86,16 +90,16 @@ export default function App() {
           sessions={sessions}
           onActivateStudio={activateStudio}
           onToggleSidebar={() => setCollapsed((v) => !v)}
-          onOpenByok={() => setByokOpen(true)}
+          onOpenByok={openByok}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
         <div className="relative flex-1 overflow-hidden bg-background">
           <div className={cn("h-full w-full", activeView !== "image" && "hidden")}>
-            <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} jump={imageJump} onReEdit={handleReEdit} />
+            <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} jump={imageJump} onReEdit={handleReEdit} onOpenByok={openByok} keyRev={keyRev} />
           </div>
           <div className={cn("h-full w-full", activeView !== "video" && "hidden")}>
-            <VideoStudio session={videoSession} jump={videoJump} onReEdit={handleReEdit} />
+            <VideoStudio session={videoSession} jump={videoJump} onReEdit={handleReEdit} onOpenByok={openByok} keyRev={keyRev} />
           </div>
           {activeView === "gallery" && (
             <div className="h-full w-full">
@@ -111,7 +115,13 @@ export default function App() {
         </div>
       </div>
 
-      <ByokModal open={byokOpen} onClose={() => setByokOpen(false)} />
+      <ByokModal
+        open={byokOpen}
+        onClose={() => {
+          setByokOpen(false);
+          setKeyRev((v) => v + 1);
+        }}
+      />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

@@ -12,6 +12,7 @@ import { PromptComposer } from "../components/PromptComposer";
 import { TaskTimeline } from "../components/TaskTimeline";
 import { DetailPanel, type DetailSource } from "../components/DetailPanel";
 import { useStudio } from "./useStudio";
+import { useProviderKeyReady } from "../lib/useProviderKeyReady";
 import { jumpFromParams, type ResultItem, type SessionApi } from "./sessionStore";
 import type { StudioJump } from "../types";
 
@@ -19,12 +20,17 @@ interface VideoStudioProps {
   session: SessionApi;
   jump: StudioJump | null;
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
+  /** 打开 BYOK 密钥管理弹层（空状态「配置 API Key」入口） */
+  onOpenByok?: () => void;
+  /** 密钥配置版本号：变化时重新校验当前厂商密钥是否已设置 */
+  keyRev?: number;
 }
 
 // memo：session（SessionApi）引用已稳定化（审计#12），图像工作室的进度事件不再
 // 连带重渲染视频工作室（与 ImageStudio 同修）。
-export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit }: VideoStudioProps) {
+export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit, onOpenByok, keyRev }: VideoStudioProps) {
   const api = useStudio("video", session);
+  const keyReady = useProviderKeyReady(api.model.providerId, keyRev ?? 0);
   const streamRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [composerCollapsed, setComposerCollapsed] = useState(false);
@@ -198,6 +204,8 @@ export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit }
           onRegenerate={api.regenerate}
           onOpenDetail={openDetail}
           onReEdit={reEdit}
+          onOpenByok={onOpenByok}
+          providerKeyReady={keyReady}
         />
       </div>
       {!atBottom && (

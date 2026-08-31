@@ -4,7 +4,7 @@
 // 元信息 / 生成参数 / 基础信息 chips、底部动作（图生视频/作为参考图/重新编辑）。
 // 收藏、删除、跳转等行为由 sources 内的回调承载（图库走历史任务，队列走会话结果）。
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ParseKeys } from "i18next";
 import { getLayerMeta, toAssetUrl } from "../api";
@@ -144,6 +144,120 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
 
   if (!source) return null;
 
+  // ===== 图片缩放 / 平移（仅图像）=====
+  // 滚轮以光标为锚点缩放；缩放 >1 时拖拽平移；双击在 1x / 2.5x 间切换；
+  // +/-/0 快捷键缩放/还原（箭头键已用于上一张/下一张，不复用）；切换作品时复位。
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const dragStartRef = useRef<{ px: number; py: number; panX: number; panY: number } | null>(null);
+  const zoomRef = useRef(1);
+  zoomRef.current = zoom;
+  const imgSizeRef = useRef(imgSize);
+  imgSizeRef.current = imgSize;
+
+  const measureImg = useCallback(() => {
+    const el = imgRef.current;
+    if (el) setImgSize({ w: el.clientWidth, h: el.clientHeight });
+  }, []);
+
+  // 切换作品时复位缩放/平移
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setDragging(false);
+    dragStartRef.current = null;
+  }, [index, source?.key]);
+
+  // 图片显示尺寸测量（加载后 / 布局变化），供平移钳制边界
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(measureImg);
+    ro.observe(el);
+    measureImg();
+    return () => ro.disconnect();
+  }, [index, source?.key, measureImg]);
+
+  // 设置缩放级别：可选锚点（client 坐标），缩放后锚点下的内容不动；平移按可视区域软钳制。
+  const setZoomLevel = useCallback((next: number, anchor?: { x: number; y: number }) => {
+    const s = Math.min(8, Math.max(1, next));
+    const prev = zoomRef.current;
+    if (s === prev) return;
+    const el = containerRef.current;
+    const cw = el?.clientWidth ?? 0;
+    const ch = el?.clientHeight ?? 0;
+    const rect = el?.getBoundingClientRect();
+    const C = rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : { x: 0, y: 0 };
+    const A = anchor ?? C;
+    const d = 1 / s - 1 / prev;
+    const mw = Math.max(0, (imgSizeRef.current.w * s - cw) / 2);
+    const mh = Math.max(0, (imgSizeRef.current.h * s - ch) / 2);
+    setPan((p) => ({
+      x: Math.min(mw, Math.max(-mw, p.x + (A.x - C.x) * d)),
+      y: Math.min(mh, Math.max(-mh, p.y + (A.y - C.y) * d)),
+    }));
+    zoomRef.current = s;
+    setZoom(s);
+  }, []);
+
+  // 原生非被动 wheel 监听（React 合成事件在 passive 下 preventDefault 失效），仅图像生效
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !source.image) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoomLevel(zoomRef.current * Math.exp(-e.deltaY * 0.004), { x: e.clientX, y: e.clientY });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [source.image, index, source?.key, setZoomLevel]);
+
+  // +/-/0 快捷键缩放/还原
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "+" || e.key === "=") setZoomLevel(zoomRef.current * 1.25);
+      else if (e.key === "-" || e.key === "_") setZoomLevel(zoomRef.current / 1.25);
+      else if (e.key === "0") setZoomLevel(1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setZoomLevel]);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!source.image || zoom <= 1) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = { px: e.clientX, py: e.clientY, panX: pan.x, panY: pan.y };
+    setDragging(true);
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = dragStartRef.current;
+    if (!s) return;
+    const sZoom = zoomRef.current;
+    const cw = containerRef.current?.clientWidth ?? 0;
+    const ch = containerRef.current?.clientHeight ?? 0;
+    const mw = Math.max(0, (imgSizeRef.current.w * sZoom - cw) / 2);
+    const mh = Math.max(0, (imgSizeRef.current.h * sZoom - ch) / 2);
+    setPan({
+      x: Math.min(mw, Math.max(-mw, s.panX + (e.clientX - s.px) / sZoom)),
+      y: Math.min(mh, Math.max(-mh, s.panY + (e.clientY - s.py) / sZoom)),
+    });
+  };
+  const onPointerUp = () => {
+    dragStartRef.current = null;
+    setDragging(false);
+  };
+  const onDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!source.image) return;
+    if ((e.target as HTMLElement).closest("button")) return;
+    setZoomLevel(zoomRef.current > 1 ? 1 : 2.5, { x: e.clientX, y: e.clientY });
+  };
+
   const copyPrompt = async (prompt: string) => {
     await copyText(prompt);
     setCopied(true);
@@ -256,9 +370,28 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
     <div className="fixed inset-0 z-50 bg-white text-[#111827] animate-[fadeInUp_.15s]">
       <div className="flex h-full w-full bg-white text-[#111827]">
         {/* 左：图片区 */}
-        <div className="group/detail relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[#f8f8f8] px-10 py-16">
+        <div
+          ref={containerRef}
+          className={cn(
+            "group/detail relative flex min-w-0 flex-1 touch-none items-center justify-center overflow-hidden bg-[#f8f8f8] px-10 py-16",
+            source.image && zoom > 1 && (dragging ? "cursor-grabbing" : "cursor-grab"),
+          )}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onDoubleClick={onDoubleClick}
+        >
           {source.image ? (
-            <img src={toAssetUrl(source.paths[source.pathIndex ?? 0] ?? source.thumbnailPath ?? "")} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
+            <img
+              ref={imgRef}
+              src={toAssetUrl(source.paths[source.pathIndex ?? 0] ?? source.thumbnailPath ?? "")}
+              alt=""
+              draggable={false}
+              onLoad={measureImg}
+              className={cn("max-h-full max-w-full rounded-lg object-contain select-none", zoom > 1 && "will-change-transform")}
+              style={zoom > 1 ? { transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transition: dragging ? "none" : "transform 120ms ease-out" } : undefined}
+            />
           ) : (
             <video src={toAssetUrl(source.paths[source.pathIndex ?? 0] ?? "")} controls className="max-h-full max-w-full rounded-lg" />
           )}
@@ -275,6 +408,42 @@ export function DetailPanel({ sources, index, onClose, onNavigate }: DetailPanel
           >
             <XIcon size={16} />
           </button>
+          {/* 缩放工具条（仅图像） */}
+          {source.image && (
+            <div className="absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-full border border-[#e5e7eb] bg-white/90 px-1.5 py-1 text-[#6b7280] shadow-[0_4px_16px_rgba(0,0,0,.12)] backdrop-blur-[6px]">
+              <button
+                className="grid size-7 cursor-pointer place-items-center rounded-full text-[15px] leading-none transition-colors hover:bg-[#eee] hover:text-[#111827]"
+                title={t("gallery.zoomOut")}
+                aria-label={t("gallery.zoomOut")}
+                onClick={() => setZoomLevel(zoom / 1.25)}
+              >
+                −
+              </button>
+              <span
+                className="min-w-[52px] text-center text-[12px] font-medium tabular-nums"
+                title={t("gallery.zoomPercent", { pct: Math.round(zoom * 100) })}
+              >
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                className="grid size-7 cursor-pointer place-items-center rounded-full text-[15px] leading-none transition-colors hover:bg-[#eee] hover:text-[#111827]"
+                title={t("gallery.zoomIn")}
+                aria-label={t("gallery.zoomIn")}
+                onClick={() => setZoomLevel(zoom * 1.25)}
+              >
+                +
+              </button>
+              {zoom > 1 && (
+                <button
+                  className="cursor-pointer rounded-full px-2.5 text-[12px] font-medium text-[#2563eb] transition-colors hover:bg-[#eef2ff]"
+                  title={t("gallery.zoomReset")}
+                  onClick={() => setZoomLevel(1)}
+                >
+                  {t("gallery.zoomReset")}
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="w-px shrink-0 bg-[#e5e7eb]" />

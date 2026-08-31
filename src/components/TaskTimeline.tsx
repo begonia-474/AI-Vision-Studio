@@ -15,12 +15,12 @@
 // 本文件所有 hooks 必须保持在空状态早退之前；重渲染风暴已由组级 memo 消除，
 // 窗口化的 DOM 数量收益不抵滚动交互回归风险，故回退为全量渲染。
 
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { IconDownload, IconImage, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
-import { cn } from "../lib/utils";
+import { IconCopy, IconDownload, IconImage, IconKey, IconPlay, IconRefresh, IconTrash, IconVideo } from "../lib/icons";
+import { cn, copyText } from "../lib/utils";
 import { ImageGeneration, ImageGenerationLabel } from "./ImageGeneration";
 import type { ResultItem, ResultStatus } from "../studios/sessionStore";
 
@@ -42,6 +42,10 @@ interface TaskTimelineProps {
   onOpenDetail?: (item: ResultItem) => void;
   /** 编辑（krea Edit）：携带该结果参数跳转对应工作室 */
   onReEdit?: (item: ResultItem) => void;
+  /** 空状态「配置 API Key」入口（未配置密钥时展示引导按钮） */
+  onOpenByok?: () => void;
+  /** 当前模型所属厂商的密钥是否已设置（null=校验中，不展示引导） */
+  providerKeyReady?: boolean | null;
 }
 
 interface TaskGroup {
@@ -159,6 +163,19 @@ const TaskGroupCard = memo(function TaskGroupCard({
   const resLabel = resolutionLabel(ar);
   const phaseText = phaseLabel(t, phase);
 
+  // 失败条操作：复制错误信息 / 重新生成（同一 prompt 重试，参数不变）
+  const [copied, setCopied] = useState(false);
+  const copyError = async () => {
+    const msg = items[0]?.error ?? t("common.generationFailed");
+    try {
+      await copyText(msg);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* 复制失败静默 */
+    }
+  };
+
   return (
     <div className="flex max-w-[1300px] flex-col items-start justify-end gap-4 p-1 md:flex-row md:gap-8">
       {/* 左列：prompt 卡 + 模型徽章（krea 队列布局） */}
@@ -221,8 +238,29 @@ const TaskGroupCard = memo(function TaskGroupCard({
           </div>
         )}
         {status === "error" && (
-          <div className="min-w-0 rounded-md border border-[rgba(239,68,68,.25)] bg-[rgba(239,68,68,.06)] px-4 py-3.5 text-xs leading-relaxed break-words text-destructive" role="alert">
-            {items[0]?.error ?? t("common.generationFailed")}
+          <div className="min-w-0 rounded-md border border-[rgba(239,68,68,.25)] bg-[rgba(239,68,68,.06)] px-4 py-3.5" role="alert">
+            <p className="text-xs leading-relaxed break-words text-destructive">
+              {items[0]?.error ?? t("common.generationFailed")}
+            </p>
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <button
+                className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-destructive transition-colors duration-100 hover:bg-[rgba(239,68,68,.12)]"
+                title={t("result.regenerate")}
+                onClick={() => onRegenerate(taskId)}
+              >
+                <IconRefresh size={12} />
+                <span>{t("result.regenerate")}</span>
+              </button>
+              <button
+                className="flex w-fit cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-text-3 transition-colors duration-100 hover:bg-hover hover:text-foreground"
+                title={t("result.copyError")}
+                aria-label={t("result.copyError")}
+                onClick={() => void copyError()}
+              >
+                {copied ? <span className="text-[11px]">{t("gallery.copied")}</span> : <IconCopy size={12} />}
+                <span>{copied ? t("gallery.copied") : t("result.copyError")}</span>
+              </button>
+            </div>
           </div>
         )}
         {status === "done" && (
@@ -384,6 +422,8 @@ export const TaskTimeline = memo(function TaskTimeline({
   onRegenerate,
   onOpenDetail,
   onReEdit,
+  onOpenByok,
+  providerKeyReady,
 }: TaskTimelineProps) {
   const { t } = useTranslation();
 
@@ -547,6 +587,20 @@ export const TaskTimeline = memo(function TaskTimeline({
         <p className="m-0 max-w-[480px] text-sm leading-relaxed text-muted-foreground">
           {studio === "video" ? t("result.descVideo") : t("result.descImage")}
         </p>
+        {providerKeyReady === false && onOpenByok && (
+          <>
+            <p className="m-0 mt-3 max-w-[480px] text-xs leading-relaxed text-muted-foreground">
+              {t("result.configureKeyHint")}
+            </p>
+            <button
+              className="mt-4 flex cursor-pointer items-center gap-1.5 rounded-full border border-[rgba(59,130,246,.10)] bg-primary px-5 py-2 text-[13px] font-semibold text-black shadow-[0_4px_14px_rgba(59,130,246,.25)] transition-all duration-150 hover:scale-[1.03] hover:opacity-95 active:scale-[0.98]"
+              onClick={onOpenByok}
+            >
+              <IconKey size={15} />
+              <span>{t("result.configureKey")}</span>
+            </button>
+          </>
+        )}
       </div>
     );
   }

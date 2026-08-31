@@ -88,6 +88,10 @@ export const enUS: ZhDict = {
     delete: "Delete work",
     deleteConfirm: "Delete this work? Local files will be removed too.",
     deleteConfirmMany: "Delete the {{n}} selected works? Local files will be removed too.",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    zoomReset: "Fit",
+    zoomPercent: "Zoom {{pct}}%",
     failed: "Failed to load gallery",
     prompt: "Prompt",
     provider: "Provider",
@@ -278,6 +282,9 @@ export const enUS: ZhDict = {
     regenerate: "Regenerate",
     deleteTask: "Delete this task",
     cardGroup: "Generation result",
+    configureKey: "Set up API Key",
+    configureKeyHint: "Set up the API key for the current provider before your first generation.",
+    copyError: "Copy error",
   },
   providers: {
     volcark: {

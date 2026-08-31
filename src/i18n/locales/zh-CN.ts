@@ -86,6 +86,10 @@ export const zhCN = {
     delete: "删除作品",
     deleteConfirm: "确定删除该作品？本地文件将一并删除。",
     deleteConfirmMany: "确定删除选中的 {{n}} 个作品？本地文件将一并删除。",
+    zoomIn: "放大",
+    zoomOut: "缩小",
+    zoomReset: "适应窗口",
+    zoomPercent: "缩放 {{pct}}%",
     failed: "加载图库失败",
     prompt: "提示词",
     provider: "厂商",
@@ -276,6 +280,9 @@ export const zhCN = {
     regenerate: "重新生成",
     deleteTask: "删除该任务",
     cardGroup: "生成结果",
+    configureKey: "配置 API Key",
+    configureKeyHint: "首次生成前，请先为当前模型所属厂商配置 API Key。",
+    copyError: "复制错误",
   },
   providers: {
     volcark: {
