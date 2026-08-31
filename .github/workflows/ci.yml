@@ -48,3 +48,12 @@ jobs:
       - name: 单元测试（cargo test）
         working-directory: src-tauri
         run: cargo test
+      # 审计#19：ts-rs 从 Rust DTO 生成前端类型（src/types/generated/，提交进版本库）。
+      # 若本步 diff 非空，说明 DTO 改动后未运行 `npm run typegen`，需重新生成并提交。
+      - name: 前端类型生成一致性（ts-rs 导出后 git diff 校验）
+        working-directory: src-tauri
+        env:
+          TS_RS_EXPORT_DIR: ../src/types/generated
+        run: |
+          cargo test export_bindings
+          git diff --exit-code -- ../src/types/generated

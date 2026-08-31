@@ -1,70 +1,7 @@
-// 前端 ↔ Rust 共享类型，与 src-tauri/src/models.rs 的 DTO 对齐（serde 默认 snake_case）。
-
-export interface ProviderInfo {
-  id: string;
-  display_name: string;
-  capabilities: string[];
-  auth_help: string;
-}
-
-export interface GenRequest {
-  /** 前端生成的任务 ID，后端进度事件原样回传用于路由 */
-  task_id: string;
-  /** 所属会话 ID，写库后启动时按会话恢复时间线 */
-  session_id?: string;
-  provider_id: string;
-  capability: string;
-  prompt: string;
-  negative_prompt?: string;
-  model?: string;
-  size: string;
-  n: number;
-  aspect_ratio?: string;
-  quality?: string;
-  duration?: string;
-  /** 图像生图模式：single=每张图独立请求（循环 n 次，哩布行为）；group=一次请求组图 auto+max_images */
-  mode?: "single" | "group";
-  /** 图像输出格式（火山方舟 Seedream 5.0 pro/lite）：png / jpeg，缺省 jpeg */
-  output_format?: string;
-  /** 模板模型 id（用户自添加模型继承内置模板行为；内置模型提交自身 id） */
-  template_model_id?: string;
-  /** 提示词优化模式（Seedream 5.0 pro）：standard / fast，缺省 standard */
-  optimize_prompt_mode?: string;
-  /** 透明通道（Seedream 5.0 pro，仅 i2i 单参考图）：transparent / opaque */
-  background?: string;
-  /** 联网搜索（Seedream 5.0 lite）：true 时提交 tools=[{type:"web_search"}] */
-  web_search?: boolean;
-  /** 图层拆分（Seedream 5.0 pro）：true 时提交 layer_decomposition，仅 i2i 单参考图 */
-  layer_decomposition?: boolean;
-  references?: string[];
-  /** 用户自添加模型透传：{ params: 用户按模型配置的自由参数 } */
-  extra?: Record<string, unknown>;
-}
-
-/** Seedream 5.0 pro 图层拆分产物的单张图层元数据（sidecar layers/{history_id}.json）。 */
-export interface LayerMeta {
-  z_index: number | null;
-  name: string | null;
-  description: string | null;
-  bounding_box_absolute: number[] | null;
-  bounding_box_normalized: number[] | null;
-}
-
-/** 图层画布上下文：本地产物路径与图层元数据（下标对齐）。 */
-export interface LayerComposition {
-  paths: string[];
-  layers: LayerMeta[];
-}
-
-export interface GenerationResult {
-  history_id: number;
-  provider_id: string;
-  model: string;
-  local_paths: string[];
-  remote_urls: string[];
-  /** 写入数据库 params_json 的完整参数快照（重新编辑时按此拼接回填） */
-  params_json: string;
-}
+// 前端 ↔ Rust 共享类型：与 src-tauri/src/models.rs 的 DTO 对齐（serde 默认 snake_case）。
+// 审计#19：跨端 DTO 已改由 ts-rs 从 Rust 自动生成（src/types/generated/，`npm run typegen`），
+// 本文件仅保留前端私有类型并 re-export 生成产物。改 DTO 字段在 Rust 侧改，勿在此手写。
+export * from "./types/generated/index";
 
 /** 模型参数模块（生成弹层 popover 分区）。内置魔搭模型的参数区声明。
  *  param 为自由参数（接口原生字段，如 steps/guidance/seed/negative_prompt），
@@ -100,56 +37,6 @@ export interface CustomModelConfig {
   params: Record<string, string | number | null>;
   /** 参数模块（popover 分区）；缺省时由 defaultSections 按 studio 推导 */
   param_modules?: CustomParamModule[];
-}
-
-/** 用户为内置厂商自添加的模型行（SQLite user_models）。 */
-export interface UserModelRow {
-  id: number;
-  provider_id: string;
-  model_id: string;
-  name: string;
-  /** 模板模型 id：继承其尺寸机制/参数分区/默认参数（如内置模型 id） */
-  template_model_id: string;
-  params_json: string | null;
-  created_at: string;
-}
-
-export interface HistoryTask {
-  id: number;
-  provider: string;
-  model: string;
-  capability: string;
-  prompt: string;
-  params_json: string | null;
-  status: string;
-  created_at: string;
-  local_paths_json: string;
-  /** 审计#12：remote_urls_json 已从 DTO 移除（前端从未消费，仅入库留档） */
-  starred: boolean;
-  thumbnail_path: string | null;
-  /** 所属会话 ID（旧记录为 null，仅出现在图库） */
-  session_id: string | null;
-  /** 任务级错误信息（failed/running 状态行的原因） */
-  error: string | null;
-}
-
-/** 会话行（SQLite sessions 表；会话元数据是权威数据的可重建索引） */
-export interface SessionRow {
-  id: string;
-  title: string;
-  /** 标题是否用户手动改过（自动命名不得覆盖显式标题） */
-  name_manually_edited: boolean;
-  /** 创建时间（Unix 毫秒） */
-  created_at: number;
-  /** 最近活动时间（Unix 毫秒，排序键） */
-  updated_at: number;
-}
-
-export interface ProgressPayload {
-  task_id: string;
-  phase: string;
-  progress: number;
-  message: string;
 }
 
 /** 工作室跳转参数（图生视频 / 作为参考图 / 重新编辑共用） */

@@ -17,6 +17,9 @@ config/
 # 开发期数据目录（debug 构建的产物/历史，见 src-tauri/src/storage.rs）
 .data/
 
+# ts-rs 无 TS_RS_EXPORT_DIR 时的默认导出残留（正确用法见 npm run typegen）
+src-tauri/bindings/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
