@@ -192,13 +192,53 @@ pub struct SessionRow {
     pub updated_at: i64,
 }
 
+/// 生成进度事件阶段（gen-progress 事件 phase 字段）。
+/// 审计#19：原为魔法字符串（"submitting"/"running"/...），改为枚举后序列化输出不变
+/// （serde rename_all lowercase），Rust 内部不再拼字符串；前端由 ts-rs 生成
+/// union 类型 + `npm run typegen` 生成的 constants.ts 常量，消费处类型安全。
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ProgressPhase {
+    Submitting,
+    Running,
+    Downloading,
+    Done,
+    Failed,
+}
+
+// ALL/as_str 仅供 export_bindings 测试生成前端常量使用；lib 构建（非 test）视为未用，
+// 用 cfg_attr 豁免 dead_code（不用 expect，避免 test 构建因"预期满足"反向告警）。
+#[cfg_attr(not(test), allow(dead_code))]
+impl ProgressPhase {
+    /// 全部阶段（按推进顺序）。typegen 用它生成前端常量（src/types/generated/constants.ts）。
+    pub const ALL: [ProgressPhase; 5] = [
+        ProgressPhase::Submitting,
+        ProgressPhase::Running,
+        ProgressPhase::Downloading,
+        ProgressPhase::Done,
+        ProgressPhase::Failed,
+    ];
+
+    /// 事件负载中的序列化值（与 serde rename_all="lowercase" 保持一致，勿单独改）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProgressPhase::Submitting => "submitting",
+            ProgressPhase::Running => "running",
+            ProgressPhase::Downloading => "downloading",
+            ProgressPhase::Done => "done",
+            ProgressPhase::Failed => "failed",
+        }
+    }
+}
+
 /// 生成进度事件 payload，通过 app.emit("gen-progress", ...) 推送前端。
 /// task_id 对应 GenRequest.task_id，前端按它把进度路由到具体任务卡（多任务并发时互不串台）。
 #[derive(Serialize, Clone, TS)]
 #[ts(export)]
 pub struct ProgressPayload {
     pub task_id: String,
-    pub phase: String,
+    pub phase: ProgressPhase,
     pub progress: i32,
     pub message: String,
 }
@@ -268,7 +308,25 @@ mod export_tests {
         UserModelRow::export_all().expect("导出 UserModelRow 失败");
         HistoryTaskDto::export_all().expect("导出 HistoryTask 失败");
         SessionRow::export_all().expect("导出 SessionRow 失败");
+        ProgressPhase::export_all().expect("导出 ProgressPhase 失败");
         ProgressPayload::export_all().expect("导出 ProgressPayload 失败");
+    }
+
+    /// 生成常量文件：progress phase 的 value 来自 Rust 枚举（唯一事实源），
+    /// 类型引用 ts-rs 生成的 ProgressPhase.ts。
+    fn export_constants(out_dir: &std::path::Path) {
+        let phases: Vec<String> = ProgressPhase::ALL
+            .iter()
+            .map(|p| format!("\"{}\"", p.as_str()))
+            .collect();
+        let content = format!(
+            "// 本文件由 `npm run typegen`（cargo test export_bindings）生成，请勿手动编辑。\n\
+// 进度事件 phase 常量的唯一事实源是 Rust 侧 ProgressPhase 枚举（src-tauri/src/models.rs）。\n\
+import type {{ ProgressPhase }} from \"./ProgressPhase\";\n\n\
+/** gen-progress 事件阶段（与 Rust ProgressPhase 枚举一一对应） */\nexport const PROGRESS_PHASES: readonly ProgressPhase[] = [{}];\n",
+            phases.join(", ")
+        );
+        std::fs::write(out_dir.join("constants.ts"), content).expect("写入 constants.ts 失败");
     }
 
     #[test]
@@ -279,7 +337,8 @@ mod export_tests {
             eprintln!("[typegen] 跳过导出：未设置 TS_RS_EXPORT_DIR（请用 npm run typegen）");
             return;
         };
-        let _out_dir = std::path::PathBuf::from(out_dir);
+        let out_dir = std::path::PathBuf::from(out_dir);
         export_all_dtos();
+        export_constants(&out_dir);
     }
 }

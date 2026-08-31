@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { deleteApiKey, getApiKey, getWorkspaceId, saveApiKey, saveWorkspaceId, testApiKey } from "../api";
-import { PROVIDER_LIST } from "../models/registry";
+import { PROVIDER_IDS, PROVIDER_LIST } from "../models/registry";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -52,7 +52,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
       }
       if (active) setCards(next);
     })();
-    getWorkspaceId("wanxiang")
+    getWorkspaceId(PROVIDER_IDS.wanxiang)
       .then((v) => active && setWs(v ?? ""))
       .catch(() => active && setWs(""));
     return () => {
@@ -95,7 +95,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
 
   const handleSaveWs = async () => {
     try {
-      await saveWorkspaceId("wanxiang", ws.trim());
+      await saveWorkspaceId(PROVIDER_IDS.wanxiang, ws.trim());
       setWsMsg(t("common.saved"));
       window.setTimeout(() => setWsMsg(null), 2000);
     } catch (e) {
@@ -170,7 +170,7 @@ export function ByokModal({ open, onClose }: ByokModalProps) {
                   {c.message}
                 </div>
               )}
-              {p.id === "wanxiang" && (
+              {p.id === PROVIDER_IDS.wanxiang && (
                 <div className="mt-2.5 border-t border-border-2 pt-2.5">
                   <div className="mb-1 text-[10px] font-semibold text-text-3">{t("byok.workspaceId")}</div>
                   <div className="flex gap-2">

@@ -28,7 +28,8 @@
 
 ## 关键设计
 
-- `providers/mod.rs` 的 `GenerationProvider` trait 把同步厂商（图像）与异步厂商（视频）统一成 `submit / poll / test_connectivity / default_model` 四个方法，新增内置厂商只需实现该 trait 并注册
+- `providers/mod.rs` 的 `GenerationProvider` trait 把同步厂商（图像）与异步厂商（视频）统一成 `submit / poll / test_connectivity / default_model` 四个方法，新增内置厂商只需实现该 trait 并注册；厂商特化副作用经带默认实现的方法下沉到 trait（审计#19：`on_workspace_changed`、`parse_layer_metas`），`commands.rs` 不依赖具体厂商模块，只做编排
+- 跨端 DTO 由 ts-rs 从 `models.rs` 自动生成（`npm run typegen` → `src/types/generated/`，CI 校验一致性）；进度阶段由 `ProgressPhase` 枚举唯一声明并生成前端 union 与常量，`commands.rs` 不拼阶段裸字符串
 - 自添加模型存 SQLite `user_models` 表，前端注册表（`src/models/registry.ts`）是模型声明的单一数据源（尺寸机制 / 参数分区 / 默认参数），启动/增删时拉取合并进模型列表；提交时携带 `template_model_id`，volcark 后端按模板 ID 判断 Seedream 版本能力，避免自定义模型 ID 破坏版本识别
 - volcark（Seedream，对照 2026.08 官方文档）：5.0 pro 支持 1K/1.5K/2K 像素档、`optimize_prompt_options`（standard/fast）与 `background`（仅 i2i 单参考图，透明模式强制 PNG）；4.0 同样支持 standard/fast 优化；5.0 lite 支持 `web_search` 与 png/jpeg 输出；4.5/4.0 仅 jpeg、不渲染格式分区；组图上限 15 且 i2i 按 `15 - 参考图数` 收敛；自定义 W/H 必须同时满足总像素区间与宽高比 [1/16, 16]，前后端共同校验、非法尺寸显式报错不静默回退
 - Seedream 5.0 Pro 交互编辑（`DrawDialog.tsx`）：纯前端实现，按参考图显示矩形把点选 / 框选换算为 0–999 归一化坐标，以 `<point>` / `<bbox>` token 写回 prompt；多参考图按「图 N」标记，后端复用现有 refs 提交通路

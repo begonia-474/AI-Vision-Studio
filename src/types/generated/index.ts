@@ -9,5 +9,6 @@ export type { GenerationResult } from "./GenerationResult";
 export type { UserModelRow } from "./UserModelRow";
 export type { HistoryTask } from "./HistoryTask";
 export type { SessionRow } from "./SessionRow";
+export type { ProgressPhase } from "./ProgressPhase";
 export type { ProgressPayload } from "./ProgressPayload";
 export { PROGRESS_PHASES } from "./constants";

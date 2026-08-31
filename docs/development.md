@@ -21,7 +21,8 @@
 
 ## 类型与 DTO
 
-- **共享 DTO 单一事实源**：`src/types.ts` ↔ `src-tauri/src/models.rs`（serde snake_case；Tauri invoke 自动 camelCase→snake_case）。新增/改名字段两边同步，前端不得发明后端没有的字段。
+- **共享 DTO 单一事实源**：跨端 DTO 由 ts-rs 从 `src-tauri/src/models.rs` 自动生成到 `src/types/generated/`（`npm run typegen`，生成文件提交进版本库，CI 校验 `git diff --exit-code`）；`src/types.ts` 仅 re-export 生成产物并保留前端私有类型（`StudioJump`/`LoraEntry`/`CustomParamModule` 等）。**改 DTO 字段在 Rust 侧改，改完必须重跑 `npm run typegen`**，禁止手写 `types.ts` 里的共享类型（serde snake_case；Tauri invoke 自动 camelCase→snake_case）。跨端阶段常量同样由 Rust 枚举生成（`src/types/generated/constants.ts`）。
+- **魔法字符串收敛**：进度事件 `phase` 走 `ProgressPhase` 枚举（Rust 唯一事实源，`npm run typegen` 生成前端 union + 常量），禁止两端各自拼裸字符串；厂商 id 前端统一 `PROVIDER_IDS` 常量 + `ProviderId` 类型（registry.ts），后端各 provider 的 `PROVIDER_ID` 常量。厂商特化逻辑下沉到 `GenerationProvider` trait 的带默认实现方法（先例：`on_workspace_changed` / `parse_layer_metas`，commands.rs 不再依赖具体厂商模块）。
 - **前端零 `any`**（当前全库无 `any`，保持）：tsconfig `strict` + `noUnusedLocals` + `noUnusedParameters` 全开；`@/` 路径别名指向 `src/`。
 - **边界信任类型**：前端 ↔ Rust 边界由 serde DTO 保证，不在两端重复校验同一规则；校验只做在解析边界（命令入口的输入校验、模型声明的参数区）。
 - **默认值显式化**：工作室默认模型用 `defaultModelForStudio`（显式 id，删除/改名时回退列表首个），禁止消费方魔法下标；后端默认模型由 provider 的 `default_model()` 唯一提供；业务默认值在唯一实现处解析，不散落在调用点。

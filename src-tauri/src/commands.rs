@@ -7,7 +7,8 @@ use futures_util::StreamExt;
 
 use crate::models::{
     GenRequest, GenerationResultDto, HistoryTaskDto, HttpRecord, LayerCompositionDto, LayerMetaDto,
-    ProgressPayload, ProviderInfoDto, SessionRow, TaskHandle, TaskPhase, UserModelRow,
+    ProgressPayload, ProgressPhase, ProviderInfoDto, SessionRow, TaskHandle, TaskPhase,
+    UserModelRow,
 };
 use crate::providers::{all_providers, get_provider, sanitize_body, GenerationProvider};
 use crate::storage;
@@ -133,7 +134,7 @@ pub async fn generate(
         "gen-progress",
         ProgressPayload {
             task_id: req.task_id.clone(),
-            phase: "submitting".to_string(),
+            phase: ProgressPhase::Submitting,
             progress: 10,
             message: "正在提交生成请求...".to_string(),
         },
@@ -315,7 +316,7 @@ pub async fn generate(
         "gen-progress",
         ProgressPayload {
             task_id: req.task_id.clone(),
-            phase: "downloading".to_string(),
+            phase: ProgressPhase::Downloading,
             progress: 95,
             message: "正在下载生成结果...".to_string(),
         },
@@ -458,7 +459,7 @@ pub async fn generate(
         "gen-progress",
         ProgressPayload {
             task_id: req.task_id.clone(),
-            phase: "done".to_string(),
+            phase: ProgressPhase::Done,
             progress: 100,
             message: "完成".to_string(),
         },
@@ -512,7 +513,7 @@ async fn fail_generation(
         "gen-progress",
         ProgressPayload {
             task_id: task_id.to_string(),
-            phase: "failed".to_string(),
+            phase: ProgressPhase::Failed,
             progress: 100,
             message: err.to_string(),
         },
@@ -590,7 +591,7 @@ async fn poll_to_finish(
                     "gen-progress",
                     ProgressPayload {
                         task_id: task_id.to_string(),
-                        phase: "running".to_string(),
+                        phase: ProgressPhase::Running,
                         progress: last_progress,
                         message: snap.message.unwrap_or_else(|| "生成中...".to_string()),
                     },

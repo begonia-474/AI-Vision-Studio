@@ -54,7 +54,7 @@ export type ParamSectionDef =
   | { type: "duration"; key: "duration"; title: string }; // 刻度 slider（durations 数组索引）+ 数值输入联动
 
 export interface ProviderMeta {
-  id: string;
+  id: ProviderId;
   name: string;
   abbr: string;
   color: string;
@@ -69,7 +69,7 @@ export interface ProviderMeta {
 export interface ModelDef {
   id: string;
   name: string;
-  providerId: string;
+  providerId: ProviderId;
   studio: Studio;
   capabilities: Capability[];
   aspectRatios: string[];
@@ -95,10 +95,23 @@ export interface ModelDef {
   sections?: ParamSectionDef[];
 }
 
+// ============ 厂商 id 常量 ============
+// 与后端 providers/*.rs 的 PROVIDER_ID 常量一一对应（volcark/kling/wanxiang/minimax/modelscope）。
+// 审计#19：分支逻辑改用命名常量，杜绝裸字符串拼写漂移；模型声明的 providerId 字段
+// 由 ProviderId 类型兜底（拼错 tsc 立即报错）。
+export const PROVIDER_IDS = {
+  volcark: "volcark",
+  kling: "kling",
+  wanxiang: "wanxiang",
+  minimax: "minimax",
+  modelscope: "modelscope",
+} as const;
+export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];
+
 // ============ 厂商元信息 ============
 // 内置厂商 name / authHelp 为 i18n key（src/i18n/locales），渲染处需经 t() 转换；
 // i18nName=false 仅出现在 providerMeta 兜底路径（DB 异常行防御）。
-export const PROVIDERS: Record<string, ProviderMeta> = {
+export const PROVIDERS: Record<ProviderId, ProviderMeta> = {
   volcark: {
     id: "volcark", name: "providers.volcark.name", abbr: "BD", color: "#a855f7", wired: true,
     capabilities: ["t2i", "i2i", "t2v", "i2v"],
@@ -345,7 +358,7 @@ export function hasSection(m: ModelDef, key: ParamSectionDef["key"]): boolean {
  *  Draw 交互编辑 / 透明背景 / 图层拆分等专属能力按模板 ID 判断。 */
 export function isSeedreamProModel(m: ModelDef): boolean {
   return (
-    m.providerId === "volcark" &&
+    m.providerId === PROVIDER_IDS.volcark &&
     (m.templateModelId ?? m.id).includes("5-0-pro")
   );
 }
@@ -357,7 +370,7 @@ export function isSeedreamProModel(m: ModelDef): boolean {
 export function batchCap(m: ModelDef, mode: "single" | "group", refs = 0): number {
   if (m.custom) return 4;
   if (mode === "group") {
-    if (m.providerId === "volcark") {
+    if (m.providerId === PROVIDER_IDS.volcark) {
       // 5.0 pro 不支持组图（以 id 或用户模型模板 id 判断）
       if (m.id.includes("5-0-pro") || m.templateModelId?.includes("5-0-pro")) return 1;
       const refCount = Math.max(0, Math.floor(refs));
@@ -432,7 +445,8 @@ function toUserModelDef(row: UserModelRow): ModelDef | null {
     ...tmpl,
     id: row.model_id,
     name: row.name,
-    providerId: row.provider_id,
+    // 用户模型挂靠内置模板，厂商以模板为准（DB 行 provider_id 异常时也不破坏 ProviderId 类型）。
+    providerId: tmpl.providerId,
     templateModelId: row.template_model_id,
     custom,
     sections,
@@ -467,7 +481,7 @@ export function useUserModels(): ModelDef[] {
 /** 厂商元信息查找；未知 pid 兜底到灰色缩写（仅 DB 异常行防御，正常路径不可达）。 */
 export function providerMeta(pid: string): ProviderMeta {
   return (
-    PROVIDERS[pid] ?? {
+    PROVIDERS[pid as ProviderId] ?? {
       id: pid,
       name: pid,
       abbr: pid.slice(0, 2).toUpperCase(),
@@ -564,13 +578,13 @@ function pxByRatio(ar: string, k: number): string {
  *  wanxiang（万相/千问/z-image）：像素串按画质档位长边换算（pro 文生图支持 4K）；
  *  其余厂商不读 size 字段，回退为比例原值占位。 */
 export function aspectToSize(
-  providerId: string,
+  providerId: ProviderId,
   modelId: string,
   ar: string,
   quality?: string,
   profileId?: string,
 ): string {
-  if (providerId === "wanxiang") {
+  if (providerId === PROVIDER_IDS.wanxiang) {
     const q = quality ?? "2K";
     let k = 2048;
     if (modelId.startsWith("wan2.7-image-pro") && q === "4K") k = 4096;
@@ -582,11 +596,11 @@ export function aspectToSize(
     else if (q === "1K") k = 1024;
     return pxByRatio(ar, k);
   }
-  if (providerId === "modelscope") {
+  if (providerId === PROVIDER_IDS.modelscope) {
     // 比例 → 像素：长边 = 模型上限（msMax），短边按比例取 16 倍数。
     return pxByRatio(ar, msMax(modelId));
   }
-  if (providerId !== "volcark") return ar;
+  if (providerId !== PROVIDER_IDS.volcark) return ar;
   const q = quality ?? "2K";
   const table = (profileId ?? modelId).includes("5-0-pro") ? PRO_PX : COMMON_PX;
   return table[q]?.[ar] ?? table["2K"]?.[ar] ?? "2048x2048";
@@ -599,10 +613,10 @@ export function aspectToSize(
 export function pixelBounds(model: ModelDef): { min: number; max: number } {
   if (model.custom) {
     // 用户自添加/魔搭内置模型：最小 512²，最大按模型上限（魔搭 msMax，其余 4096²）。
-    const max = model.providerId === "modelscope" ? msMax(model.id) : 4096;
+    const max = model.providerId === PROVIDER_IDS.modelscope ? msMax(model.id) : 4096;
     return { min: 512 * 512, max: max * max };
   }
-  if (model.providerId === "wanxiang") {
+  if (model.providerId === PROVIDER_IDS.wanxiang) {
     const min =
       model.id.startsWith("qwen") || model.id.startsWith("z-") ? 512 * 512 : 768 * 768;
     const max = model.id === "wan2.7-image-pro" ? 4096 * 4096 : 2048 * 2048;
@@ -616,5 +630,5 @@ export function pixelBounds(model: ModelDef): { min: number; max: number } {
 
 /** W/H 自定义尺寸宽高比区间（UI 校验用）；volcark 官方要求 [1/16, 16]，其余厂商无此限制。 */
 export function pixelRatioBounds(model: ModelDef): { min: number; max: number } | null {
-  return model.providerId === "volcark" ? { min: 1 / 16, max: 16 } : null;
+  return model.providerId === PROVIDER_IDS.volcark ? { min: 1 / 16, max: 16 } : null;
 }

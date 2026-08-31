@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { aspectToSize, batchCap, defaultModelForStudio, hasSection, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
+import { PROVIDER_IDS, aspectToSize, batchCap, defaultModelForStudio, hasSection, parseSizePx, type ModelDef, modelsForStudio, useUserModels } from "../models/registry";
 import { deleteHistories, generate, toAssetUrl } from "../api";
 import { freeParams, jumpParams, type ResultItem, type SessionApi } from "./sessionStore";
 import { uid } from "../lib/utils";
@@ -106,7 +106,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
         setSizeState(null);
         return;
       }
-      if (m.providerId === "volcark" || m.providerId === "wanxiang" || m.providerId === "modelscope") {
+      if (m.providerId === PROVIDER_IDS.volcark || m.providerId === PROVIDER_IDS.wanxiang || m.providerId === PROVIDER_IDS.modelscope) {
         const { w, h } = parseSizePx(aspectToSize(m.providerId, m.id, v, q, m.templateModelId));
         setSizeState({ w, h });
         setSizeLocked(false);
@@ -147,7 +147,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       const targetAr = arOverride ?? ar;
       setQuality(v);
       if (!supportsCustomSize(target)) return;
-      if (target.providerId === "volcark" || target.providerId === "wanxiang" || target.providerId === "modelscope") {
+      if (target.providerId === PROVIDER_IDS.volcark || target.providerId === PROVIDER_IDS.wanxiang || target.providerId === PROVIDER_IDS.modelscope) {
         const { w, h } = parseSizePx(aspectToSize(target.providerId, target.id, targetAr, v, target.templateModelId));
         setSizeState({ w, h });
         return;
@@ -506,7 +506,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
           duration: isVideo ? d : undefined,
           mode: isVideo ? undefined : mode,
           output_format: m.formats ? fmt : undefined,
-          template_model_id: m.providerId === "volcark" ? (m.templateModelId ?? m.id) : undefined,
+          template_model_id: m.providerId === PROVIDER_IDS.volcark ? (m.templateModelId ?? m.id) : undefined,
           optimize_prompt_mode: optMode,
           background: bg,
           web_search: webSearchOn,

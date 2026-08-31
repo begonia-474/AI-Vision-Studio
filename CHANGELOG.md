@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 重构
+
+- 跨端 DTO 改由 ts-rs 从 Rust 自动生成（`npm run typegen` → `src/types/generated/`），`src/types.ts` 仅 re-export，消灭手写双份（审计#19）
+- 进度阶段收敛为 `ProgressPhase` 枚举（Rust 唯一事实源，typegen 生成前端 union 与常量），`commands.rs` 不再拼阶段裸字符串（审计#19）
+- 厂商特化副作用下沉到 `GenerationProvider` trait 默认方法（`on_workspace_changed` / `parse_layer_metas`），`commands.rs` 解除对具体厂商模块的编译期依赖（审计#19）
+- 前端厂商 id 收敛为 `PROVIDER_IDS` 常量 + `ProviderId` 类型（registry.ts），分支逻辑不再出现裸字符串
+
 ### 新增
 
 - 魔搭 ModelScope 内置化：接入魔搭 AIGC 专区图像模型（含 LoRA 自由参数），后端协议适配只保留内置厂商

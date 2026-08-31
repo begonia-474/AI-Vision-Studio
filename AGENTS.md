@@ -19,7 +19,7 @@ AI Vision Studio 是一个 Tauri 2 桌面应用（React 19 + TypeScript + Vite 7
 ```
 src/                      React 前端
   api.ts                  Tauri invoke 封装 + gen-progress 订阅（onProgress）+ toAssetUrl（asset 协议）
-  types.ts                前端 ↔ Rust 共享类型（与 src-tauri/src/models.rs DTO 对齐）
+  types.ts                前端私有类型（StudioJump 等）+ re-export；跨端 DTO 由 ts-rs 生成（types/generated/，npm run typegen）
   App.tsx                 视图路由（image / video / gallery）+ 全局弹层
   models/registry.ts      模型注册表：内置模型 + 自添加模型 + 默认模型解析
   studios/                useStudio（表单状态机）、sessionStore（会话状态）、ImageStudio / VideoStudio
@@ -45,6 +45,7 @@ npm run tauri dev                    # 完整开发（debug 构建，数据在 <
 npm run dev                          # 仅 Vite 前端热更（无后端，界面可看不可生成）
 npm run build                        # 前端门禁：tsc（strict + noUnusedLocals）&& vite build
 npm run tauri build                  # 发布打包 → src-tauri/target/release/bundle/
+npm run typegen                      # 跨端 DTO/常量重新生成（ts-rs，改 Rust DTO 后必跑并提交）
 cd src-tauri && cargo check --all-targets   # 后端门禁
 cd src-tauri && cargo test                  # 后端单测（storage 层）
 ```
@@ -66,7 +67,7 @@ cd src-tauri && cargo test                  # 后端单测（storage 层）
 
 - **SQLite 是唯一权威，前端是镜像。** 会话与历史完全以 `history.db` 为准：生成"提交即落库"（先写 running 行，成功/失败终态回写，失败也留行），启动时按行恢复时间线、孤儿会话重建；前端不再有 localStorage 业务数据。任何"本地状态改了但没落库"的路径都是 bug。
 - **`params_json` 是"重新编辑 / 重新生成"的回填权威。** 结构化字段以命令层 `json!` 快照为准，用户自建模型声明的同名 key 跳过。`STRUCTURED_PARAM_KEYS` 在 `commands.rs` 与 `sessionStore.ts` 各有一份且互相点名——**改一边必须同步另一边**。
-- **`gen-progress` 是唯一实时通道**：后端 `app.emit("gen-progress", ProgressPayload)`，前端 `api.ts::onProgress` 按 `task_id` 路由写入 loading 卡；阶段 submitting → running → downloading → completed/failed。新增阶段要同步后端、卡片渲染与双语文案；订阅必须可注销（`UnlistenFn`）并处理卸载竞态。
+- **`gen-progress` 是唯一实时通道**：后端 `app.emit("gen-progress", ProgressPayload)`，前端 `api.ts::onProgress` 按 `task_id` 路由写入 loading 卡；阶段由 `ProgressPhase` 枚举唯一声明（submitting → running → downloading → done/failed，`npm run typegen` 生成前端类型与常量），禁止两端拼裸字符串。新增阶段要同步枚举、卡片渲染与双语文案；订阅必须可注销（`UnlistenFn`）并处理卸载竞态。
 - **阻塞 IO 一律出 tokio worker**：SQLite、文件、`keys.json` 的同步 IO 全部 `spawn_blocking`；产物下载流式落盘，数百 MB 视频不得整块进内存。
 - **失败路径统一收尾**：`commands.rs::fail_generation` 是唯一出口：清理已产生文件 + 写库终态 + 推 failed 事件。新失败分支不得自写 cleanup / update / emit 序列。
 - **密钥不出后端**：前端只能拿到掩码；完整 Key 只存在于 `keys.json` 与厂商请求中，不得设计"查看完整密钥"类功能。
