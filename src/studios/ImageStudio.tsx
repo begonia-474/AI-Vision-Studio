@@ -19,6 +19,8 @@ import type { StudioJump } from "../types";
 
 interface ImageStudioProps {
   session: SessionApi;
+  /** 是否为当前激活视图（常驻挂载，用于输入框自动聚焦/拖放收图）。 */
+  active?: boolean;
   onImageToVideo?: (src: string, prompt: string) => void;
   jump: StudioJump | null;
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
@@ -31,7 +33,7 @@ interface ImageStudioProps {
 // memo：session（SessionApi）引用已稳定化（审计#12），视频工作室的进度事件不再
 // 连带重渲染图像工作室；提示词输入只重渲染本工作室表单区，时间线由 TaskTimeline
 // 自身的 memo 跳过。
-export const ImageStudio = memo(function ImageStudio({ session, onImageToVideo, jump, onReEdit, onOpenByok, keyRev }: ImageStudioProps) {
+export const ImageStudio = memo(function ImageStudio({ session, active, onImageToVideo, jump, onReEdit, onOpenByok, keyRev }: ImageStudioProps) {
   const api = useStudio("image", session);
   const keyReady = useProviderKeyReady(api.model.providerId, keyRev ?? 0);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -256,8 +258,10 @@ export const ImageStudio = memo(function ImageStudio({ session, onImageToVideo, 
       )}
       <PromptComposer
         api={api}
+        active={active}
         collapsed={composerCollapsed}
         onExpand={() => setComposerCollapsed(false)}
+        onCollapse={() => setComposerCollapsed(true)}
         onHeightChange={handleComposerHeight}
         onWheelOutside={(e) => {
           streamRef.current?.scrollBy({ top: e.deltaY });

@@ -17,7 +17,7 @@ import { ByokModal } from "./components/ByokModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { ToastHost } from "./components/ToastHost";
 import { useSessionStore } from "./studios/sessionStore";
-import { defaultModelForStudio, hydrateRegistry, refreshUserModels, useRegistryReady } from "./models/registry";
+import { hydrateRegistry, refreshUserModels, useRegistryReady } from "./models/registry";
 import type { StudioJump } from "./types";
 
 export type View = "image" | "video" | "gallery";
@@ -64,6 +64,28 @@ export default function App() {
       })();
     }
   }, [registryReady]);
+
+  // 全局快捷键：Ctrl/Cmd+1/2/3 切换图像/视频/图库，Ctrl/Cmd+, 打开设置。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key === "1") {
+        e.preventDefault();
+        setActiveView("image");
+      } else if (e.key === "2") {
+        e.preventDefault();
+        setActiveView("video");
+      } else if (e.key === "3") {
+        e.preventDefault();
+        setActiveView("gallery");
+      } else if (e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // 跳转信号：App 持有最近一次 jump 常驻（无需清除——studio 端用 prevJump
   // 记忆去重，同一信号不会重复应用），触发时切换视图。
@@ -115,10 +137,10 @@ export default function App() {
 
         <div className="relative flex-1 overflow-hidden bg-background">
           <div className={cn("h-full w-full", activeView !== "image" && "hidden")}>
-            <ImageStudio session={imageSession} onImageToVideo={handleImageToVideo} jump={imageJump} onReEdit={handleReEdit} onOpenByok={openByok} keyRev={keyRev} />
+            <ImageStudio session={imageSession} active={activeView === "image"} onImageToVideo={handleImageToVideo} jump={imageJump} onReEdit={handleReEdit} onOpenByok={openByok} keyRev={keyRev} />
           </div>
           <div className={cn("h-full w-full", activeView !== "video" && "hidden")}>
-            <VideoStudio session={videoSession} jump={videoJump} onReEdit={handleReEdit} onOpenByok={openByok} keyRev={keyRev} />
+            <VideoStudio session={videoSession} active={activeView === "video"} jump={videoJump} onReEdit={handleReEdit} onOpenByok={openByok} keyRev={keyRev} />
           </div>
           {activeView === "gallery" && (
             <div className="h-full w-full">
@@ -141,12 +163,7 @@ export default function App() {
           setKeyRev((v) => v + 1);
         }}
       />
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        defaultImage={defaultModelForStudio("image").name}
-        defaultVideo={defaultModelForStudio("video").name}
-      />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ToastHost />
     </div>
   );

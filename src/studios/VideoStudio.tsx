@@ -19,6 +19,8 @@ import type { StudioJump } from "../types";
 
 interface VideoStudioProps {
   session: SessionApi;
+  /** 是否为当前激活视图（常驻挂载，用于输入框自动聚焦/拖放收图）。 */
+  active?: boolean;
   jump: StudioJump | null;
   onReEdit?: (j: StudioJump & { studio: "image" | "video" }) => void;
   /** 打开 BYOK 密钥管理弹层（空状态「配置 API Key」入口） */
@@ -29,7 +31,7 @@ interface VideoStudioProps {
 
 // memo：session（SessionApi）引用已稳定化（审计#12），图像工作室的进度事件不再
 // 连带重渲染视频工作室（与 ImageStudio 同修）。
-export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit, onOpenByok, keyRev }: VideoStudioProps) {
+export const VideoStudio = memo(function VideoStudio({ session, active, jump, onReEdit, onOpenByok, keyRev }: VideoStudioProps) {
   const api = useStudio("video", session);
   const keyReady = useProviderKeyReady(api.model.providerId, keyRev ?? 0);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -226,8 +228,10 @@ export const VideoStudio = memo(function VideoStudio({ session, jump, onReEdit, 
       )}
       <PromptComposer
         api={api}
+        active={active}
         collapsed={composerCollapsed}
         onExpand={() => setComposerCollapsed(false)}
+        onCollapse={() => setComposerCollapsed(true)}
         onHeightChange={handleComposerHeight}
         onWheelOutside={(e) => {
           streamRef.current?.scrollBy({ top: e.deltaY });

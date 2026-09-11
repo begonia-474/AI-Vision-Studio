@@ -52,6 +52,8 @@ export interface StudioApi {
   setLoras: (v: LoraEntry[]) => void;
   selectModel: (m: ModelDef) => void;
   addRef: (url: string) => void;
+  /** 批量新增参考图（拖拽多图落盘）：单次 setState 追加，避免 addRef 闭包 refs 陈旧导致覆盖。 */
+  addRefs: (urls: string[]) => void;
   removeRef: (i: number) => void;
   removeResult: (id: string) => void;
   removeTask: (taskId: string) => void;
@@ -260,6 +262,17 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
       }
     },
     [refs, studio, mode, model],
+  );
+  const addRefs = useCallback(
+    (urls: string[]) => {
+      if (urls.length === 0) return;
+      setRefs((prev) => [...prev, ...urls]);
+      // 组图模式：新增参考图会挤占「参考图数 + max_images ≤ 15」的预算，立即收敛张数。
+      if (studio === "image" && mode === "group") {
+        setBatch((prev) => Math.min(prev, batchCap(model, "group", refs.length + urls.length)));
+      }
+    },
+    [studio, mode, model, refs.length],
   );
   const removeRef = useCallback(
     (i: number) => {
@@ -667,6 +680,7 @@ export function useStudio(studio: "image" | "video", session: SessionApi): Studi
     setLoras,
     selectModel,
     addRef,
+    addRefs,
     removeRef,
     removeResult,
     removeTask,

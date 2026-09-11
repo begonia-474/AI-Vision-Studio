@@ -128,8 +128,6 @@ export const zhCN = {
     defaultImageDesc: "打开图像工作室时预选的模型",
     defaultVideo: "默认视频模型",
     defaultVideoDesc: "打开视频工作室时预选的模型",
-    concurrency: "并发任务数",
-    concurrencyDesc: "同时进行的生成任务上限",
     theme: "主题",
     themeDesc: "基准为暗色，可选浅色或跟随系统",
     language: "语言",

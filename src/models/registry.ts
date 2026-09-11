@@ -281,11 +281,31 @@ export function modelsForStudio(studio: Studio): ModelDef[] {
   return [...builtin, ...extra];
 }
 
-/** 工作室默认模型：按显式 id 定位（领域数据来自 Rust registry），内置模型缺失时回退列表首个；
- *  列表也空时兜底到回退表（正常不可达——hydrateRegistry 保证每工作室至少一个模型）。 */
+// —— 用户默认模型偏好（localStorage，与主题同款先例；模型 id 失效时自动回退内置默认）——
+const DEFAULT_MODEL_KEY = (studio: Studio) => `defaultModel.${studio}`;
+
+export function getUserDefaultModelId(studio: Studio): string | null {
+  try {
+    return localStorage.getItem(DEFAULT_MODEL_KEY(studio));
+  } catch {
+    return null;
+  }
+}
+
+export function setUserDefaultModelId(studio: Studio, id: string): void {
+  try {
+    if (id) localStorage.setItem(DEFAULT_MODEL_KEY(studio), id);
+    else localStorage.removeItem(DEFAULT_MODEL_KEY(studio));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 工作室默认模型：优先用户显式选择的 id（localStorage），其次 Rust 注册表默认，最后列表首个；
+ *  用户选择的模型被删除后 id 失效，自动回退，不会崩。列表也空时兜底到回退表。 */
 export function defaultModelForStudio(studio: Studio): ModelDef {
   const all = modelsForStudio(studio);
-  const id = studio === "image" ? defaultImage : defaultVideo;
+  const id = getUserDefaultModelId(studio) ?? (studio === "image" ? defaultImage : defaultVideo);
   return (
     all.find((m) => m.id === id) ??
     all[0] ??

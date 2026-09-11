@@ -603,13 +603,20 @@ fn thumbnail_dir_for(src: &Path) -> PathBuf {
     thumbnail_root().join(parent)
 }
 
-/// 为图片生成 256px 缩略图（WEBP，失败回退 PNG），输出到与产物同日期子路径的 thumbs 目录。
+/// 缩略图长边上限：图库网格单元最大约 300 CSS px，2× DPR 下需 ~600 物理像素，
+/// 512 足以覆盖 HiDPI 且体积可控（约为 256 的 4 倍像素）。
+const THUMB_MAX: u32 = 512;
+/// 缩略图生成版本：调整尺寸/格式/质量时自增，ensure_thumbnails 据此重生成旧图（文件名不变）。
+/// v1 = 256px（历史）；v2 = 512px。
+const THUMB_VERSION: i64 = 2;
+
+/// 为图片生成 512px 缩略图（WEBP，失败回退 PNG），输出到与产物同日期子路径的 thumbs 目录。
 /// 缩略图是可再生的预览文件（ensure_thumbnails 可重建），不随产物放 outputs。
 /// 生成失败返回 Err（调用方忽略即可，不影响主流程）。
 pub fn make_thumbnail(src: &str) -> Result<String, String> {
     let path = PathBuf::from(src);
     let img = image::open(&path).map_err(|e| e.to_string())?;
-    let thumb = img.thumbnail(256, 256);
+    let thumb = img.thumbnail(THUMB_MAX, THUMB_MAX);
 
     let stem = path
         .file_stem()
@@ -653,18 +660,18 @@ fn thumbnail_path_of(p: &str) -> PathBuf {
     webp
 }
 
-/// 补全历史任务缺失的缩略图（旧数据仅第一张有）。
-/// 按 `{stem}.thumb.webp` 命名约定检查每张图片，缺则生成；
-/// thumbnail_path 为空的任务回填第一张缩略图。返回补生成的缩略图数量。
+/// 补全 / 升级历史任务的缩略图。
+/// 触发：缩略图文件缺失，或任务 thumb_version 低于当前 THUMB_VERSION（规格升级后旧图重生成）。
+/// thumbnail_path 为空的任务回填第一张缩略图。返回补生成/重生成的缩略图数量。
 pub fn ensure_thumbnails() -> Result<usize, String> {
     let conn = open_conn()?;
     // 审计#17：先把待处理行收进内存并立即结束读游标，避免整表扫描的连接横跨
     // 缩略图解码/编码等 CPU 密集步骤被长期占用（WAL 下读不阻塞写，但连接与
     // 页缓存会被无谓占住）。
-    let mut scanned: Vec<(i64, String, Option<String>)> = Vec::new();
+    let mut scanned: Vec<(i64, String, Option<String>, Option<i64>)> = Vec::new();
     {
         let mut stmt = conn
-            .prepare("SELECT id, local_paths_json, thumbnail_path FROM tasks")
+            .prepare("SELECT id, local_paths_json, thumbnail_path, thumb_version FROM tasks")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| {
@@ -672,6 +679,7 @@ pub fn ensure_thumbnails() -> Result<usize, String> {
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
@@ -681,16 +689,18 @@ pub fn ensure_thumbnails() -> Result<usize, String> {
     }
 
     let mut made = 0usize;
-    let mut backfill: Vec<(i64, String)> = Vec::new();
-    for (id, local_json, thumb) in scanned {
+    let mut updates: Vec<(i64, Option<String>)> = Vec::new();
+    for (id, local_json, thumb, version) in scanned {
         let paths: Vec<String> = serde_json::from_str(&local_json).unwrap_or_default();
+        // 版本落后 = 旧规格缩略图，整体重生成（覆盖同名文件）；文件缺失同样重生成。
+        let stale = version != Some(THUMB_VERSION);
         let mut first_thumb: Option<String> = None;
         for p in &paths {
             if !is_image_path(p) {
                 continue;
             }
             let derived = thumbnail_path_of(p);
-            if !derived.exists() {
+            if stale || !derived.exists() {
                 if let Ok(t) = make_thumbnail(p) {
                     made += 1;
                     if first_thumb.is_none() {
@@ -701,16 +711,17 @@ pub fn ensure_thumbnails() -> Result<usize, String> {
                 first_thumb = Some(derived.to_string_lossy().to_string());
             }
         }
-        if thumb.is_none() {
-            if let Some(t) = first_thumb {
-                backfill.push((id, t));
-            }
+        // 版本落后（即使无图可生成，如视频任务 / 失败行）也标记为当前版本，
+        // 避免每次打开图库都全表重扫重试；thumbnail_path 仅在为空时回填。
+        let backfill = if thumb.is_none() { first_thumb } else { None };
+        if stale || backfill.is_some() {
+            updates.push((id, backfill));
         }
     }
-    for (id, t) in backfill {
+    for (id, backfill) in updates {
         conn.execute(
-            "UPDATE tasks SET thumbnail_path=?1 WHERE id=?2",
-            params![t, id],
+            "UPDATE tasks SET thumbnail_path=COALESCE(?1, thumbnail_path), thumb_version=?2 WHERE id=?3",
+            params![backfill, THUMB_VERSION, id],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -769,6 +780,8 @@ pub fn ensure_schema() -> Result<(), String> {
         "starred INTEGER NOT NULL DEFAULT 0",
     )?;
     ensure_column(&conn, "tasks", "thumbnail_path", "thumbnail_path TEXT")?;
+    // 缩略图版本：缩略图规格升级后据此重生成旧图（NULL = 历史 256px，需升级）。
+    ensure_column(&conn, "tasks", "thumb_version", "thumb_version INTEGER")?;
     ensure_column(&conn, "tasks", "request_json", "request_json TEXT")?;
     ensure_column(&conn, "tasks", "error", "error TEXT")?;
     ensure_column(&conn, "tasks", "session_id", "session_id TEXT")?;
@@ -925,10 +938,15 @@ pub fn update_task_result(
     error: Option<String>,
 ) -> Result<(), String> {
     let conn = open_conn()?;
-    conn.execute(
+    // 成功路径刚生成过缩略图，落当前版本号，避免 ensure_thumbnails 把它当旧规格重生成。
+    let sql = format!(
         "UPDATE tasks SET status=?2, local_paths_json=?3, remote_urls_json=?4,
-         thumbnail_path=?5, params_json=?6, request_json=?7, raw_response=?8, error=?9
-         WHERE id=?1",
+         thumbnail_path=?5, params_json=?6, request_json=?7, raw_response=?8, error=?9,
+         thumb_version={THUMB_VERSION}
+         WHERE id=?1"
+    );
+    conn.execute(
+        &sql,
         params![
             id,
             status,
@@ -1458,7 +1476,7 @@ mod tests {
         let thumb = make_thumbnail(png.to_str().unwrap()).unwrap();
         assert!(Path::new(&thumb).exists());
         let decoded = image::open(&thumb).unwrap();
-        assert!(decoded.width() <= 256 && decoded.height() <= 256);
+        assert!(decoded.width() <= THUMB_MAX && decoded.height() <= THUMB_MAX);
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -130,8 +130,6 @@ export const enUS: ZhDict = {
     defaultImageDesc: "Model preselected when opening Image Studio",
     defaultVideo: "Default video model",
     defaultVideoDesc: "Model preselected when opening Video Studio",
-    concurrency: "Concurrent tasks",
-    concurrencyDesc: "Maximum simultaneous generation tasks",
     theme: "Theme",
     themeDesc: "Dark is the base; choose light or follow the system",
     language: "Language",

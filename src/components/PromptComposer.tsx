@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { toAssetUrl } from "../api";
 import { ModelSelectModal } from "./ModelSelectModal";
 import { DrawDialog } from "./DrawDialog";
@@ -25,7 +26,11 @@ import type { StudioApi } from "../studios/useStudio";
 interface PromptComposerProps {
   api: StudioApi;
   collapsed?: boolean;
+  /** 所属工作室是否为当前视图（常驻挂载，hidden 时不接受拖放/不抢焦点）。 */
+  active?: boolean;
   onExpand?: () => void;
+  /** Esc 收起输入条（与时间线上滑折叠同一状态；折叠后点折叠条可再展开）。 */
+  onCollapse?: () => void;
   /** 高度变化上报（用于滚动区动态让位） */
   onHeightChange?: (h: number) => void;
   /** 悬停输入条时的滚轮事件（转发给时间线滚动区，krea 行为） */
@@ -37,7 +42,10 @@ interface PromptComposerProps {
 // --content-generator-collapse-transition-timing-function: cubic-bezier(0.15, 0.75, 0.3, 1);
 const COLLAPSE = "duration-[350ms] ease-[cubic-bezier(.15,.75,.3,1)]";
 
-export function PromptComposer({ api, collapsed = false, onExpand, onHeightChange, onWheelOutside }: PromptComposerProps) {
+// 拖放可接受的参考图扩展名（与文件选择对话框 filters 对齐）。
+const IMG_EXT = /\.(png|jpe?g|webp|bmp|tiff?|gif|heic|heif)$/i;
+
+export function PromptComposer({ api, collapsed = false, active = true, onExpand, onCollapse, onHeightChange, onWheelOutside }: PromptComposerProps) {
   const { t } = useTranslation();
   const isVideo = api.studio === "video";
   const provider = providerMeta(api.model.providerId);
@@ -46,6 +54,9 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
   const [drawOpen, setDrawOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // 拖放监听 effect 只依赖 active，最新 api 经 ref 读取（api 每次渲染都是新对象，直接入依赖会反复注销/重注册）。
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
   // 高度变化上报：输入条是 absolute 定位，滚动区用它让出底部空间，
   // 长提示词展开时不会被输入条遮住。
@@ -56,6 +67,41 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
     ro.observe(el);
     return () => ro.disconnect();
   }, [onHeightChange]);
+
+  // 自动聚焦：工作室切换为激活态时聚焦提示词输入框（两工作室常驻挂载，须按 active 触发）。
+  useEffect(() => {
+    if (active) taRef.current?.focus();
+  }, [active]);
+
+  // 参考图拖拽：Tauri 原生拖放（未关 dragDropEnabled，HTML5 drop 事件被拦截），
+  // onDragDropEvent 提供绝对路径。仅激活工作室监听，避免两个常驻工作室同时收图。
+  useEffect(() => {
+    if (!active) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const a = apiRef.current;
+        const supports = isVideo
+          ? a.model.capabilities.includes("i2v")
+          : a.model.capabilities.includes("i2i");
+        if (!supports) return;
+        const slots = Math.max(a.model.maxRef ?? 0, 1) - a.refs.length;
+        if (slots <= 0) return;
+        const paths = event.payload.paths.filter((p) => IMG_EXT.test(p)).slice(0, slots);
+        if (paths.length > 0) a.addRefs(paths);
+      })
+      .then((u) => {
+        if (disposed) u();
+        else unlisten = u;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [active, isVideo]);
 
   // 弹层互斥：打开一个前先关掉其余（保证任意时刻只有一个 Radix 弹层在场，
   // 避免旧弹层 deferPointerDownOutside 的焦点回迁把新弹层误关）。
@@ -116,6 +162,36 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
       ],
     });
     if (typeof sel === "string" && sel) api.addRef(sel);
+  };
+
+  // 参考图粘贴：剪贴板图片 → data URL → addRef（后端 save_reference 支持 data URL 收编入 inputs）。
+  const onPasteImage = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const a = apiRef.current;
+    const supports = isVideo
+      ? a.model.capabilities.includes("i2v")
+      : a.model.capabilities.includes("i2i");
+    if (!supports) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i].type.startsWith("image/")) continue;
+      const file = items[i].getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      if (a.refs.length >= Math.max(a.model.maxRef ?? 0, 1)) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const cur = apiRef.current;
+        if (
+          typeof reader.result === "string" &&
+          cur.refs.length < Math.max(cur.model.maxRef ?? 0, 1)
+        ) {
+          cur.addRef(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
   };
 
   // 多任务并行：生成按钮始终可用，进行中的任务数用角标提示。
@@ -204,10 +280,16 @@ export function PromptComposer({ api, collapsed = false, onExpand, onHeightChang
           value={api.prompt}
           onInput={onTextareaInput}
           onChange={(e) => api.setPrompt(e.target.value)}
+          onPaste={onPasteImage}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               api.handleGenerate();
+            } else if (e.key === "Escape") {
+              // 收起输入条并失焦（弹层打开时焦点在弹层，Radix 会先消费 Esc，不会走到这里）
+              e.preventDefault();
+              taRef.current?.blur();
+              onCollapse?.();
             }
           }}
         />
